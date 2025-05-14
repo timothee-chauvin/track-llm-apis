@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -15,22 +16,27 @@ logger = logging.getLogger("track-llm-apis")
 
 ROOT_DIR = Path(__file__).parent
 
-MODELS = {
-    "openai": [
-        "gpt-4o-mini",
-        "gpt-4o",
-        "gpt-4.1",
-        "gpt-4.1-mini",
-        "gpt-4.1-nano",
-        "gpt-4-turbo",
-        "gpt-4",
-        "gpt-3.5-turbo-0125",
-    ],
-    "grok": [
-        "grok-3-beta",
-        "grok-3-fast-beta",
-    ],
-}
+
+@dataclass
+class Endpoint:
+    source: str
+    name: str
+    provider: str | None = None
+    dtype: str | None = None
+
+
+ENDPOINTS = [
+    Endpoint("openai", "gpt-4o-mini"),
+    Endpoint("openai", "gpt-4o"),
+    Endpoint("openai", "gpt-4.1"),
+    Endpoint("openai", "gpt-4.1-mini"),
+    Endpoint("openai", "gpt-4.1-nano"),
+    Endpoint("openai", "gpt-4-turbo"),
+    Endpoint("openai", "gpt-4"),
+    Endpoint("openai", "gpt-3.5-turbo-0125"),
+    Endpoint("grok", "grok-3-beta"),
+    Endpoint("grok", "grok-3-fast-beta"),
+]
 
 PROMPT = "x " * 20  # Around 20 tokens
 MAX_COMPLETION_TOKENS = 1
@@ -50,33 +56,32 @@ class DatabaseManager:
 
     def create_tables(self):
         cursor = self.conn.cursor()
-        for provider, models in MODELS.items():
-            for model in models:
-                # Replace special characters in model names to make valid table names
-                table_name = self._get_table_name(model)
-                cursor.execute(
-                    f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                top_tokens JSON NOT NULL,
-                logprobs JSON NOT NULL
-                )
-                """
-                )
+        for endpoint in ENDPOINTS:
+            table_name = self._get_table_name(endpoint)
+            cursor.execute(
+                f"""
+            CREATE TABLE IF NOT EXISTS "{table_name}" (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            top_tokens JSON NOT NULL,
+            logprobs JSON NOT NULL
+            )
+            """
+            )
         self.conn.commit()
 
-    def _get_table_name(self, model: str) -> str:
-        # Replace special characters in model names to make valid table names
-        return f"model_{model.replace('-', '_').replace('.', '_')}"
+    def _get_table_name(self, endpoint: Endpoint) -> str:
+        return "#".join(
+            [endpoint.source, endpoint.name, endpoint.provider or "", endpoint.dtype or ""]
+        ).strip("#")
 
-    def store_result(self, model: str, tokens: list[str], logprobs: list[float]):
-        table_name = self._get_table_name(model)
+    def store_result(self, endpoint: Endpoint, tokens: list[str], logprobs: list[float]):
+        table_name = self._get_table_name(endpoint)
         cursor = self.conn.cursor()
         date_str = datetime.now().isoformat()
         cursor.execute(
-            f"INSERT INTO {table_name} (date, prompt, top_tokens, logprobs) VALUES (?, ?, ?, ?)",
+            f'INSERT INTO "{table_name}" (date, prompt, top_tokens, logprobs) VALUES (?, ?, ?, ?)',
             (
                 date_str,
                 PROMPT,
@@ -85,7 +90,7 @@ class DatabaseManager:
             ),
         )
         self.conn.commit()
-        logger.info(f"Stored results for {model} at {date_str}")
+        logger.info(f"Stored results for {endpoint} at {date_str}")
 
     def close(self):
         self.conn.close()
@@ -151,32 +156,28 @@ class GrokClient:
             return [], []
 
 
-async def query_model(provider: str, model: str, db_manager: DatabaseManager) -> None:
-    if provider == "openai":
+async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager) -> None:
+    if endpoint.source == "openai":
         client = OpenAIClient()
-    elif provider == "grok":
+    elif endpoint.source == "grok":
         client = GrokClient()
     else:
-        logger.error(f"Unsupported provider: {provider}")
+        logger.error(f"Unsupported source: {endpoint.source}")
         return
 
-    tokens, logprobs = await client.query(model)
+    tokens, logprobs = await client.query(endpoint.name)
 
     if tokens and logprobs:
-        db_manager.store_result(model, tokens, logprobs)
+        db_manager.store_result(endpoint, tokens, logprobs)
     else:
-        logger.error(f"Failed to get results for {model}")
+        logger.error(f"Failed to get results for {endpoint}")
 
 
 async def main_async():
     db_manager = DatabaseManager()
 
     try:
-        tasks = [
-            query_model(provider, model, db_manager)
-            for provider, models in MODELS.items()
-            for model in models
-        ]
+        tasks = [query_endpoint(endpoint, db_manager) for endpoint in ENDPOINTS]
         await asyncio.gather(*tasks)
     finally:
         db_manager.close()
