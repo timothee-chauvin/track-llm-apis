@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openai
+import requests
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -15,6 +16,15 @@ logging.basicConfig(
 logger = logging.getLogger("track-llm-apis")
 
 ROOT_DIR = Path(__file__).parent
+DB_PATH = ROOT_DIR / "db" / "llm_logprobs.db"
+
+PROMPT = "x " * 20  # Around 20 tokens
+MAX_COMPLETION_TOKENS = 1
+TOP_LOGPROBS = {
+    "openai": 20,
+    "grok": 8,
+    "openrouter": 20,
+}
 
 
 @dataclass
@@ -23,6 +33,12 @@ class Endpoint:
     name: str
     provider: str | None = None
     dtype: str | None = None
+    max_logprobs: int | None = None
+
+    def get_max_logprobs(self) -> int:
+        if self.max_logprobs is None:
+            return TOP_LOGPROBS[self.source]
+        return self.max_logprobs
 
 
 ENDPOINTS = [
@@ -36,15 +52,10 @@ ENDPOINTS = [
     Endpoint("openai", "gpt-3.5-turbo-0125"),
     Endpoint("grok", "grok-3-beta"),
     Endpoint("grok", "grok-3-fast-beta"),
+    Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "Kluster"),
+    Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "Lambda", "fp8"),
+    Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "Nebius", "fp8"),
 ]
-
-PROMPT = "x " * 20  # Around 20 tokens
-MAX_COMPLETION_TOKENS = 1
-TOP_LOGPROBS = {
-    "openai": 20,
-    "grok": 8,
-}
-DB_PATH = ROOT_DIR / "db" / "llm_logprobs.db"
 
 
 class DatabaseManager:
@@ -100,14 +111,14 @@ class OpenAIClient:
     def __init__(self):
         self.client = openai.OpenAI()
 
-    async def query(self, model: str) -> tuple[list[str], list[float]]:
+    async def query(self, endpoint: Endpoint) -> tuple[list[str], list[float]]:
         try:
             response = self.client.chat.completions.create(
-                model=model,
+                model=endpoint.name,
                 messages=[{"role": "user", "content": PROMPT}],
                 max_completion_tokens=MAX_COMPLETION_TOKENS,
                 logprobs=True,
-                top_logprobs=TOP_LOGPROBS["openai"],
+                top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
             )
 
@@ -118,10 +129,10 @@ class OpenAIClient:
                 probs = [logprob.logprob for logprob in logprobs]
                 return tokens, probs
 
-            logger.error(f"No logprobs returned for {model}")
+            logger.error(f"No logprobs returned for {endpoint}")
             return [], []
         except Exception as e:
-            logger.error(f"Error querying OpenAI {model}: {e}")
+            logger.error(f"Error querying {endpoint}: {e}")
             return [], []
 
 
@@ -131,14 +142,14 @@ class GrokClient:
             api_key=os.getenv("GROK_API_KEY"), base_url="https://api.x.ai/v1"
         )
 
-    async def query(self, model: str) -> tuple[list[str], list[float]]:
+    async def query(self, endpoint: Endpoint) -> tuple[list[str], list[float]]:
         try:
             response = self.client.chat.completions.create(
-                model=model,
+                model=endpoint.name,
                 messages=[{"role": "user", "content": PROMPT}],
                 max_completion_tokens=MAX_COMPLETION_TOKENS,
                 logprobs=True,
-                top_logprobs=TOP_LOGPROBS["grok"],
+                top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
             )
 
@@ -149,10 +160,51 @@ class GrokClient:
                 probs = [logprob.logprob for logprob in logprobs]
                 return tokens, probs
 
-            logger.error(f"No logprobs returned for {model}")
+            logger.error(f"No logprobs returned for {endpoint}")
             return [], []
         except Exception as e:
-            logger.error(f"Error querying Grok {model}: {e}")
+            logger.error(f"Error querying {endpoint}: {e}")
+            return [], []
+
+
+class OpenRouterClient:
+    async def query(self, endpoint: Endpoint) -> tuple[list[str], list[float]]:
+        request_data = {
+            "model": endpoint.name,
+            "messages": [{"role": "user", "content": PROMPT}],
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
+            "logprobs": True,
+            "top_logprobs": endpoint.get_max_logprobs(),
+            "temperature": 0,
+            "provider": {
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            },
+        }
+        if endpoint.provider:
+            request_data["provider"]["only"] = [endpoint.provider]
+        if endpoint.dtype:
+            request_data["provider"]["quantizations"] = [endpoint.dtype]
+
+        try:
+            response = requests.post(
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"},
+                data=json.dumps(request_data),
+            )
+
+            # Extract logprobs for the first token
+            response = response.json()
+            if response["choices"] and response["choices"][0]["logprobs"]:
+                logprobs = response["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
+                tokens = [logprob["token"] for logprob in logprobs]
+                probs = [logprob["logprob"] for logprob in logprobs]
+                return tokens, probs
+
+            logger.error(f"No logprobs returned for {endpoint}")
+            return [], []
+        except Exception as e:
+            logger.error(f"Error querying {endpoint}: {e}")
             return [], []
 
 
@@ -161,12 +213,13 @@ async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager) -> Non
         client = OpenAIClient()
     elif endpoint.source == "grok":
         client = GrokClient()
+    elif endpoint.source == "openrouter":
+        client = OpenRouterClient()
     else:
         logger.error(f"Unsupported source: {endpoint.source}")
         return
 
-    tokens, logprobs = await client.query(endpoint.name)
-
+    tokens, logprobs = await client.query(endpoint)
     if tokens and logprobs:
         db_manager.store_result(endpoint, tokens, logprobs)
     else:
