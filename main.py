@@ -17,10 +17,18 @@ ROOT_DIR = Path(__file__).parent
 
 MODELS = {
     "openai": [
+        "gpt-4o-mini",
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-4.1-mini",
         "gpt-4.1-nano",
+        "gpt-4-turbo",
+        "gpt-4",
+        "gpt-3.5-turbo-0125",
     ],
     "grok": [
         "grok-3-beta",
+        "grok-3-fast-beta",
     ],
 }
 
