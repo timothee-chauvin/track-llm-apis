@@ -26,6 +26,9 @@ class Endpoint:
             return Config.top_logprobs[self.source]
         return self.max_logprobs
 
+    def __str__(self) -> str:
+        return "#".join([self.source, self.name, self.provider or "", self.dtype or ""]).strip("#")
+
 
 ENDPOINTS = [
     Endpoint("openai", "gpt-4o-mini"),
@@ -74,9 +77,7 @@ class DatabaseManager:
         self.conn.commit()
 
     def _get_table_name(self, endpoint: Endpoint) -> str:
-        return "#".join(
-            [endpoint.source, endpoint.name, endpoint.provider or "", endpoint.dtype or ""]
-        ).strip("#")
+        return str(endpoint)
 
     def store_result(self, endpoint: Endpoint, tokens: list[str], logprobs: list[float]):
         table_name = self._get_table_name(endpoint)
@@ -92,7 +93,7 @@ class DatabaseManager:
             ),
         )
         self.conn.commit()
-        logger.info(f"Stored results for {endpoint} at {date_str}")
+        logger.info(f"Stored results for {endpoint}")
 
     def close(self):
         self.conn.close()

@@ -4,6 +4,7 @@ from pathlib import Path
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
 ROOT_DIR = Path(__file__).parent.parent
 
