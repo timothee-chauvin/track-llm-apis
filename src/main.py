@@ -5,8 +5,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 
-import openai
-import requests
+import aiohttp
+from openai import AsyncOpenAI
 
 from config import Config
 
@@ -100,11 +100,11 @@ class DatabaseManager:
 
 class OpenAIClient:
     def __init__(self):
-        self.client = openai.OpenAI()
+        self.client = AsyncOpenAI()
 
     async def query(self, endpoint: Endpoint) -> tuple[list[str], list[float]]:
         try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=endpoint.name,
                 messages=[{"role": "user", "content": Config.prompt}],
                 max_completion_tokens=Config.max_completion_tokens,
@@ -129,13 +129,11 @@ class OpenAIClient:
 
 class GrokClient:
     def __init__(self):
-        self.client = openai.OpenAI(
-            api_key=os.getenv("GROK_API_KEY"), base_url="https://api.x.ai/v1"
-        )
+        self.client = AsyncOpenAI(api_key=os.getenv("GROK_API_KEY"), base_url="https://api.x.ai/v1")
 
     async def query(self, endpoint: Endpoint) -> tuple[list[str], list[float]]:
         try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=endpoint.name,
                 messages=[{"role": "user", "content": Config.prompt}],
                 max_completion_tokens=Config.max_completion_tokens,
@@ -178,14 +176,15 @@ class OpenRouterClient:
             request_data["provider"]["quantizations"] = [endpoint.dtype]
 
         try:
-            response = requests.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"},
-                data=json.dumps(request_data),
-            )
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url="https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"},
+                    json=request_data,
+                ) as resp:
+                    response = await resp.json()
 
             # Extract logprobs for the first token
-            response = response.json()
             if response["choices"] and response["choices"][0]["logprobs"]:
                 logprobs = response["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
                 tokens = [logprob["token"] for logprob in logprobs]
