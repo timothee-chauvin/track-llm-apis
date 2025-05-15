@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("track-llm-apis")
 
-ROOT_DIR = Path(__file__).parent
+ROOT_DIR = Path(__file__).parent.parent
 DB_PATH = ROOT_DIR / "db" / "llm_logprobs.db"
 
 PROMPT = "x " * 20  # Around 20 tokens
