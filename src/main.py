@@ -1,30 +1,16 @@
 import asyncio
 import json
-import logging
 import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 import openai
 import requests
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("track-llm-apis")
+from config import Config
 
-ROOT_DIR = Path(__file__).parent.parent
-DB_PATH = ROOT_DIR / "db" / "llm_logprobs.db"
-
-PROMPT = "x " * 20  # Around 20 tokens
-MAX_COMPLETION_TOKENS = 1
-TOP_LOGPROBS = {
-    "openai": 20,
-    "grok": 8,
-    "openrouter": 20,
-}
+logger = Config.logger
 
 
 @dataclass
@@ -37,7 +23,7 @@ class Endpoint:
 
     def get_max_logprobs(self) -> int:
         if self.max_logprobs is None:
-            return TOP_LOGPROBS[self.source]
+            return Config.top_logprobs[self.source]
         return self.max_logprobs
 
 
@@ -60,9 +46,9 @@ ENDPOINTS = [
 
 class DatabaseManager:
     def __init__(self):
-        if not DB_PATH.exists():
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(DB_PATH)
+        if not Config.db_path.exists():
+            Config.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(Config.db_path)
         self.create_tables()
 
     def create_tables(self):
@@ -95,7 +81,7 @@ class DatabaseManager:
             f'INSERT INTO "{table_name}" (date, prompt, top_tokens, logprobs) VALUES (?, ?, ?, ?)',
             (
                 date_str,
-                PROMPT,
+                Config.prompt,
                 json.dumps(tokens),
                 json.dumps(logprobs),
             ),
@@ -115,8 +101,8 @@ class OpenAIClient:
         try:
             response = self.client.chat.completions.create(
                 model=endpoint.name,
-                messages=[{"role": "user", "content": PROMPT}],
-                max_completion_tokens=MAX_COMPLETION_TOKENS,
+                messages=[{"role": "user", "content": Config.prompt}],
+                max_completion_tokens=Config.max_completion_tokens,
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
@@ -146,8 +132,8 @@ class GrokClient:
         try:
             response = self.client.chat.completions.create(
                 model=endpoint.name,
-                messages=[{"role": "user", "content": PROMPT}],
-                max_completion_tokens=MAX_COMPLETION_TOKENS,
+                messages=[{"role": "user", "content": Config.prompt}],
+                max_completion_tokens=Config.max_completion_tokens,
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
@@ -171,8 +157,8 @@ class OpenRouterClient:
     async def query(self, endpoint: Endpoint) -> tuple[list[str], list[float]]:
         request_data = {
             "model": endpoint.name,
-            "messages": [{"role": "user", "content": PROMPT}],
-            "max_completion_tokens": MAX_COMPLETION_TOKENS,
+            "messages": [{"role": "user", "content": Config.prompt}],
+            "max_completion_tokens": Config.max_completion_tokens,
             "logprobs": True,
             "top_logprobs": endpoint.get_max_logprobs(),
             "temperature": 0,
