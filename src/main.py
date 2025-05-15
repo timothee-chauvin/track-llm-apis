@@ -41,6 +41,11 @@ ENDPOINTS = [
     Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "Kluster"),
     Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "Lambda", "fp8"),
     Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "Nebius", "fp8"),
+    Endpoint("openrouter", "qwen/qwen3-14b", "Nebius", "fp8"),
+    Endpoint("openrouter", "qwen/qwen3-32b", "Nebius", "fp8"),
+    Endpoint("openrouter", "microsoft/phi-3.5-mini-128k-instruct", "Nebius"),
+    Endpoint("openrouter", "meta-llama/llama-3.3-70b-instruct", "Nebius", "fp8"),
+    Endpoint("openrouter", "meta-llama/llama-3.3-70b-instruct", "Kluster", "fp8"),
 ]
 
 
@@ -208,8 +213,6 @@ async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager) -> Non
     tokens, logprobs = await client.query(endpoint)
     if tokens and logprobs:
         db_manager.store_result(endpoint, tokens, logprobs)
-    else:
-        logger.error(f"Failed to get results for {endpoint}")
 
 
 async def main_async():
