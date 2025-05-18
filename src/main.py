@@ -231,7 +231,7 @@ class OpenRouterClient:
             return Response(endpoint, [], [], cost)
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, [], [], cost)
+            return Response(endpoint, [], [], 0.0)
 
 
 async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager) -> Response:
