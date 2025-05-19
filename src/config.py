@@ -11,7 +11,9 @@ ROOT_DIR = Path(__file__).parent.parent
 
 class Config:
     logger = logger
+    root_dir = ROOT_DIR
     db_path = ROOT_DIR / "db" / "llm_logprobs.db"
+    plots_dir = ROOT_DIR / "plots"
     prompt = "x " * 20  # Around 20 tokens
     max_completion_tokens = 1
     top_logprobs = {
