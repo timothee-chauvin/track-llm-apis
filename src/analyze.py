@@ -60,24 +60,27 @@ def equivalence_classes():
             print(f"  {logprobs_display}")
 
 
-def get_top_token_logprobs(data, table_name):
+def get_top_token_logprobs(data, table_name, all_top_tokens: bool = False):
     rows = data[table_name]
-    _, _, first_top_tokens, _ = rows[0]
-    top_token = first_top_tokens[0]
+    if all_top_tokens:
+        top_tokens = set(row[2][0] for row in rows)
+    else:
+        top_tokens = set([rows[0][2][0]])
     top_token_logprobs = []
-    for _date_str, _prompt, top_tokens, top_logprobs in rows:
-        try:
-            top_token_index = top_tokens.index(top_token)
-            top_token_logprobs.append(top_logprobs[top_token_index])
-        except ValueError:
-            pass
+    for top_token in top_tokens:
+        for _date_str, _prompt, row_top_tokens, row_logprobs in rows:
+            try:
+                top_token_index = row_top_tokens.index(top_token)
+                top_token_logprobs.append(row_logprobs[top_token_index])
+            except ValueError:
+                pass
     return top_token_logprobs
 
 
 def top_logprob_variability():
     data = get_db_data()
     for table_name, rows in data.items():
-        top_token_logprobs = get_top_token_logprobs(data, table_name)
+        top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
         top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
 
         print(f"\n# {table_name}")
@@ -97,7 +100,7 @@ def plot_prob_histograms():
     os.makedirs(Config.plots_dir, exist_ok=True)
 
     for table_name, rows in data.items():
-        top_token_logprobs = get_top_token_logprobs(data, table_name)
+        top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
         top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
 
         fig = make_subplots(
