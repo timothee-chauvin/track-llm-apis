@@ -250,23 +250,32 @@ async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager) -> Res
     return response
 
 
-async def main_async():
+async def main_async(num_iterations: int, delay: float):
     db_manager = DatabaseManager()
 
+    # Query all endpoints every delay seconds
     try:
-        tasks = [query_endpoint(endpoint, db_manager) for endpoint in ENDPOINTS]
-        responses = await gather_with_concurrency(5, *tasks)
-        costs = {str(response.endpoint): response.cost for response in responses}
-        logger.info("Costs breakdown:")
-        logger.info(json.dumps(costs, indent=2))
-        total_cost = sum(costs.values())
-        logger.info(f"Total cost: ${total_cost:.2e} ({(total_cost * 100):.2f} cents)")
+        for i in range(num_iterations):
+            logger.info(f"Query iteration {i + 1}/{num_iterations}")
+
+            tasks = [query_endpoint(endpoint, db_manager) for endpoint in ENDPOINTS]
+            responses = await gather_with_concurrency(10, *tasks)
+            costs = {str(response.endpoint): response.cost for response in responses}
+            logger.info("Costs breakdown:")
+            logger.info(json.dumps(costs, indent=2))
+            total_cost = sum(costs.values())
+            logger.info(f"Total cost: ${total_cost:.2e} ({(total_cost * 100):.2f} cents)")
+
+            if i < num_iterations - 1:  # Don't wait after the last iteration
+                await asyncio.sleep(delay)
     finally:
         db_manager.close()
 
 
 def main():
-    asyncio.run(main_async())
+    num_iterations = 10
+    delay = 10
+    asyncio.run(main_async(num_iterations, delay))
 
 
 if __name__ == "__main__":
