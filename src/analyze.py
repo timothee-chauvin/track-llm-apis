@@ -3,11 +3,30 @@ import math
 import os
 import sqlite3
 import statistics
+from collections import defaultdict
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from config import Config
+
+model_types = {
+    "gpt-4o-mini": "?",
+    "gpt-4o": "?",
+    "gpt-4.1": "?",
+    "gpt-4.1-mini": "?",
+    "gpt-4.1-nano": "?",
+    "gpt-4-turbo": "?",
+    "gpt-4": "moe",
+    "gpt-3.5-turbo-0125": "?",
+    "grok-3-beta": "moe",
+    "grok-3-fast-beta": "moe",
+    "deepseek/deepseek-chat-v3-0324": "moe",
+    "qwen/qwen3-14b": "dense",
+    "qwen/qwen3-32b": "dense",
+    "microsoft/phi-3.5-mini-128k-instruct": "dense",
+    "meta-llama/llama-3.3-70b-instruct": "dense",
+}
 
 
 def get_db_data() -> dict[str, list[tuple[str, str, list, list]]]:
@@ -79,7 +98,7 @@ def get_top_token_logprobs(data, table_name, all_top_tokens: bool = False):
 
 def top_logprob_variability():
     data = get_db_data()
-    for table_name, rows in data.items():
+    for table_name in data.keys():
         top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
         top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
 
@@ -95,11 +114,76 @@ def top_logprob_variability():
         print(f"std: {statistics.stdev(top_token_probs)}")
 
 
+def plot_prob_std():
+    data = get_db_data()
+    os.makedirs(Config.plots_dir, exist_ok=True)
+
+    table_names = []
+    stdevs = []
+    model_colors = []
+
+    # Color mapping for model types
+    color_map = {"dense": "blue", "moe": "red", "?": "gray"}
+
+    std_by_type = defaultdict(list)
+
+    for table_name in data.keys():
+        top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
+        top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
+        std_value = statistics.stdev(top_token_probs)
+        print(f"\n# {table_name}")
+        print(f"std: {std_value}")
+
+        # Store data for plotting
+        table_names.append(table_name)
+        stdevs.append(std_value)
+        model_name = table_name.split("#")[1]
+        model_type = model_types[model_name]
+        model_colors.append(color_map[model_type])
+        std_by_type[model_type].append(std_value)
+
+    print("# Average std by model type:")
+    for model_type, stds in std_by_type.items():
+        print(f"{model_type}: {sum(stds) / len(stds):.4f}")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=table_names,
+            y=stdevs,
+            marker_color=model_colors,
+            text=stdevs,
+            texttemplate="%{text:.4f}",
+            textposition="outside",
+            showlegend=False,
+        )
+    )
+
+    for model_type, color in color_map.items():
+        fig.add_trace(
+            go.Bar(x=[None], y=[None], marker_color=color, name=model_type, showlegend=True)
+        )
+
+    fig.update_layout(
+        title="Standard Deviation of Top Token Probabilities by Model",
+        xaxis_title="Model",
+        yaxis_title="Standard Deviation",
+        template="plotly_white",
+        xaxis_tickangle=-45,
+        showlegend=True,
+        barmode="group",
+    )
+
+    fig_path = Config.plots_dir / "model_prob_std_histogram.html"
+    fig.write_html(fig_path)
+    print(f"Saved std histogram to {fig_path}")
+
+
 def plot_prob_histograms():
     data = get_db_data()
     os.makedirs(Config.plots_dir, exist_ok=True)
 
-    for table_name, rows in data.items():
+    for table_name in data.keys():
         top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
         top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
 
@@ -134,4 +218,5 @@ def plot_prob_histograms():
 if __name__ == "__main__":
     # equivalence_classes()
     # top_logprob_variability()
-    plot_prob_histograms()
+    # plot_prob_histograms()
+    plot_prob_std()
