@@ -6,11 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import aiohttp
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from config import Config
 
 logger = Config.logger
+
+load_dotenv()
 
 
 @dataclass
