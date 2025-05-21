@@ -26,6 +26,10 @@ model_types = {
     "qwen/qwen3-32b": "dense",
     "microsoft/phi-3.5-mini-128k-instruct": "dense",
     "meta-llama/llama-3.3-70b-instruct": "dense",
+    "ft:gpt-4.1-nano-2025-04-14:personal:try-1:BZeUJpHW": "?",
+    "ft:gpt-4.1-nano-2025-04-14:personal:try-1-1epoch:BZebw08b": "?",
+    "ft:gpt-4.1-mini-2025-04-14:personal:try-1:BZefwmPw": "?",
+    "ft:gpt-4.1-2025-04-14:personal:try-1:BZfWb0GC": "?",
 }
 
 
