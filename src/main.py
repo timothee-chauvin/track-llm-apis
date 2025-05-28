@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sqlite3
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -75,6 +76,23 @@ ENDPOINTS = [
     Endpoint("openai", "ft:gpt-4.1-mini-2025-04-14:personal:try-1:BZefwmPw", cost=(0.8, 3.2)),
     Endpoint("openai", "ft:gpt-4.1-2025-04-14:personal:try-1:BZfWb0GC", cost=(3, 12)),
 ]
+
+ENDPOINTS_WITH_SEED = []
+for endpoint in ENDPOINTS:
+    create_seed_version = any(
+        (
+            endpoint.source == "openai",
+            endpoint.name == "grok-3-beta",  # not the fast-beta which is too costly
+            # None of our openrouter models return a system fingerprint, so seed likely isn't taken into account
+        )
+    )
+    if create_seed_version:
+        endpoint_with_seed = deepcopy(endpoint)
+        endpoint_with_seed.seed = Config.seed
+        ENDPOINTS_WITH_SEED.append(endpoint_with_seed)
+
+
+ENDPOINTS = ENDPOINTS + ENDPOINTS_WITH_SEED
 
 
 def cost_per_year(n_input_tokens: int, queries_per_day: int):
@@ -175,6 +193,7 @@ class OpenAIClient:
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
+                seed=endpoint.seed,
             )
 
             cost = compute_cost(response.usage.to_dict(), endpoint)
@@ -206,6 +225,7 @@ class GrokClient:
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
+                seed=endpoint.seed,
             )
 
             cost = compute_cost(response.usage.to_dict(), endpoint)
@@ -242,6 +262,8 @@ class OpenRouterClient:
             request_data["provider"]["only"] = [endpoint.provider]
         if endpoint.dtype:
             request_data["provider"]["quantizations"] = [endpoint.dtype]
+        if endpoint.seed:
+            request_data["seed"] = endpoint.seed
 
         try:
             async with aiohttp.ClientSession() as session:
