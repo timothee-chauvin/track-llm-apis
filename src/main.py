@@ -324,7 +324,7 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
             db_manager.close()
 
 
-def main(num_iterations: int = 10, delay: float = 10, no_db: bool = False):
+def main(num_iterations: int = 1, delay: float = 10, no_db: bool = False):
     asyncio.run(main_async(num_iterations, delay, no_db=no_db))
 
 
