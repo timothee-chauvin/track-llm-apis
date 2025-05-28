@@ -270,7 +270,7 @@ class OpenRouterClient:
             return Response(endpoint, [], [], 0.0)
 
 
-async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager) -> Response:
+async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager | None = None) -> Response:
     if endpoint.source == "openai":
         client = OpenAIClient()
     elif endpoint.source == "grok":
@@ -282,12 +282,26 @@ async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager) -> Res
 
     response = await client.query(endpoint)
     if response.tokens and response.logprobs:
-        db_manager.store_result(response)
+        if db_manager:
+            db_manager.store_result(response)
+        else:
+            print(f"INSERT INTO {str(endpoint)}")
+            print(f"  date={datetime.now().isoformat()}")
+            print(f"  prompt={Config.prompt}")
+            print(f"  top_tokens={json.dumps(response.tokens)}")
+            print(f"  logprobs={json.dumps(response.logprobs)}")
+            print(f"  system_fingerprint={response.system_fingerprint}")
+            print(f"  seed={endpoint.seed}")
+            print()
+
     return response
 
 
-async def main_async(num_iterations: int, delay: float):
-    db_manager = DatabaseManager()
+async def main_async(num_iterations: int, delay: float, no_db: bool = False):
+    if not no_db:
+        db_manager = DatabaseManager()
+    else:
+        db_manager = None
 
     # Query all endpoints every delay seconds
     max_workers = 10
@@ -306,11 +320,12 @@ async def main_async(num_iterations: int, delay: float):
             if i < num_iterations - 1:  # Don't wait after the last iteration
                 await asyncio.sleep(delay)
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 
-def main(num_iterations: int = 10, delay: float = 10):
-    asyncio.run(main_async(num_iterations, delay))
+def main(num_iterations: int = 10, delay: float = 10, no_db: bool = False):
+    asyncio.run(main_async(num_iterations, delay, no_db=no_db))
 
 
 if __name__ == "__main__":
