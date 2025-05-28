@@ -79,6 +79,22 @@ ENDPOINTS = [
 ]
 
 
+def cost_per_year(n_input_tokens: int, queries_per_day: int):
+    cost_by_endpoint = {}
+    for endpoint in ENDPOINTS:
+        cost_by_endpoint[str(endpoint)] = (
+            (endpoint.cost[0] * n_input_tokens + endpoint.cost[1] * Config.max_completion_tokens)
+            / 1e6
+            * queries_per_day
+            * 365
+        )
+    total_cost = sum(cost_by_endpoint.values())
+    for endpoint, cost in sorted(cost_by_endpoint.items(), key=lambda x: x[1], reverse=True):
+        print(f"{endpoint}: ${cost:.2f} ({cost / total_cost * 100:.2f}%)")
+
+    print(f"\nTotal cost: ${total_cost:.2f}/year")
+
+
 def compute_cost(usage: dict, endpoint: Endpoint) -> float:
     return (
         usage["prompt_tokens"] * endpoint.cost[0] / 1e6
@@ -301,3 +317,4 @@ def main(num_iterations: int = 10, delay: float = 10):
 
 if __name__ == "__main__":
     fire.Fire(main)
+    # cost_per_year(20, 34)
