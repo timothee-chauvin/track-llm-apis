@@ -25,6 +25,7 @@ class Endpoint:
     dtype: str | None = None
     max_logprobs: int | None = None
     cost: tuple[float, float] | None = None
+    seed: int | None = None
 
     def get_max_logprobs(self) -> int:
         if self.max_logprobs is None:
@@ -32,7 +33,10 @@ class Endpoint:
         return self.max_logprobs
 
     def __str__(self) -> str:
-        return "#".join([self.source, self.name, self.provider or "", self.dtype or ""]).strip("#")
+        seed_str = f"seed={self.seed}" if self.seed is not None else None
+        potential_items = [self.source, self.name, self.provider, self.dtype, seed_str]
+        items = [item for item in potential_items if item]
+        return "#".join(items)
 
 
 @dataclass
@@ -41,6 +45,7 @@ class Response:
     tokens: list[str]
     logprobs: list[float]
     cost: float
+    system_fingerprint: str | None = None
 
 
 ENDPOINTS = [
@@ -110,7 +115,9 @@ class DatabaseManager:
             date TEXT NOT NULL,
             prompt TEXT NOT NULL,
             top_tokens JSON NOT NULL,
-            logprobs JSON NOT NULL
+            logprobs JSON NOT NULL,
+            system_fingerprint TEXT,
+            seed INTEGER
             )
             """
             )
@@ -124,12 +131,14 @@ class DatabaseManager:
         cursor = self.conn.cursor()
         date_str = datetime.now().isoformat()
         cursor.execute(
-            f'INSERT INTO "{table_name}" (date, prompt, top_tokens, logprobs) VALUES (?, ?, ?, ?)',
+            f'INSERT INTO "{table_name}" (date, prompt, top_tokens, logprobs, system_fingerprint, seed) VALUES (?, ?, ?, ?, ?, ?)',
             (
                 date_str,
                 Config.prompt,
                 json.dumps(response.tokens),
                 json.dumps(response.logprobs),
+                response.system_fingerprint,
+                response.endpoint.seed,
             ),
         )
         self.conn.commit()
@@ -161,7 +170,7 @@ class OpenAIClient:
                 logprobs = response.choices[0].logprobs.content[0].top_logprobs
                 tokens = [logprob.token for logprob in logprobs]
                 probs = [logprob.logprob for logprob in logprobs]
-                return Response(endpoint, tokens, probs, cost)
+                return Response(endpoint, tokens, probs, cost, response.system_fingerprint)
 
             logger.error(f"No logprobs returned for {endpoint}")
             return Response(endpoint, [], [], cost)
@@ -192,7 +201,7 @@ class GrokClient:
                 logprobs = response.choices[0].logprobs.content[0].top_logprobs
                 tokens = [logprob.token for logprob in logprobs]
                 probs = [logprob.logprob for logprob in logprobs]
-                return Response(endpoint, tokens, probs, cost)
+                return Response(endpoint, tokens, probs, cost, response.system_fingerprint)
 
             logger.error(f"No logprobs returned for {endpoint}")
             return Response(endpoint, [], [], cost)
@@ -236,7 +245,9 @@ class OpenRouterClient:
                 logprobs = response["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
                 tokens = [logprob["token"] for logprob in logprobs]
                 probs = [logprob["logprob"] for logprob in logprobs]
-                return Response(endpoint, tokens, probs, cost)
+                return Response(
+                    endpoint, tokens, probs, cost, response.get("system_fingerprint", None)
+                )
 
             logger.error(f"No logprobs returned for {endpoint}")
             return Response(endpoint, [], [], cost)
