@@ -5,6 +5,7 @@ import sqlite3
 import statistics
 from collections import defaultdict
 
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -124,6 +125,7 @@ def plot_prob_std():
 
     table_names = []
     stdevs = []
+    stdev_cis = []
     model_colors = []
 
     # Color mapping for model types
@@ -136,23 +138,25 @@ def plot_prob_std():
     for table_name in data.keys():
         top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
         top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
-        std_value = statistics.stdev(top_token_probs)
+        std_value = np.std(top_token_probs, ddof=1)
+        std_ci = boostrap_std_ci(top_token_probs)
         print(f"\n# {table_name}")
-        print(f"std: {std_value}")
+        print(f"std: {std_value} (CI: {std_ci})")
 
         model_name = table_name.split("#")[1]
         model_type = model_types[model_name]
 
-        table_data.append((table_name, std_value, model_type))
+        table_data.append((table_name, std_value, std_ci, model_type))
         std_by_type[model_type].append(std_value)
 
     # Sort by table name alphabetically
     table_data.sort(key=lambda x: x[0])
 
     # Extract sorted data for plotting
-    for table_name, std_value, model_type in table_data:
+    for table_name, std_value, std_ci, model_type in table_data:
         table_names.append(table_name)
         stdevs.append(std_value)
+        stdev_cis.append(std_ci)
         model_colors.append(color_map[model_type])
 
     print("# Average std by model type:")
@@ -169,6 +173,13 @@ def plot_prob_std():
             texttemplate="%{text:.4f}",
             textposition="outside",
             showlegend=False,
+            error_y=dict(
+                type="data",
+                symmetric=False,
+                array=[stdev_cis[i][1] - stdevs[i] for i in range(len(stdevs))],
+                arrayminus=[stdevs[i] - stdev_cis[i][0] for i in range(len(stdevs))],
+                visible=True,
+            ),
         )
     )
 
@@ -190,6 +201,17 @@ def plot_prob_std():
     fig_path = Config.plots_dir / "model_prob_std_histogram.html"
     fig.write_html(fig_path)
     print(f"Saved std histogram to {fig_path}")
+
+
+def boostrap_std_ci(data: list[float], n_samples: int = 1000) -> tuple[float, float]:
+    """Use boostrapping to estimate the confidence interval for the standard deviation."""
+    data = np.array(data)
+    stds = []
+    for i in range(n_samples):
+        sample = np.random.choice(data, size=len(data), replace=True)
+        stds.append(np.std(sample, ddof=1))
+    stds = np.sort(stds)
+    return np.percentile(stds, 2.5), np.percentile(stds, 97.5)
 
 
 def plot_prob_histograms():
