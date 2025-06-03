@@ -4,6 +4,7 @@ import os
 import sqlite3
 import statistics
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
 import plotly.graph_objects as go
@@ -34,7 +35,7 @@ model_types = {
 }
 
 
-def get_db_data() -> dict[str, list[tuple[str, str, list, list]]]:
+def get_db_data(after: datetime | None = None) -> dict[str, list[tuple[str, str, list, list]]]:
     conn = sqlite3.connect(Config.db_path)
     cursor = conn.cursor()
     try:
@@ -43,8 +44,16 @@ def get_db_data() -> dict[str, list[tuple[str, str, list, list]]]:
         # Filter out sqlite_sequence and other internal sqlite tables
         table_names = [name for name in raw_table_names if not name.startswith("sqlite_")]
         results = {}
+
         for table_name in table_names:
-            cursor.execute(f'SELECT date, prompt, top_tokens, logprobs FROM "{table_name}"')
+            if after is not None:
+                cursor.execute(
+                    f'SELECT date, prompt, top_tokens, logprobs FROM "{table_name}" WHERE date > ?',
+                    (after.isoformat(),),
+                )
+            else:
+                cursor.execute(f'SELECT date, prompt, top_tokens, logprobs FROM "{table_name}"')
+
             rows = cursor.fetchall()
             results[table_name] = []
             for date, prompt, top_tokens, logprobs in rows:
@@ -54,12 +63,13 @@ def get_db_data() -> dict[str, list[tuple[str, str, list, list]]]:
         return results
     except sqlite3.Error as e:
         Config.logger.error(f"An error occurred during database analysis: {e}")
+        raise e
     finally:
         conn.close()
 
 
-def equivalence_classes():
-    data = get_db_data()
+def equivalence_classes(after: datetime | None = None):
+    data = get_db_data(after=after)
     for table_name, rows in data.items():
         equivalence_classes = {}  # (top_tokens_tuple, logprobs_tuple) -> [dates]
 
@@ -101,8 +111,8 @@ def get_top_token_logprobs(data, table_name, all_top_tokens: bool = False):
     return top_token_logprobs
 
 
-def top_logprob_variability():
-    data = get_db_data()
+def top_logprob_variability(after: datetime | None = None):
+    data = get_db_data(after=after)
     for table_name in data.keys():
         top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
         top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
@@ -119,8 +129,8 @@ def top_logprob_variability():
         print(f"std: {statistics.stdev(top_token_probs)}")
 
 
-def plot_prob_std():
-    data = get_db_data()
+def plot_prob_std(after: datetime | None = None):
+    data = get_db_data(after=after)
     os.makedirs(Config.plots_dir, exist_ok=True)
 
     table_names = []
@@ -136,11 +146,14 @@ def plot_prob_std():
     # Collect data for all tables first
     table_data = []
     for table_name in data.keys():
+        print(f"\n# {table_name}")
         top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
+        if len(top_token_logprobs) < 2:
+            print("Skipped because it has less than 2 logprobs")
+            continue
         top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
         std_value = np.std(top_token_probs, ddof=1)
         std_ci = boostrap_std_ci(top_token_probs)
-        print(f"\n# {table_name}")
         print(f"std: {std_value} (CI: {std_ci})")
 
         model_name = table_name.split("#")[1]
@@ -188,8 +201,9 @@ def plot_prob_std():
             go.Bar(x=[None], y=[None], marker_color=color, name=model_type, showlegend=True)
         )
 
+    title_suffix = f" (after {after.isoformat()})" if after else ""
     fig.update_layout(
-        title="Standard Deviation of Top Token Probabilities by Model",
+        title=f"Standard Deviation of Top Token Probabilities by Model{title_suffix}",
         xaxis_title="Model",
         yaxis_title="Standard Deviation",
         template="plotly_white",
@@ -198,7 +212,8 @@ def plot_prob_std():
         barmode="group",
     )
 
-    fig_path = Config.plots_dir / "model_prob_std_histogram.html"
+    filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
+    fig_path = Config.plots_dir / f"model_prob_std_histogram{filename_suffix}.html"
     fig.write_html(fig_path)
     print(f"Saved std histogram to {fig_path}")
 
@@ -214,8 +229,8 @@ def boostrap_std_ci(data: list[float], n_samples: int = 1000) -> tuple[float, fl
     return np.percentile(stds, 2.5), np.percentile(stds, 97.5)
 
 
-def plot_prob_histograms():
-    data = get_db_data()
+def plot_prob_histograms(after: datetime | None = None):
+    data = get_db_data(after=after)
     os.makedirs(Config.plots_dir, exist_ok=True)
 
     for table_name in data.keys():
@@ -234,8 +249,9 @@ def plot_prob_histograms():
         fig.add_trace(go.Histogram(x=top_token_probs, nbinsx=nbins, name="Probs"), row=2, col=1)
         fig.update_xaxes(range=[0, 1], row=1, col=1)
 
+        title_suffix = f" (after {after.isoformat()})" if after else ""
         fig.update_layout(
-            title=f"Probability Distribution for {table_name}",
+            title=f"Probability Distribution for {table_name}{title_suffix}",
             template="plotly_white",
             showlegend=False,
         )
@@ -245,7 +261,8 @@ def plot_prob_histograms():
         fig.update_yaxes(title_text="Frequency", row=2, col=1)
 
         stub = table_name.replace("/", "_").replace("#", "_")
-        fig_path = Config.plots_dir / f"{stub}_prob_histogram.html"
+        filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
+        fig_path = Config.plots_dir / f"{stub}_prob_histogram{filename_suffix}.html"
         fig.write_html(fig_path)
         print(f"Saved histogram for {table_name} to {fig_path}")
 
@@ -254,4 +271,5 @@ if __name__ == "__main__":
     # equivalence_classes()
     # top_logprob_variability()
     # plot_prob_histograms()
-    plot_prob_std()
+    # 2025-05-29 at 16:59: started querying endpoints with seed 1, so can be compared with the ones without a seed.
+    plot_prob_std(after=datetime(2025, 5, 29, 16, 59))
