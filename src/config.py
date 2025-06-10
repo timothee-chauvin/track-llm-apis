@@ -16,6 +16,7 @@ class Config:
     plots_dir = ROOT_DIR / "plots"
     prompts = [
         "x " * 20,  # Around 20 tokens
+        "Let's generate random words! Only output the words, no other text. Continue the list: Underpay\nPolicy\nRisotto\nIdealist",
     ]
     max_completion_tokens = 1
     top_logprobs = {
