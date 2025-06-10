@@ -43,6 +43,7 @@ class Endpoint:
 @dataclass
 class Response:
     endpoint: Endpoint
+    prompt: str
     tokens: list[str]
     logprobs: list[float]
     cost: float
@@ -166,7 +167,7 @@ class DatabaseManager:
             f'INSERT INTO "{table_name}" (date, prompt, top_tokens, logprobs, system_fingerprint, seed) VALUES (?, ?, ?, ?, ?, ?)',
             (
                 date_str,
-                Config.prompt,
+                response.prompt,
                 json.dumps(response.tokens),
                 json.dumps(response.logprobs),
                 response.system_fingerprint,
@@ -184,11 +185,11 @@ class OpenAIClient:
     def __init__(self):
         self.client = AsyncOpenAI()
 
-    async def query(self, endpoint: Endpoint) -> Response:
+    async def query(self, endpoint: Endpoint, prompt: str) -> Response:
         try:
             response = await self.client.chat.completions.create(
                 model=endpoint.name,
-                messages=[{"role": "user", "content": Config.prompt}],
+                messages=[{"role": "user", "content": prompt}],
                 max_completion_tokens=Config.max_completion_tokens,
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
@@ -203,24 +204,24 @@ class OpenAIClient:
                 logprobs = response.choices[0].logprobs.content[0].top_logprobs
                 tokens = [logprob.token for logprob in logprobs]
                 probs = [logprob.logprob for logprob in logprobs]
-                return Response(endpoint, tokens, probs, cost, response.system_fingerprint)
+                return Response(endpoint, prompt, tokens, probs, cost, response.system_fingerprint)
 
             logger.error(f"No logprobs returned for {endpoint}")
-            return Response(endpoint, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost)
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost)
 
 
 class GrokClient:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=os.getenv("GROK_API_KEY"), base_url="https://api.x.ai/v1")
 
-    async def query(self, endpoint: Endpoint) -> Response:
+    async def query(self, endpoint: Endpoint, prompt: str) -> Response:
         try:
             response = await self.client.chat.completions.create(
                 model=endpoint.name,
-                messages=[{"role": "user", "content": Config.prompt}],
+                messages=[{"role": "user", "content": prompt}],
                 max_completion_tokens=Config.max_completion_tokens,
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
@@ -235,20 +236,20 @@ class GrokClient:
                 logprobs = response.choices[0].logprobs.content[0].top_logprobs
                 tokens = [logprob.token for logprob in logprobs]
                 probs = [logprob.logprob for logprob in logprobs]
-                return Response(endpoint, tokens, probs, cost, response.system_fingerprint)
+                return Response(endpoint, prompt, tokens, probs, cost, response.system_fingerprint)
 
             logger.error(f"No logprobs returned for {endpoint}")
-            return Response(endpoint, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost)
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost)
 
 
 class OpenRouterClient:
-    async def query(self, endpoint: Endpoint) -> Response:
+    async def query(self, endpoint: Endpoint, prompt: str) -> Response:
         request_data = {
             "model": endpoint.name,
-            "messages": [{"role": "user", "content": Config.prompt}],
+            "messages": [{"role": "user", "content": prompt}],
             "max_completion_tokens": Config.max_completion_tokens,
             "logprobs": True,
             "top_logprobs": endpoint.get_max_logprobs(),
@@ -282,17 +283,19 @@ class OpenRouterClient:
                 tokens = [logprob["token"] for logprob in logprobs]
                 probs = [logprob["logprob"] for logprob in logprobs]
                 return Response(
-                    endpoint, tokens, probs, cost, response.get("system_fingerprint", None)
+                    endpoint, prompt, tokens, probs, cost, response.get("system_fingerprint", None)
                 )
 
             logger.error(f"No logprobs returned for {endpoint}")
-            return Response(endpoint, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost)
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, [], [], 0.0)
+            return Response(endpoint, prompt, [], [], 0.0)
 
 
-async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager | None = None) -> Response:
+async def query_endpoint(
+    endpoint: Endpoint, prompt: str, db_manager: DatabaseManager | None = None
+) -> Response:
     if endpoint.source == "openai":
         client = OpenAIClient()
     elif endpoint.source == "grok":
@@ -302,14 +305,14 @@ async def query_endpoint(endpoint: Endpoint, db_manager: DatabaseManager | None 
     else:
         raise ValueError(f"Unsupported source: {endpoint.source}")
 
-    response = await client.query(endpoint)
+    response = await client.query(endpoint, prompt)
     if response.tokens and response.logprobs:
         if db_manager:
             db_manager.store_result(response)
         else:
             print(f"INSERT INTO {str(endpoint)}")
             print(f"  date={datetime.now().isoformat()}")
-            print(f"  prompt={Config.prompt}")
+            print(f"  prompt={prompt}")
             print(f"  top_tokens={json.dumps(response.tokens)}")
             print(f"  logprobs={json.dumps(response.logprobs)}")
             print(f"  system_fingerprint={response.system_fingerprint}")
@@ -331,7 +334,11 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
         for i in range(num_iterations):
             logger.info(f"Query iteration {i + 1}/{num_iterations}")
 
-            tasks = [query_endpoint(endpoint, db_manager) for endpoint in ENDPOINTS]
+            tasks = [
+                query_endpoint(endpoint, prompt, db_manager)
+                for endpoint in ENDPOINTS
+                for prompt in Config.prompts
+            ]
             responses = await gather_with_concurrency(max_workers, *tasks)
             costs = {str(response.endpoint): response.cost for response in responses}
             logger.info("Costs breakdown:")

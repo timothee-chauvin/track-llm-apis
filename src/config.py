@@ -14,7 +14,9 @@ class Config:
     root_dir = ROOT_DIR
     db_path = ROOT_DIR / "db" / "llm_logprobs.db"
     plots_dir = ROOT_DIR / "plots"
-    prompt = "x " * 20  # Around 20 tokens
+    prompts = [
+        "x " * 20,  # Around 20 tokens
+    ]
     max_completion_tokens = 1
     top_logprobs = {
         "openai": 20,
