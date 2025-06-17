@@ -17,6 +17,7 @@ class Config:
     prompts = [
         "x " * 20,  # Around 20 tokens
         "Let's generate random words! Only output the words, no other text. Continue the list: Underpay\nPolicy\nRisotto\nIdealist",
+        "Let's generate random words! Only output the words, no other text. Continue the list: Sinuous\nCornbread\nStipulate\nOverreact",
     ]
     max_completion_tokens = 1
     top_logprobs = {
