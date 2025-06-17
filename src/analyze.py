@@ -267,9 +267,84 @@ def plot_prob_histograms(after: datetime | None = None):
         print(f"Saved histogram for {table_name} to {fig_path}")
 
 
+def plot_top_token_logprobs_over_time(after: datetime | None = None):
+    """Plot logprobs of top tokens over time for each table, creating separate files."""
+    data = get_db_data(after=after)
+    os.makedirs(Config.plots_dir, exist_ok=True)
+
+    for table_name in data.keys():
+        rows = data[table_name]
+
+        if len(rows) == 0:
+            print(f"Skipping {table_name}: no data")
+            continue
+
+        # Collect all unique top tokens across all rows
+        all_top_tokens = set()
+        for _, _, top_tokens, _ in rows:
+            all_top_tokens.update(top_tokens)
+
+        # Group data by top token
+        token_data = defaultdict(lambda: {"dates": [], "logprobs": []})
+
+        for date_str, _, row_top_tokens, row_logprobs in rows:
+            # Parse date string to datetime
+            try:
+                date = datetime.fromisoformat(date_str)
+            except ValueError:
+                # Try alternative parsing if needed
+                continue
+
+            # For each top token in this row, record its logprob
+            for i, token in enumerate(row_top_tokens):
+                if token in all_top_tokens:
+                    token_data[token]["dates"].append(date)
+                    token_data[token]["logprobs"].append(row_logprobs[i])
+
+        # Create the plot
+        fig = go.Figure()
+
+        # Add a line for each top token
+        for token, data_dict in token_data.items():
+            if len(data_dict["dates"]) > 0:  # Only plot if we have data
+                # Sort by date to ensure proper line plotting
+                sorted_pairs = sorted(zip(data_dict["dates"], data_dict["logprobs"]))
+                sorted_dates, sorted_logprobs = zip(*sorted_pairs)
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=sorted_dates,
+                        y=sorted_logprobs,
+                        mode="lines+markers",
+                        name=f'"{token}"',
+                        line=dict(width=2),
+                        marker=dict(size=4),
+                    )
+                )
+
+        # Update layout
+        title_suffix = f" (after {after.isoformat()})" if after else ""
+        fig.update_layout(
+            title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}",
+            xaxis_title="Time",
+            yaxis_title="Log Probability",
+            template="plotly_white",
+            hovermode="x unified",
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01),
+        )
+
+        # Save the plot
+        stub = table_name.replace("/", "_").replace("#", "_")
+        filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
+        fig_path = Config.plots_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
+        fig.write_html(fig_path)
+        print(f"Saved logprobs over time for {table_name} to {fig_path}")
+
+
 if __name__ == "__main__":
     # equivalence_classes()
     # top_logprob_variability()
     # plot_prob_histograms()
     # 2025-05-29 at 16:59: started querying endpoints with seed 1, so can be compared with the ones without a seed.
-    plot_prob_std(after=datetime(2025, 5, 29, 16, 59))
+    # plot_prob_std(after=datetime(2025, 5, 29, 16, 59))
+    plot_top_token_logprobs_over_time()
