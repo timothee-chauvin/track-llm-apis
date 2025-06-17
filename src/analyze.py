@@ -296,46 +296,71 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
 
             # Collect all unique top tokens across all rows for this prompt
             all_top_tokens = set()
-            for _, top_tokens, _ in prompt_rows:
-                all_top_tokens.update(top_tokens)
+            all_dates = []
+            all_logprobs_for_min = []
 
-            # Group data by top token
-            token_data = defaultdict(lambda: {"dates": [], "logprobs": []})
-
-            for date_str, row_top_tokens, row_logprobs in prompt_rows:
-                # Parse date string to datetime
+            # Parse all dates and collect all logprobs to find minimum
+            parsed_rows = []
+            for date_str, top_tokens, logprobs in prompt_rows:
                 try:
                     date = datetime.fromisoformat(date_str)
+                    parsed_rows.append((date, top_tokens, logprobs))
+                    all_dates.append(date)
+                    all_top_tokens.update(top_tokens)
+                    all_logprobs_for_min.extend(logprobs)
                 except ValueError:
-                    # Try alternative parsing if needed
+                    # Skip rows with invalid dates
                     continue
 
-                # For each top token in this row, record its logprob
-                for i, token in enumerate(row_top_tokens):
-                    if token in all_top_tokens:
-                        token_data[token]["dates"].append(date)
-                        token_data[token]["logprobs"].append(row_logprobs[i])
+            if not parsed_rows:
+                print(f"Skipping prompt in {table_name}: no valid dates")
+                continue
+
+            # Calculate minimum logprob minus 1 for missing tokens
+            min_logprob = min(all_logprobs_for_min)
+            missing_token_logprob = min_logprob * 1.1
+
+            # Sort dates for consistent time series
+            all_dates = sorted(set(all_dates))
+
+            # Create complete time series data for each token
+            token_data = {}
+            for token in all_top_tokens:
+                token_data[token] = {"dates": [], "logprobs": []}
+
+                for date in all_dates:
+                    token_data[token]["dates"].append(date)
+
+                    # Find if this token exists in top_tokens for this date
+                    token_logprob = missing_token_logprob  # Default to missing value
+
+                    for row_date, row_top_tokens, row_logprobs in parsed_rows:
+                        if row_date == date:
+                            try:
+                                token_index = row_top_tokens.index(token)
+                                token_logprob = row_logprobs[token_index]
+                            except ValueError:
+                                # Token not in top tokens for this date, use missing value
+                                pass
+                            break
+
+                    token_data[token]["logprobs"].append(token_logprob)
 
             # Create the plot
             fig = go.Figure()
 
             # Add a line for each top token
             for token, data_dict in token_data.items():
-                if len(data_dict["dates"]) > 0:  # Only plot if we have data
-                    # Sort by date to ensure proper line plotting
-                    sorted_pairs = sorted(zip(data_dict["dates"], data_dict["logprobs"]))
-                    sorted_dates, sorted_logprobs = zip(*sorted_pairs)
-
-                    fig.add_trace(
-                        go.Scatter(
-                            x=sorted_dates,
-                            y=sorted_logprobs,
-                            mode="lines+markers",
-                            name=f'"{token}"',
-                            line=dict(width=2),
-                            marker=dict(size=4),
-                        )
+                fig.add_trace(
+                    go.Scatter(
+                        x=data_dict["dates"],
+                        y=data_dict["logprobs"],
+                        mode="lines+markers",
+                        name=f'"{token}"',
+                        line=dict(width=2),
+                        marker=dict(size=4),
                     )
+                )
 
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
