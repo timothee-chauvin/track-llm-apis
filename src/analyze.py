@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import os
@@ -231,7 +232,8 @@ def boostrap_std_ci(data: list[float], n_samples: int = 1000) -> tuple[float, fl
 
 def plot_prob_histograms(after: datetime | None = None):
     data = get_db_data(after=after)
-    os.makedirs(Config.plots_dir, exist_ok=True)
+    histograms_dir = Config.plots_dir / "histograms"
+    os.makedirs(histograms_dir, exist_ok=True)
 
     for table_name in data.keys():
         top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
@@ -262,15 +264,16 @@ def plot_prob_histograms(after: datetime | None = None):
 
         stub = table_name.replace("/", "_").replace("#", "_")
         filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
-        fig_path = Config.plots_dir / f"{stub}_prob_histogram{filename_suffix}.html"
+        fig_path = histograms_dir / f"{stub}_prob_histogram{filename_suffix}.html"
         fig.write_html(fig_path)
         print(f"Saved histogram for {table_name} to {fig_path}")
 
 
 def plot_top_token_logprobs_over_time(after: datetime | None = None):
-    """Plot logprobs of top tokens over time for each table, creating separate files."""
+    """Plot logprobs of top tokens over time for each prompt in each table."""
     data = get_db_data(after=after)
-    os.makedirs(Config.plots_dir, exist_ok=True)
+    time_series_dir = Config.plots_dir / "time_series"
+    os.makedirs(time_series_dir, exist_ok=True)
 
     for table_name in data.keys():
         rows = data[table_name]
@@ -279,66 +282,82 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             print(f"Skipping {table_name}: no data")
             continue
 
-        # Collect all unique top tokens across all rows
-        all_top_tokens = set()
-        for _, _, top_tokens, _ in rows:
-            all_top_tokens.update(top_tokens)
+        # Group rows by prompt
+        prompt_groups = defaultdict(list)
+        for date_str, prompt, top_tokens, logprobs in rows:
+            prompt_groups[prompt].append((date_str, top_tokens, logprobs))
 
-        # Group data by top token
-        token_data = defaultdict(lambda: {"dates": [], "logprobs": []})
+        # Create a plot for each prompt
+        for prompt, prompt_rows in prompt_groups.items():
+            # Create subdirectory based on first 8 characters of MD5 hash of prompt
+            prompt_hash = hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8]
+            prompt_dir = time_series_dir / prompt_hash
+            os.makedirs(prompt_dir, exist_ok=True)
 
-        for date_str, _, row_top_tokens, row_logprobs in rows:
-            # Parse date string to datetime
-            try:
-                date = datetime.fromisoformat(date_str)
-            except ValueError:
-                # Try alternative parsing if needed
-                continue
+            # Collect all unique top tokens across all rows for this prompt
+            all_top_tokens = set()
+            for _, top_tokens, _ in prompt_rows:
+                all_top_tokens.update(top_tokens)
 
-            # For each top token in this row, record its logprob
-            for i, token in enumerate(row_top_tokens):
-                if token in all_top_tokens:
-                    token_data[token]["dates"].append(date)
-                    token_data[token]["logprobs"].append(row_logprobs[i])
+            # Group data by top token
+            token_data = defaultdict(lambda: {"dates": [], "logprobs": []})
 
-        # Create the plot
-        fig = go.Figure()
+            for date_str, row_top_tokens, row_logprobs in prompt_rows:
+                # Parse date string to datetime
+                try:
+                    date = datetime.fromisoformat(date_str)
+                except ValueError:
+                    # Try alternative parsing if needed
+                    continue
 
-        # Add a line for each top token
-        for token, data_dict in token_data.items():
-            if len(data_dict["dates"]) > 0:  # Only plot if we have data
-                # Sort by date to ensure proper line plotting
-                sorted_pairs = sorted(zip(data_dict["dates"], data_dict["logprobs"]))
-                sorted_dates, sorted_logprobs = zip(*sorted_pairs)
+                # For each top token in this row, record its logprob
+                for i, token in enumerate(row_top_tokens):
+                    if token in all_top_tokens:
+                        token_data[token]["dates"].append(date)
+                        token_data[token]["logprobs"].append(row_logprobs[i])
 
-                fig.add_trace(
-                    go.Scatter(
-                        x=sorted_dates,
-                        y=sorted_logprobs,
-                        mode="lines+markers",
-                        name=f'"{token}"',
-                        line=dict(width=2),
-                        marker=dict(size=4),
+            # Create the plot
+            fig = go.Figure()
+
+            # Add a line for each top token
+            for token, data_dict in token_data.items():
+                if len(data_dict["dates"]) > 0:  # Only plot if we have data
+                    # Sort by date to ensure proper line plotting
+                    sorted_pairs = sorted(zip(data_dict["dates"], data_dict["logprobs"]))
+                    sorted_dates, sorted_logprobs = zip(*sorted_pairs)
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=sorted_dates,
+                            y=sorted_logprobs,
+                            mode="lines+markers",
+                            name=f'"{token}"',
+                            line=dict(width=2),
+                            marker=dict(size=4),
+                        )
                     )
-                )
 
-        # Update layout
-        title_suffix = f" (after {after.isoformat()})" if after else ""
-        fig.update_layout(
-            title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}",
-            xaxis_title="Time",
-            yaxis_title="Log Probability",
-            template="plotly_white",
-            hovermode="x unified",
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01),
-        )
+            # Update layout
+            title_suffix = f" (after {after.isoformat()})" if after else ""
+            # Truncate prompt for title if it's too long
+            prompt_preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
+            fig.update_layout(
+                title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}<br>Prompt: {prompt_preview}",
+                xaxis_title="Time",
+                yaxis_title="Log Probability",
+                template="plotly_white",
+                hovermode="x unified",
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01),
+            )
 
-        # Save the plot
-        stub = table_name.replace("/", "_").replace("#", "_")
-        filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
-        fig_path = Config.plots_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
-        fig.write_html(fig_path)
-        print(f"Saved logprobs over time for {table_name} to {fig_path}")
+            # Save the plot
+            stub = table_name.replace("/", "_").replace("#", "_")
+            filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
+            fig_path = prompt_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
+            fig.write_html(fig_path)
+            print(
+                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}) to {fig_path}"
+            )
 
 
 if __name__ == "__main__":
