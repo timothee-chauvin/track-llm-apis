@@ -26,4 +26,4 @@ class Config:
         "grok": 8,
         "openrouter": 20,
     }
-    seed = 1  # note: the Grok API refuses a seed of 0, says it must be positive
+    api_seed = 1  # note: the Grok API refuses a seed of 0, says it must be positive

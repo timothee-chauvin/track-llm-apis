@@ -89,7 +89,7 @@ for endpoint in ENDPOINTS:
     )
     if create_seed_version:
         endpoint_with_seed = deepcopy(endpoint)
-        endpoint_with_seed.seed = Config.seed
+        endpoint_with_seed.seed = Config.api_seed
         ENDPOINTS_WITH_SEED.append(endpoint_with_seed)
 
 
