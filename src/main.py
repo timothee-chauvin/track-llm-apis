@@ -339,12 +339,14 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
                 for endpoint in ENDPOINTS
                 for prompt in Config.prompts
             ]
+            logger.info(f"{len(tasks)} requests to send")
             responses = await gather_with_concurrency(max_workers, *tasks)
             costs = {str(response.endpoint): response.cost for response in responses}
             logger.info("Costs breakdown:")
             logger.info(json.dumps(costs, indent=2))
             total_cost = sum(costs.values())
             logger.info(f"Total cost: ${total_cost:.2e} ({(total_cost * 100):.2f} cents)")
+            logger.info(f"Total cost per year assuming 1 every hour: ${total_cost * 24 * 365:.2e}")
 
             if i < num_iterations - 1:  # Don't wait after the last iteration
                 await asyncio.sleep(delay)
