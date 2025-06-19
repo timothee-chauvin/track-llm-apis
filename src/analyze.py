@@ -371,7 +371,7 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
             # Truncate prompt for title if it's too long
-            prompt_preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
+            prompt_preview = repr(prompt[:50] + "..." if len(prompt) > 50 else prompt)
             fig.update_layout(
                 title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}<br>Prompt: {prompt_preview}",
                 xaxis_title="Time",
