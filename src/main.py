@@ -285,7 +285,7 @@ async def retry_with_exponential_backoff(
             if e.status in retryable_status_codes and attempt < max_retries:
                 wait_time = min(max_delay, (base_delay * (2**attempt)))
                 if jitter:
-                    wait_time += random.uniform(0, 1)
+                    wait_time *= random.uniform(0.9, 1.1)
 
                 logger.warning(
                     f"HTTP {e.status} error. Retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries + 1})"
@@ -435,6 +435,9 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
             total_cost = sum(costs.values())
             logger.info(f"Total cost: ${total_cost:.2e} ({(total_cost * 100):.2f} cents)")
             logger.info(f"Total cost per year assuming 1 every hour: ${total_cost * 24 * 365:.2e}")
+            logger.info(
+                f"Total errors: {sum(1 for response in responses if response.error)}/{len(responses)}"
+            )
 
             if i < num_iterations - 1:  # Don't wait after the last iteration
                 await asyncio.sleep(delay)
