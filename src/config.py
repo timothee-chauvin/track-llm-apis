@@ -20,6 +20,19 @@ class Config:
         "x " * 20,
         "Let's generate random words! Only output the words, no other text. Continue the list: Underpay\nPolicy\nRisotto\nIdealist",
         "Let's generate random words! Only output the words, no other text. Continue the list: Sinuous\nCornbread\nStipulate\nOverreact",
+        # Random prompts
+        # 2 characters
+        "]\n",
+        "HB",
+        "e|",
+        # 4 characters
+        "xég",
+        "\x04B\x02z",
+        "\x1e·T",
+        # 8 characters
+        "\x06P\x1dz\x13ZTq",
+        "ZZ\x17˚p|[",
+        "\x14\x1ap88V?_",
     ]
     max_completion_tokens = 1
     top_logprobs = {
