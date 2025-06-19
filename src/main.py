@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import sqlite3
@@ -166,7 +167,7 @@ class DatabaseManager:
             f'INSERT INTO "{table_name}" (date, prompt, top_tokens, logprobs, system_fingerprint, seed) VALUES (?, ?, ?, ?, ?, ?)',
             (
                 date_str,
-                response.prompt,
+                base64.b64encode(response.prompt.encode()).decode(),
                 json.dumps(response.tokens),
                 json.dumps(response.logprobs),
                 response.system_fingerprint,
@@ -311,7 +312,7 @@ async def query_endpoint(
         else:
             print(f"INSERT INTO {str(endpoint)}")
             print(f"  date={datetime.now().isoformat()}")
-            print(f"  prompt={prompt}")
+            print(f"  prompt={base64.b64encode(prompt.encode()).decode()}")
             print(f"  top_tokens={json.dumps(response.tokens)}")
             print(f"  logprobs={json.dumps(response.logprobs)}")
             print(f"  system_fingerprint={response.system_fingerprint}")

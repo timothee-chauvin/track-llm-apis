@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import math
@@ -59,7 +60,12 @@ def get_db_data(after: datetime | None = None) -> dict[str, list[tuple[str, str,
             results[table_name] = []
             for date, prompt, top_tokens, logprobs in rows:
                 results[table_name].append(
-                    (date, prompt, list(json.loads(top_tokens)), list(json.loads(logprobs)))
+                    (
+                        date,
+                        base64.b64decode(prompt).decode("utf-8"),
+                        list(json.loads(top_tokens)),
+                        list(json.loads(logprobs)),
+                    )
                 )
         return results
     except sqlite3.Error as e:
