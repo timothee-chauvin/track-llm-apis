@@ -64,7 +64,6 @@ ENDPOINTS = [
     Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "Nebius", "fp8", cost=(0.5, 1.5)),
     Endpoint("openrouter", "qwen/qwen3-14b", "Nebius", "fp8", cost=(0.08, 0.24)),
     Endpoint("openrouter", "qwen/qwen3-32b", "Nebius", "fp8", cost=(0.1, 0.3)),
-    Endpoint("openrouter", "microsoft/phi-3.5-mini-128k-instruct", "Nebius", cost=(0.03, 0.09)),
     Endpoint("openrouter", "meta-llama/llama-3.3-70b-instruct", "Nebius", "fp8", cost=(0.13, 0.4)),
     Endpoint(
         "openrouter", "meta-llama/llama-3.3-70b-instruct", "Kluster", "fp8", cost=(0.07, 0.33)
