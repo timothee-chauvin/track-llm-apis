@@ -15,8 +15,9 @@ class Config:
     db_path = ROOT_DIR / "db" / "llm_logprobs.db"
     plots_dir = ROOT_DIR / "plots"
     prompts = [
-        "x",
-        "x " * 20,  # Around 20 tokens
+        "x ",
+        "x " * 5,
+        "x " * 20,
         "Let's generate random words! Only output the words, no other text. Continue the list: Underpay\nPolicy\nRisotto\nIdealist",
         "Let's generate random words! Only output the words, no other text. Continue the list: Sinuous\nCornbread\nStipulate\nOverreact",
     ]
