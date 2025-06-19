@@ -52,6 +52,7 @@ class Response:
     logprobs: list[float]
     cost: float
     system_fingerprint: str | None = None
+    error: str | None = None
 
 
 ENDPOINTS = [
@@ -210,10 +211,10 @@ class OpenAIClient:
                 return Response(endpoint, prompt, tokens, probs, cost, response.system_fingerprint)
 
             logger.error(f"No logprobs returned for {endpoint}")
-            return Response(endpoint, prompt, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost, error="No logprobs returned")
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, prompt, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost, error=str(e))
 
 
 class GrokClient:
@@ -242,10 +243,10 @@ class GrokClient:
                 return Response(endpoint, prompt, tokens, probs, cost, response.system_fingerprint)
 
             logger.error(f"No logprobs returned for {endpoint}")
-            return Response(endpoint, prompt, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost, error="No logprobs returned")
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, prompt, [], [], cost)
+            return Response(endpoint, prompt, [], [], cost, error=str(e))
 
 
 async def retry_with_exponential_backoff(
@@ -368,7 +369,7 @@ class OpenRouterClient:
             )
 
         logger.error(f"No logprobs returned for {endpoint}")
-        return Response(endpoint, prompt, [], [], cost)
+        return Response(endpoint, prompt, [], [], cost, error="No logprobs returned")
 
     async def query(self, endpoint: Endpoint, prompt: str) -> Response:
         try:
@@ -377,7 +378,7 @@ class OpenRouterClient:
             )
         except Exception as e:
             logger.error(f"Error querying {endpoint} after {Config.max_retries} retries: {e}")
-            return Response(endpoint, prompt, [], [], 0.0)
+            return Response(endpoint, prompt, [], [], 0.0, error=str(e))
 
 
 async def query_endpoint(
@@ -423,8 +424,8 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
 
             tasks = [
                 query_endpoint(endpoint, prompt, db_manager)
-                for endpoint in ENDPOINTS
                 for prompt in Config.prompts
+                for endpoint in ENDPOINTS
             ]
             logger.info(f"{len(tasks)} requests to send")
             responses = await gather_with_concurrency(max_workers, *tasks)
