@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from track_llm_apis.config import Config
-from track_llm_apis.util import gather_with_concurrency
+from track_llm_apis.util import gather_with_concurrency_streaming
 
 logger = Config.logger
 
@@ -171,7 +171,7 @@ class DatabaseManager:
             ),
         )
         self.conn.commit()
-        logger.info(f"Stored results for {response.endpoint}")
+        logger.debug(f"Stored results for {response.endpoint}")
 
     def close(self):
         self.conn.close()
@@ -411,8 +411,8 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
     # Query all endpoints every delay seconds
     max_workers = 10
     try:
-        for i in range(num_iterations):
-            logger.info(f"Query iteration {i + 1}/{num_iterations}")
+        for it in range(num_iterations):
+            logger.info(f"Query iteration {it + 1}/{num_iterations}")
 
             tasks = [
                 query_endpoint(endpoint, prompt, db_manager)
@@ -420,8 +420,18 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
                 for endpoint in ENDPOINTS
             ]
             logger.info(f"{len(tasks)} requests to send")
-            responses = await gather_with_concurrency(max_workers, *tasks)
-            costs = {str(response.endpoint): response.cost for response in responses}
+            responses = []
+            i = 0
+            async for response in gather_with_concurrency_streaming(max_workers, *tasks):
+                responses.append(response)
+                success_or_error = "SUCCESS" if not response.error else f"ERROR: {response.error}"
+                logger.info(f"{i + 1}/{len(tasks)}: {response.endpoint} {success_or_error}")
+                i += 1
+
+            costs = {
+                str(response.endpoint): response.cost
+                for response in sorted(responses, key=lambda x: x.cost, reverse=True)
+            }
             logger.info("Costs breakdown:")
             logger.info(json.dumps(costs, indent=2))
             total_cost = sum(costs.values())
@@ -431,7 +441,7 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
                 f"Total errors: {sum(1 for response in responses if response.error)}/{len(responses)}"
             )
 
-            if i < num_iterations - 1:  # Don't wait after the last iteration
+            if it < num_iterations - 1:  # Don't wait after the last iteration
                 await asyncio.sleep(delay)
     finally:
         if db_manager:
