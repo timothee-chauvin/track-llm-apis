@@ -73,6 +73,8 @@ ENDPOINTS = [
     Endpoint(
         "openrouter", "meta-llama/llama-3.3-70b-instruct", "Kluster", "fp8", cost=(0.07, 0.33)
     ),
+    Endpoint("openrouter", "google/gemma-3-27b-it", "Kluster", cost=(0.1, 0.25)),
+    Endpoint("openrouter", "google/gemma-3-27b-it", "Nebius", cost=(0.1, 0.3)),
     # Finetuned OpenAI models
     Endpoint("openai", "ft:gpt-4.1-nano-2025-04-14:personal:try-1:BZeUJpHW", cost=(0.2, 0.8)),
     Endpoint(
