@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from track_llm_apis.config import Config
+from track_llm_apis.util import trim_to_length
 
 model_types = {
     "gpt-4o-mini": "?",
@@ -371,7 +372,7 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
             # Truncate prompt for title if it's too long
-            prompt_preview = repr(prompt[:50] + "..." if len(prompt) > 50 else prompt)
+            prompt_preview = repr(trim_to_length(prompt, 50))
             fig.update_layout(
                 title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}<br>Prompt: {prompt_preview}",
                 xaxis_title="Time",

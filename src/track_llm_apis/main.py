@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from track_llm_apis.config import Config
-from track_llm_apis.util import gather_with_concurrency_streaming
+from track_llm_apis.util import gather_with_concurrency_streaming, trim_to_length
 
 logger = Config.logger
 
@@ -425,7 +425,9 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
             async for response in gather_with_concurrency_streaming(max_workers, *tasks):
                 responses.append(response)
                 success_or_error = "SUCCESS" if not response.error else f"ERROR: {response.error}"
-                logger.info(f"{i + 1}/{len(tasks)}: {response.endpoint} {success_or_error}")
+                logger.info(
+                    f"{i + 1}/{len(tasks)}: {response.endpoint} ({repr(trim_to_length(response.prompt, 50))}) {success_or_error}"
+                )
                 i += 1
 
             costs = {

@@ -26,3 +26,7 @@ async def gather_with_concurrency_streaming(n, *coros):
     # Use as_completed to get results as they finish
     for coro in asyncio.as_completed(sem_coros):
         yield await coro
+
+
+def trim_to_length(s: str, length: int) -> str:
+    return s[:length] + "..." if len(s) > length else s
