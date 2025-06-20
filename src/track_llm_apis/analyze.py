@@ -12,7 +12,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from config import Config
+from track_llm_apis.config import Config
 
 model_types = {
     "gpt-4o-mini": "?",

@@ -15,7 +15,8 @@ import fire
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-from config import Config
+from track_llm_apis.config import Config
+from track_llm_apis.util import gather_with_concurrency
 
 logger = Config.logger
 
@@ -123,17 +124,6 @@ def compute_cost(usage: dict, endpoint: Endpoint) -> float:
         usage["prompt_tokens"] * endpoint.cost[0] / 1e6
         + usage["completion_tokens"] * endpoint.cost[1] / 1e6
     )
-
-
-async def gather_with_concurrency(n, *coros):
-    # Taken from https://stackoverflow.com/a/61478547
-    semaphore = asyncio.Semaphore(n)
-
-    async def sem_coro(coro):
-        async with semaphore:
-            return await coro
-
-    return await asyncio.gather(*(sem_coro(c) for c in coros))
 
 
 class DatabaseManager:
