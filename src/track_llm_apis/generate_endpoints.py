@@ -6,7 +6,7 @@ import requests
 
 from track_llm_apis.config import Config
 from track_llm_apis.main import Endpoint, OpenRouterClient
-from track_llm_apis.util import gather_with_concurrency
+from track_llm_apis.util import gather_with_concurrency_streaming
 
 logger = Config.logger
 
@@ -15,7 +15,6 @@ async def fetch_model_endpoints(session, model_id):
     """Fetch endpoints for a model and return those that claim to support logprobs"""
     url = f"https://openrouter.ai/api/v1/models/{model_id}/endpoints"
     try:
-        logger.info(f"Fetching endpoints for {model_id}...")
         async with session.get(url) as response:
             data = await response.json()
             endpoints = data["data"]["endpoints"]
@@ -76,7 +75,11 @@ async def main():
     logger.info("Fetching endpoints that claim to support logprobs...")
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_model_endpoints(session, model_id) for model_id in model_ids]
-        results = await gather_with_concurrency(20, *tasks)
+        results = []
+        total = len(tasks)
+        async for result in gather_with_concurrency_streaming(20, *tasks):
+            results.append(result)
+            logger.info(f"Fetched endpoints: {len(results)}/{total}")
 
     # Flatten the results
     endpoints_with_logprobs = []
@@ -85,10 +88,27 @@ async def main():
 
     logger.info(f"Found {len(endpoints_with_logprobs)} endpoints claiming to support logprobs")
 
+    # Avoid getting ripped off by a $1T/Mtok endpoint: filter out any endpoints that cost too much per input or output token.
+    max_cost = 200  # per million tokens
+    endpoints_cost_ok = []
+    for endpoint in endpoints_with_logprobs:
+        if endpoint.cost[0] < max_cost and endpoint.cost[1] < max_cost:
+            endpoints_cost_ok.append(endpoint)
+        else:
+            logger.info(
+                f"Filtered out {endpoint.name} because it costs more than ${max_cost}/Mtok input or output: {endpoint.cost}"
+            )
+
+    endpoints_with_logprobs = endpoints_cost_ok
+
     # Test each endpoint to see if it actually returns logprobs
     logger.info("Testing endpoints for actual logprobs functionality...")
     test_tasks = [test_endpoint_logprobs(endpoint) for endpoint in endpoints_with_logprobs]
-    test_results = await gather_with_concurrency(20, *test_tasks)
+    test_results = []
+    total_tests = len(test_tasks)
+    async for result in gather_with_concurrency_streaming(20, *test_tasks):
+        test_results.append(result)
+        logger.info(f"Tested endpoints: {len(test_results)}/{total_tests}")
 
     # Separate successful and failed endpoints
     successful_endpoints = []
