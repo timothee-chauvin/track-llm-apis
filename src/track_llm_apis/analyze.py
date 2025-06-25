@@ -296,15 +296,17 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
 
         # Create a plot for each prompt
         for prompt, prompt_rows in prompt_groups.items():
-            # Create subdirectory based on first 8 characters of MD5 hash of prompt
+            # Create subdirectory based on first 16 characters of base64 of prompt, followed by 8 characters of MD5 hash of prompt
+            prompt_base64 = (
+                base64.b64encode(prompt.encode("utf-8")).decode("utf-8").replace("/", "-")[:16]
+            )
             prompt_hash = hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8]
-            prompt_dir = time_series_dir / prompt_hash
+            prompt_dir = time_series_dir / f"{prompt_base64}_{prompt_hash}"
             os.makedirs(prompt_dir, exist_ok=True)
 
             # Collect all unique top tokens across all rows for this prompt
             all_top_tokens = set()
             all_dates = []
-            all_logprobs_for_min = []
 
             # Parse all dates and collect all logprobs to find minimum
             parsed_rows = []
@@ -314,7 +316,6 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
                     parsed_rows.append((date, top_tokens, logprobs))
                     all_dates.append(date)
                     all_top_tokens.update(top_tokens)
-                    all_logprobs_for_min.extend(logprobs)
                 except ValueError:
                     # Skip rows with invalid dates
                     continue
@@ -322,10 +323,6 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             if not parsed_rows:
                 print(f"Skipping prompt in {table_name}: no valid dates")
                 continue
-
-            # Calculate minimum logprob minus 1 for missing tokens
-            min_logprob = min(all_logprobs_for_min)
-            missing_token_logprob = min_logprob * 1.1
 
             # Sort dates for consistent time series
             all_dates = sorted(set(all_dates))
@@ -339,7 +336,7 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
                     token_data[token]["dates"].append(date)
 
                     # Find if this token exists in top_tokens for this date
-                    token_logprob = missing_token_logprob  # Default to missing value
+                    token_logprob = None  # Default to None for missing values
 
                     for row_date, row_top_tokens, row_logprobs in parsed_rows:
                         if row_date == date:
@@ -388,7 +385,7 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             fig_path = prompt_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
             fig.write_html(fig_path)
             print(
-                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}) to {fig_path}"
+                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(prompt[:40])}) to {fig_path}"
             )
 
 
