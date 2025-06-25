@@ -20,6 +20,7 @@ class Config:
         "x " * 20,
         "Let's generate random words! Only output the words, no other text. Continue the list: Underpay\nPolicy\nRisotto\nIdealist",
         "Let's generate random words! Only output the words, no other text. Continue the list: Sinuous\nCornbread\nStipulate\nOverreact",
+        "reply in one token. 1+1=",
         # Random prompts
         # 2 characters
         "]\n",
