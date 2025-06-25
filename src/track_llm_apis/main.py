@@ -36,6 +36,10 @@ class Endpoint:
 
     def get_max_logprobs(self) -> int:
         if self.max_logprobs is None:
+            if self.source == "openrouter":
+                for provider_prefix in Config.top_logprobs_openrouter.keys():
+                    if self.provider.lower().startswith(provider_prefix.lower()):
+                        return Config.top_logprobs_openrouter[provider_prefix]
             return Config.top_logprobs[self.source]
         return self.max_logprobs
 
@@ -339,7 +343,7 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
         db_manager = None
 
     # Query all endpoints every delay seconds
-    max_workers = 10
+    max_workers = 20
     try:
         for it in range(num_iterations):
             logger.info(f"Query iteration {it + 1}/{num_iterations}")
