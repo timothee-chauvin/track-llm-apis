@@ -37,7 +37,6 @@ async def fetch_model_endpoints(session, model_id):
                                 (Decimal(endpoint["pricing"]["completion"]) * 1_000_000).normalize()
                             ),
                         ),
-                        max_logprobs=20,
                     )
                     model_endpoints_with_logprobs.append(endpoint_data)
 
@@ -56,10 +55,14 @@ async def test_endpoint_logprobs(endpoint):
 
         if response.error:
             return endpoint, False, response.error
-        elif len(response.logprobs) == 20:
+        elif len(response.logprobs) == endpoint.get_max_logprobs():
             return endpoint, True, None
         else:
-            return endpoint, False, f"Expected 20 logprobs, got {len(response.logprobs)}"
+            return (
+                endpoint,
+                False,
+                f"Expected {endpoint.get_max_logprobs()} logprobs, got {len(response.logprobs)}",
+            )
     except Exception as e:
         return endpoint, False, str(e)
 
@@ -123,7 +126,7 @@ async def main():
     # Output results
     print("#" * 100)
     print(
-        f"SUCCESSFUL ENDPOINTS (returned 20 logprobs with prompt 'x'): {len(successful_endpoints)}"
+        f"SUCCESSFUL ENDPOINTS (returned the correct amount of logprobs with prompt 'x'): {len(successful_endpoints)}"
     )
     print("#" * 100)
 
