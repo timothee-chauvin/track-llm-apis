@@ -1,5 +1,6 @@
 import asyncio
 import json
+from decimal import Decimal
 
 import aiohttp
 import requests
@@ -9,7 +10,7 @@ from track_llm_apis.util import gather_with_concurrency
 
 logger = Config.logger
 
-# Get the model IDs from https://openrouter.ai/api/v1/models
+# Get the model IDs
 response = requests.get("https://openrouter.ai/api/v1/models")
 model_ids = [model["id"] for model in response.json()["data"]]
 
@@ -34,7 +35,10 @@ async def fetch_model_endpoints(session, model_id):
                 endpoint_data = {
                     "model_id": model_id,
                     "provider": endpoint["tag"],
-                    "cost": (endpoint["pricing"]["prompt"], endpoint["pricing"]["completion"]),
+                    "cost": (  # the API returns prices per token, we want per million tokens
+                        f"{(Decimal(endpoint['pricing']['prompt']) * 1_000_000).normalize():f}",
+                        f"{(Decimal(endpoint['pricing']['completion']) * 1_000_000).normalize():f}",
+                    ),
                 }
 
                 if (
@@ -72,3 +76,10 @@ print(json.dumps(endpoints_with_logprobs, indent=2))
 print("#" * 100)
 print(f"Endpoints without logprobs (len={len(endpoints_without_logprobs)}):")
 print(json.dumps(endpoints_without_logprobs, indent=2))
+
+print("#" * 100)
+print("Endpoints with logprobs in usable format:")
+for endpoint in sorted(endpoints_with_logprobs, key=lambda x: float(x["cost"][0])):
+    print(
+        f'    Endpoint("openrouter", "{endpoint["model_id"]}", "{endpoint["provider"]}", cost=({endpoint["cost"][0]}, {endpoint["cost"][1]})),'
+    )
