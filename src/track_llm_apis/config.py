@@ -49,3 +49,4 @@ class Config:
     }
     api_seed = 1  # note: the Grok API refuses a seed of 0, says it must be positive
     max_retries = 15
+    extended_endpoints_max_cost = 30  # sum of input and output costs per Mtok
