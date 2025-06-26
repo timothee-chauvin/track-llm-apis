@@ -14,6 +14,7 @@ class Config:
     root_dir = ROOT_DIR
     db_path = ROOT_DIR / "db" / "llm_logprobs.db"
     plots_dir = ROOT_DIR / "plots"
+    # Prompts to send to the smaller list of endpoints
     prompts = [
         "x ",
         "x " * 5,
@@ -34,6 +35,10 @@ class Config:
         "\x06P\x1dz\x13ZTq",
         "ZZ\x17˚p|[",
         "\x14\x1ap88V?_",
+    ]
+    # Prompts to send to both the smaller and the extended lists of endpoints
+    prompts_extended = [
+        "x",
     ]
     max_completion_tokens = 1
     top_logprobs = {

@@ -346,7 +346,7 @@ class DatabaseManager:
 
     def create_tables(self):
         cursor = self.conn.cursor()
-        for endpoint in ENDPOINTS:
+        for endpoint in ENDPOINTS + ENDPOINTS_EXTENDED:
             table_name = self._get_table_name(endpoint)
             cursor.execute(
                 f"""
@@ -557,6 +557,13 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
                 for prompt in Config.prompts
                 for endpoint in ENDPOINTS
             ]
+            tasks.extend(
+                [
+                    query_endpoint(endpoint, prompt, db_manager)
+                    for prompt in Config.prompts_extended
+                    for endpoint in ENDPOINTS + ENDPOINTS_EXTENDED
+                ]
+            )
             logger.info(f"{len(tasks)} requests to send")
             responses = []
             i = 0
