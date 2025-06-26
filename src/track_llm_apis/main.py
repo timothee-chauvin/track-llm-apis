@@ -175,10 +175,10 @@ ENDPOINTS_EXTENDED = [
     Endpoint("openrouter", "thudm/glm-4-32b:free", "chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "thudm/glm-z1-32b:free", "chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "tngtech/deepseek-r1t-chimera:free", "chutes", cost=(0.0, 0.0)),
-    Endpoint("openrouter", "mistralai/mistral-nemo", "klusterai", cost=(0.01, 0.013)),
+    Endpoint("openrouter", "mistralai/mistral-nemo", "klusterai", cost=(0.01, 0.011)),
     Endpoint("openrouter", "meta-llama/llama-3.2-3b-instruct", "lambda/bf16", cost=(0.015, 0.025)),
     Endpoint(
-        "openrouter", "meta-llama/llama-3.1-8b-instruct", "klusterai/fp8", cost=(0.016, 0.023)
+        "openrouter", "meta-llama/llama-3.1-8b-instruct", "klusterai/fp8", cost=(0.016, 0.021)
     ),
     Endpoint("openrouter", "meta-llama/llama-3.1-8b-instruct", "nebius/fp8", cost=(0.02, 0.06)),
     Endpoint("openrouter", "meta-llama/llama-guard-3-8b", "nebius", cost=(0.02, 0.06)),
@@ -196,7 +196,7 @@ ENDPOINTS_EXTENDED = [
     Endpoint(
         "openrouter", "mistralai/mistral-small-3.1-24b-instruct", "nebius/fp8", cost=(0.05, 0.15)
     ),
-    Endpoint("openrouter", "meta-llama/llama-3.3-70b-instruct", "klusterai/fp8", cost=(0.05, 0.19)),
+    Endpoint("openrouter", "meta-llama/llama-3.3-70b-instruct", "klusterai/fp8", cost=(0.05, 0.17)),
     Endpoint("openrouter", "qwen/qwen-2.5-coder-32b-instruct", "nebius/fp8", cost=(0.06, 0.18)),
     Endpoint("openrouter", "qwen/qwen-2.5-coder-32b-instruct", "lambda/bf16", cost=(0.07, 0.16)),
     Endpoint("openrouter", "qwen/qwen3-14b", "nebius/fp8", cost=(0.08, 0.24)),
