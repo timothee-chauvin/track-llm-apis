@@ -130,7 +130,9 @@ async def main():
     )
     print("#" * 100)
 
-    for endpoint in sorted(successful_endpoints, key=lambda x: x.cost[0]):
+    for endpoint in sorted(
+        successful_endpoints, key=lambda x: (x.cost[0], x.cost[1], x.name, x.provider)
+    ):
         print(
             f'    Endpoint("openrouter", "{endpoint.name}", "{endpoint.provider}", cost=({endpoint.cost[0]}, {endpoint.cost[1]})),'
         )
