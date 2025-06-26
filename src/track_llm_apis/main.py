@@ -134,16 +134,11 @@ ENDPOINTS_EXTENDED = [
     Endpoint(
         "openrouter", "deepseek/deepseek-r1-distill-llama-70b:free", "chutes", cost=(0.0, 0.0)
     ),
-    Endpoint("openrouter", "deepseek/deepseek-v3-base:free", "chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "google/gemma-2-9b-it:free", "chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "google/gemma-3-12b-it:free", "chutes/bf16", cost=(0.0, 0.0)),
     Endpoint("openrouter", "google/gemma-3-27b-it:free", "chutes/bf16", cost=(0.0, 0.0)),
-    Endpoint("openrouter", "google/gemma-3-4b-it:free", "chutes/bf16", cost=(0.0, 0.0)),
     Endpoint("openrouter", "meta-llama/llama-4-maverick:free", "chutes/fp8", cost=(0.0, 0.0)),
     Endpoint("openrouter", "meta-llama/llama-4-scout:free", "chutes/bf16", cost=(0.0, 0.0)),
-    Endpoint("openrouter", "microsoft/mai-ds-r1:free", "chutes/fp8", cost=(0.0, 0.0)),
-    Endpoint("openrouter", "microsoft/phi-4-reasoning-plus:free", "chutes", cost=(0.0, 0.0)),
-    Endpoint("openrouter", "microsoft/phi-4-reasoning:free", "chutes/bf16", cost=(0.0, 0.0)),
     Endpoint("openrouter", "minimax/minimax-m1:extended", "chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "mistralai/devstral-small:free", "chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "mistralai/mistral-nemo:free", "chutes", cost=(0.0, 0.0)),
