@@ -199,6 +199,7 @@ ENDPOINTS_EXTENDED = [
     Endpoint("openrouter", "meta-llama/llama-3.3-70b-instruct", "klusterai/fp8", cost=(0.05, 0.17)),
     Endpoint("openrouter", "qwen/qwen-2.5-coder-32b-instruct", "nebius/fp8", cost=(0.06, 0.18)),
     Endpoint("openrouter", "qwen/qwen-2.5-coder-32b-instruct", "lambda/bf16", cost=(0.07, 0.16)),
+    Endpoint("openrouter", "mistralai/devstral-small", "nebius/fp8", cost=(0.08, 0.24)),
     Endpoint("openrouter", "qwen/qwen3-14b", "nebius/fp8", cost=(0.08, 0.24)),
     Endpoint("openrouter", "meta-llama/llama-4-scout", "lambda/fp8", cost=(0.08, 0.3)),
     Endpoint("openrouter", "meta-llama/llama-4-scout", "klusterai", cost=(0.08, 0.45)),
