@@ -11,6 +11,7 @@ from datetime import datetime
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.stats import shapiro
 
 from track_llm_apis.config import Config
 from track_llm_apis.util import trim_to_length
@@ -389,10 +390,61 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             )
 
 
+def test_normality_shapiro():
+    """
+    For each endpoint, each prompt and each top token for which we have the logprob value at least 200 times,
+    perform the Shapiro-Wilk test to test for normality.
+    """
+    data = get_db_data()
+    min_statistic = float("inf")
+    min_statistic_realization = None
+    min_p_value = float("inf")
+    min_p_value_realization = None
+    max_statistic = float("-inf")
+    max_statistic_realization = None
+    max_p_value = float("-inf")
+    max_p_value_realization = None
+    for table_name in data.keys():
+        rows = data[table_name]
+        rows_by_prompt = defaultdict(list)
+        for row in rows:
+            rows_by_prompt[row[1]].append(row)
+        for prompt, rows in rows_by_prompt.items():
+            logprobs_by_token = defaultdict(list)
+            for _, prompt, top_tokens, logprobs in rows:
+                for i, token in enumerate(top_tokens):
+                    logprobs_by_token[token].append(logprobs[i])
+            for token, logprobs in logprobs_by_token.items():
+                if len(logprobs) < 200:
+                    continue
+                statistic, p_value = shapiro(logprobs)
+                print(
+                    f"{table_name}, prompt: {repr(trim_to_length(prompt, 20))}, token: {token}, ({len(logprobs)} occurrences): s={statistic:.4f}, p={p_value:.3e}"
+                )
+                realization = (table_name, prompt, token, len(logprobs), statistic, p_value)
+                if p_value < min_p_value:
+                    min_p_value = p_value
+                    min_p_value_realization = realization
+                if p_value > max_p_value:
+                    max_p_value = p_value
+                    max_p_value_realization = realization
+                if statistic < min_statistic:
+                    min_statistic = statistic
+                    min_statistic_realization = realization
+                if statistic > max_statistic:
+                    max_statistic = statistic
+                    max_statistic_realization = realization
+    print(f"Min statistic realization: {min_statistic_realization}")
+    print(f"Max statistic realization: {max_statistic_realization}")
+    print(f"Min p-value realization: {min_p_value_realization}")
+    print(f"Max p-value realization: {max_p_value_realization}")
+
+
 if __name__ == "__main__":
     # equivalence_classes()
     # top_logprob_variability()
     # plot_prob_histograms()
     # 2025-05-29 at 16:59: started querying endpoints with seed 1, so can be compared with the ones without a seed.
     # plot_prob_std(after=datetime(2025, 5, 29, 16, 59))
-    plot_top_token_logprobs_over_time()
+    # plot_top_token_logprobs_over_time()
+    test_normality_shapiro()
