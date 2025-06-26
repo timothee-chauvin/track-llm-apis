@@ -417,7 +417,7 @@ class OpenAIClient:
             return Response(endpoint, prompt, [], [], cost, error="No logprobs returned")
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, prompt, [], [], cost, error=str(e))
+            return Response(endpoint, prompt, [], [], 0.0, error=str(e))
 
 
 class GrokClient:
@@ -449,7 +449,7 @@ class GrokClient:
             return Response(endpoint, prompt, [], [], cost, error="No logprobs returned")
         except Exception as e:
             logger.error(f"Error querying {endpoint}: {e}")
-            return Response(endpoint, prompt, [], [], cost, error=str(e))
+            return Response(endpoint, prompt, [], [], 0.0, error=str(e))
 
 
 class OpenRouterClient:
