@@ -451,7 +451,11 @@ def create_random_qq_plots(n_samples: int = 100):
     Select n_samples random (endpoint, prompt, top token seen at least 200 times) tuples
     and create Q-Q plots with respect to a normal distribution.
     Convert matplotlib figures to plotly and save as HTML.
+    Also creates combined subplot figures with readable plots.
     """
+    random.seed(Config.seed)
+    np.random.seed(Config.seed)
+
     data = get_db_data()
 
     # Collect all valid tuples (endpoint, prompt, token, logprobs)
@@ -487,9 +491,27 @@ def create_random_qq_plots(n_samples: int = 100):
 
     print(f"Creating Q-Q plots for {sample_size} randomly selected tuples...")
 
+    # Store Q-Q plot data for reuse in combined plots
+    qq_data = []
+
+    # Create individual plots and collect Q-Q data
     for i, (table_name, prompt, token, logprobs) in enumerate(sampled_tuples):
+        # Create individual plot
         fig, ax = plt.subplots(figsize=(8, 6))
         sm.qqplot(np.array(logprobs), stats.norm, fit=True, line="45", ax=ax)
+
+        # Extract Q-Q plot data from the matplotlib figure
+        lines = ax.get_lines()
+        # First line is the data points, second line is the reference line
+        data_line = lines[0]  # The scatter plot data
+        ref_line = lines[1]  # The reference line
+
+        theoretical_quantiles = data_line.get_xdata()
+        sample_quantiles = data_line.get_ydata()
+        ref_x = ref_line.get_xdata()
+        ref_y = ref_line.get_ydata()
+
+        qq_data.append((theoretical_quantiles, sample_quantiles, ref_x, ref_y))
 
         prompt_preview = repr(trim_to_length(prompt, 30))
         ax.set_title(
@@ -522,7 +544,94 @@ def create_random_qq_plots(n_samples: int = 100):
         print(f"  - Token: '{token}' ({len(logprobs)} occurrences)")
         print(f"  - Prompt start: {repr(prompt[:50])}")
 
-    print(f"\nAll Q-Q plots saved to {qq_plots_dir}")
+    # Create combined plots with 5x5 subplots (25 per page)
+    plots_per_page = 25
+    rows_per_page = 5
+    cols_per_page = 5
+    num_pages = math.ceil(sample_size / plots_per_page)
+
+    for page in range(num_pages):
+        start_idx = page * plots_per_page
+        end_idx = min(start_idx + plots_per_page, sample_size)
+
+        # Create simple numbered subplot titles
+        subplot_titles = [str(start_idx + i) for i in range(end_idx - start_idx)]
+
+        # Pad with empty titles if needed
+        while len(subplot_titles) < plots_per_page:
+            subplot_titles.append("")
+
+        combined_fig = make_subplots(
+            rows=rows_per_page,
+            cols=cols_per_page,
+            subplot_titles=subplot_titles,
+            vertical_spacing=0.08,
+            horizontal_spacing=0.06,
+        )
+
+        for i in range(end_idx - start_idx):
+            plot_idx = start_idx + i
+            theoretical_quantiles, sample_quantiles, ref_x, ref_y = qq_data[plot_idx]
+
+            # Add to combined subplot
+            row = i // cols_per_page + 1
+            col = i % cols_per_page + 1
+
+            # Add scatter plot to subplot using pre-computed data
+            combined_fig.add_trace(
+                go.Scatter(
+                    x=theoretical_quantiles,
+                    y=sample_quantiles,
+                    mode="markers",
+                    marker=dict(size=3, color="blue", opacity=0.6),
+                    showlegend=False,
+                    name=f"Data {plot_idx}",
+                ),
+                row=row,
+                col=col,
+            )
+
+            # Add reference line using pre-computed data
+            combined_fig.add_trace(
+                go.Scatter(
+                    x=ref_x,
+                    y=ref_y,
+                    mode="lines",
+                    line=dict(color="red", width=2),
+                    showlegend=False,
+                    name=f"Reference {plot_idx}",
+                ),
+                row=row,
+                col=col,
+            )
+
+        # Update combined figure layout
+        page_title = f"Combined Q-Q Plots vs Normal Distribution (Page {page + 1}/{num_pages}, seed={Config.seed})"
+        combined_fig.update_layout(
+            title=page_title,
+            template="plotly_white",
+            showlegend=False,
+            height=1000,
+            width=1200,
+        )
+
+        # Add axis labels only to bottom row and left column
+        for i in range(1, rows_per_page + 1):
+            for j in range(1, cols_per_page + 1):
+                if i == rows_per_page:  # Bottom row
+                    combined_fig.update_xaxes(title_text="Theoretical", row=i, col=j)
+                if j == 1:  # Left column
+                    combined_fig.update_yaxes(title_text="Sample", row=i, col=j)
+
+        # Save combined figure for this page
+        combined_fig_path = (
+            qq_plots_dir / f"combined_qq_plots_page_{page + 1}_seed_{Config.seed}.html"
+        )
+        combined_fig.write_html(combined_fig_path)
+        print(f"Saved combined Q-Q plot page {page + 1}/{num_pages} to {combined_fig_path}")
+
+    print(f"\nAll individual Q-Q plots saved to {qq_plots_dir}")
+    print(f"Combined Q-Q plots saved as {num_pages} pages to {qq_plots_dir}")
 
 
 if __name__ == "__main__":
