@@ -17,7 +17,7 @@ import plotly.tools as tls
 import statsmodels.api as sm
 from plotly.subplots import make_subplots
 from scipy import stats
-from scipy.stats import shapiro
+from scipy.stats import linregress, shapiro
 
 from track_llm_apis.config import Config
 from track_llm_apis.util import trim_to_length
@@ -493,6 +493,7 @@ def create_random_qq_plots(n_samples: int = 100):
 
     # Store Q-Q plot data for reuse in combined plots
     qq_data = []
+    r_squared_values = []
 
     # Create individual plots and collect Q-Q data
     for i, (table_name, prompt, token, logprobs) in enumerate(sampled_tuples):
@@ -511,6 +512,9 @@ def create_random_qq_plots(n_samples: int = 100):
         ref_x = ref_line.get_xdata()
         ref_y = ref_line.get_ydata()
 
+        r_squared = linregress(theoretical_quantiles, sample_quantiles).rvalue ** 2
+        r_squared_values.append(r_squared)
+
         qq_data.append((theoretical_quantiles, sample_quantiles, ref_x, ref_y))
 
         prompt_preview = repr(trim_to_length(prompt, 30))
@@ -522,6 +526,20 @@ def create_random_qq_plots(n_samples: int = 100):
 
         # Convert matplotlib figure to plotly
         plotly_fig = tls.mpl_to_plotly(fig)
+
+        # Add R² annotation to top left
+        plotly_fig.add_annotation(
+            x=0.05,
+            y=0.95,
+            xref="paper",
+            yref="paper",
+            text=f"R² = {r_squared:.3f}",
+            showarrow=False,
+            font=dict(size=14, color="black"),
+            bgcolor="rgba(255, 255, 255, 0.8)",
+            bordercolor="black",
+            borderwidth=1,
+        )
 
         plotly_fig.update_layout(
             template="plotly_white",
@@ -542,20 +560,24 @@ def create_random_qq_plots(n_samples: int = 100):
         print(f"Saved Q-Q plot {i + 1}/{sample_size}: {filename}")
         print(f"  - Table: {table_name}")
         print(f"  - Token: '{token}' ({len(logprobs)} occurrences)")
+        print(f"  - R² = {r_squared:.3f}")
         print(f"  - Prompt start: {repr(prompt[:50])}")
 
-    # Create combined plots with 5x5 subplots (25 per page)
-    plots_per_page = 25
-    rows_per_page = 5
-    cols_per_page = 5
+    # Create combined plots with 10x10 subplots (100 per page)
+    plots_per_page = 100
+    rows_per_page = 10
+    cols_per_page = 10
     num_pages = math.ceil(sample_size / plots_per_page)
 
     for page in range(num_pages):
         start_idx = page * plots_per_page
         end_idx = min(start_idx + plots_per_page, sample_size)
 
-        # Create simple numbered subplot titles
-        subplot_titles = [str(start_idx + i) for i in range(end_idx - start_idx)]
+        subplot_titles = []
+        for i in range(end_idx - start_idx):
+            plot_idx = start_idx + i
+            r_squared = r_squared_values[plot_idx]
+            subplot_titles.append(f"{plot_idx} (R²: {r_squared:.2f})")
 
         # Pad with empty titles if needed
         while len(subplot_titles) < plots_per_page:
@@ -565,8 +587,8 @@ def create_random_qq_plots(n_samples: int = 100):
             rows=rows_per_page,
             cols=cols_per_page,
             subplot_titles=subplot_titles,
-            vertical_spacing=0.08,
-            horizontal_spacing=0.06,
+            vertical_spacing=0.04,
+            horizontal_spacing=0.03,
         )
 
         for i in range(end_idx - start_idx):
@@ -583,7 +605,7 @@ def create_random_qq_plots(n_samples: int = 100):
                     x=theoretical_quantiles,
                     y=sample_quantiles,
                     mode="markers",
-                    marker=dict(size=3, color="blue", opacity=0.6),
+                    marker=dict(size=2, color="blue", opacity=0.6),
                     showlegend=False,
                     name=f"Data {plot_idx}",
                 ),
@@ -597,7 +619,7 @@ def create_random_qq_plots(n_samples: int = 100):
                     x=ref_x,
                     y=ref_y,
                     mode="lines",
-                    line=dict(color="red", width=2),
+                    line=dict(color="red", width=1.5),
                     showlegend=False,
                     name=f"Reference {plot_idx}",
                 ),
@@ -611,9 +633,12 @@ def create_random_qq_plots(n_samples: int = 100):
             title=page_title,
             template="plotly_white",
             showlegend=False,
-            height=1000,
-            width=1200,
+            height=1600,
+            width=1600,
         )
+
+        for annotation in combined_fig["layout"]["annotations"]:
+            annotation.font = dict(size=11)
 
         # Add axis labels only to bottom row and left column
         for i in range(1, rows_per_page + 1):
