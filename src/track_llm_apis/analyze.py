@@ -3,14 +3,20 @@ import hashlib
 import json
 import math
 import os
+import random
 import sqlite3
 import statistics
 from collections import defaultdict
 from datetime import datetime
 
+import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
+import plotly.offline
+import plotly.tools as tls
+import statsmodels.api as sm
 from plotly.subplots import make_subplots
+from scipy import stats
 from scipy.stats import shapiro
 
 from track_llm_apis.config import Config
@@ -440,6 +446,85 @@ def test_normality_shapiro():
     print(f"Max p-value realization: {max_p_value_realization}")
 
 
+def create_random_qq_plots(n_samples: int = 100):
+    """
+    Select n_samples random (endpoint, prompt, top token seen at least 200 times) tuples
+    and create Q-Q plots with respect to a normal distribution.
+    Convert matplotlib figures to plotly and save as HTML.
+    """
+    data = get_db_data()
+
+    # Collect all valid tuples (endpoint, prompt, token, logprobs)
+    valid_tuples = []
+
+    for table_name in data.keys():
+        rows = data[table_name]
+        rows_by_prompt = defaultdict(list)
+        for row in rows:
+            rows_by_prompt[row[1]].append(row)
+
+        for prompt, rows in rows_by_prompt.items():
+            logprobs_by_token = defaultdict(list)
+            for _, prompt, top_tokens, logprobs in rows:
+                for i, token in enumerate(top_tokens):
+                    logprobs_by_token[token].append(logprobs[i])
+
+            for token, logprobs in logprobs_by_token.items():
+                if len(logprobs) >= 200:
+                    valid_tuples.append((table_name, prompt, token, logprobs))
+
+    print(f"Found {len(valid_tuples)} valid tuples with at least 200 occurrences")
+
+    if len(valid_tuples) == 0:
+        print("No valid tuples found!")
+        return
+
+    sample_size = min(n_samples, len(valid_tuples))
+    sampled_tuples = random.sample(valid_tuples, sample_size)
+
+    qq_plots_dir = Config.plots_dir / "qq_plots"
+    os.makedirs(qq_plots_dir, exist_ok=True)
+
+    print(f"Creating Q-Q plots for {sample_size} randomly selected tuples...")
+
+    for i, (table_name, prompt, token, logprobs) in enumerate(sampled_tuples):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sm.qqplot(np.array(logprobs), stats.norm, fit=True, line="45", ax=ax)
+
+        prompt_preview = repr(trim_to_length(prompt, 30))
+        ax.set_title(
+            f'Q-Q Plot vs Normal Distribution\n{table_name}\nToken: "{token}"\nPrompt: {prompt_preview}'
+        )
+        ax.set_xlabel("Theoretical Quantiles (Normal)")
+        ax.set_ylabel("Sample Quantiles (Logprobs)")
+
+        # Convert matplotlib figure to plotly
+        plotly_fig = tls.mpl_to_plotly(fig)
+
+        plotly_fig.update_layout(
+            template="plotly_white",
+            showlegend=False,
+        )
+
+        # Create filename - use index and hash for uniqueness
+        prompt_hash = hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8]
+        table_stub = table_name.replace("/", "_").replace("#", "_")
+        token_stub = token.replace("/", "_").replace(" ", "_")[:20]
+        filename = f"qqplot_{i:03d}_{table_stub}_{token_stub}_{prompt_hash}.html"
+
+        fig_path = qq_plots_dir / filename
+        plotly.offline.plot(plotly_fig, filename=str(fig_path), auto_open=False)
+
+        plt.close(fig)
+
+        print(f"Saved Q-Q plot {i + 1}/{sample_size}: {filename}")
+        print(f"  - Table: {table_name}")
+        print(f"  - Token: '{token}' ({len(logprobs)} occurrences)")
+        print(f"  - Prompt start: {repr(prompt[:50])}")
+
+    print(f"\nAll Q-Q plots saved to {qq_plots_dir}")
+
+
 if __name__ == "__main__":
     # equivalence_classes()
     # top_logprob_variability()
@@ -447,4 +532,5 @@ if __name__ == "__main__":
     # 2025-05-29 at 16:59: started querying endpoints with seed 1, so can be compared with the ones without a seed.
     # plot_prob_std(after=datetime(2025, 5, 29, 16, 59))
     # plot_top_token_logprobs_over_time()
-    test_normality_shapiro()
+    # test_normality_shapiro()
+    create_random_qq_plots()
