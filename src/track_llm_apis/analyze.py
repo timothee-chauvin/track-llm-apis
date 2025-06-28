@@ -18,9 +18,12 @@ import statsmodels.api as sm
 from plotly.subplots import make_subplots
 from scipy import stats
 from scipy.stats import linregress, shapiro
+from tqdm import tqdm
 
 from track_llm_apis.config import Config
 from track_llm_apis.util import trim_to_length
+
+logger = Config.logger
 
 model_types = {
     "gpt-4o-mini": "?",
@@ -46,6 +49,7 @@ model_types = {
 
 
 def get_db_data(after: datetime | None = None) -> dict[str, list[tuple[str, str, list, list]]]:
+    logger.info("Getting db data...")
     conn = sqlite3.connect(Config.db_path)
     cursor = conn.cursor()
     try:
@@ -55,7 +59,7 @@ def get_db_data(after: datetime | None = None) -> dict[str, list[tuple[str, str,
         table_names = [name for name in raw_table_names if not name.startswith("sqlite_")]
         results = {}
 
-        for table_name in table_names:
+        for table_name in tqdm(table_names):
             if after is not None:
                 cursor.execute(
                     f'SELECT date, prompt, top_tokens, logprobs FROM "{table_name}" WHERE date > ?',
@@ -289,12 +293,11 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
     time_series_dir = Config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
 
+    n_plots = sum(len(set(row[1] for row in rows)) for rows in data.values())
+
+    index = 0
     for table_name in data.keys():
         rows = data[table_name]
-
-        if len(rows) == 0:
-            print(f"Skipping {table_name}: no data")
-            continue
 
         # Group rows by prompt
         prompt_groups = defaultdict(list)
@@ -326,10 +329,6 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
                 except ValueError:
                     # Skip rows with invalid dates
                     continue
-
-            if not parsed_rows:
-                print(f"Skipping prompt in {table_name}: no valid dates")
-                continue
 
             # Sort dates for consistent time series
             all_dates = sorted(set(all_dates))
@@ -391,9 +390,10 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
             fig_path = prompt_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
             fig.write_html(fig_path)
-            print(
-                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(prompt[:40])}) to {fig_path}"
+            logger.info(
+                f"[{index + 1}/{n_plots}] Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(prompt[:40])}) to {fig_path}"
             )
+            index += 1
 
 
 def test_normality_shapiro():
@@ -424,7 +424,7 @@ def test_normality_shapiro():
                 if len(logprobs) < 200:
                     continue
                 statistic, p_value = shapiro(logprobs)
-                print(
+                logger.info(
                     f"{table_name}, prompt: {repr(trim_to_length(prompt, 20))}, token: {token}, ({len(logprobs)} occurrences): s={statistic:.4f}, p={p_value:.3e}"
                 )
                 realization = (table_name, prompt, token, len(logprobs), statistic, p_value)
@@ -440,10 +440,10 @@ def test_normality_shapiro():
                 if statistic > max_statistic:
                     max_statistic = statistic
                     max_statistic_realization = realization
-    print(f"Min statistic realization: {min_statistic_realization}")
-    print(f"Max statistic realization: {max_statistic_realization}")
-    print(f"Min p-value realization: {min_p_value_realization}")
-    print(f"Max p-value realization: {max_p_value_realization}")
+    logger.info(f"Min statistic realization: {min_statistic_realization}")
+    logger.info(f"Max statistic realization: {max_statistic_realization}")
+    logger.info(f"Min p-value realization: {min_p_value_realization}")
+    logger.info(f"Max p-value realization: {max_p_value_realization}")
 
 
 def create_random_qq_plots(n_samples: int = 100):
@@ -477,10 +477,10 @@ def create_random_qq_plots(n_samples: int = 100):
                 if len(logprobs) >= 200:
                     valid_tuples.append((table_name, prompt, token, logprobs))
 
-    print(f"Found {len(valid_tuples)} valid tuples with at least 200 occurrences")
+    logger.info(f"Found {len(valid_tuples)} valid tuples with at least 200 occurrences")
 
     if len(valid_tuples) == 0:
-        print("No valid tuples found!")
+        logger.info("No valid tuples found!")
         return
 
     sample_size = min(n_samples, len(valid_tuples))
@@ -489,7 +489,7 @@ def create_random_qq_plots(n_samples: int = 100):
     qq_plots_dir = Config.plots_dir / "qq_plots"
     os.makedirs(qq_plots_dir, exist_ok=True)
 
-    print(f"Creating Q-Q plots for {sample_size} randomly selected tuples...")
+    logger.info(f"Creating Q-Q plots for {sample_size} randomly selected tuples...")
 
     # Store Q-Q plot data for reuse in combined plots
     qq_data = []
@@ -557,11 +557,11 @@ def create_random_qq_plots(n_samples: int = 100):
 
         plt.close(fig)
 
-        print(f"Saved Q-Q plot {i + 1}/{sample_size}: {filename}")
-        print(f"  - Table: {table_name}")
-        print(f"  - Token: '{token}' ({len(logprobs)} occurrences)")
-        print(f"  - R² = {r_squared:.3f}")
-        print(f"  - Prompt start: {repr(prompt[:50])}")
+        logger.info(f"Saved Q-Q plot {i + 1}/{sample_size}: {filename}")
+        logger.info(f"  - Table: {table_name}")
+        logger.info(f"  - Token: '{token}' ({len(logprobs)} occurrences)")
+        logger.info(f"  - R² = {r_squared:.3f}")
+        logger.info(f"  - Prompt start: {repr(prompt[:50])}")
 
     # Create combined plots with 10x10 subplots (100 per page)
     plots_per_page = 100
@@ -653,10 +653,10 @@ def create_random_qq_plots(n_samples: int = 100):
             qq_plots_dir / f"combined_qq_plots_page_{page + 1}_seed_{Config.seed}.html"
         )
         combined_fig.write_html(combined_fig_path)
-        print(f"Saved combined Q-Q plot page {page + 1}/{num_pages} to {combined_fig_path}")
+        logger.info(f"Saved combined Q-Q plot page {page + 1}/{num_pages} to {combined_fig_path}")
 
-    print(f"\nAll individual Q-Q plots saved to {qq_plots_dir}")
-    print(f"Combined Q-Q plots saved as {num_pages} pages to {qq_plots_dir}")
+    logger.info(f"\nAll individual Q-Q plots saved to {qq_plots_dir}")
+    logger.info(f"Combined Q-Q plots saved as {num_pages} pages to {qq_plots_dir}")
 
 
 if __name__ == "__main__":
