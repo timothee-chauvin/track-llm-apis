@@ -295,7 +295,7 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
 
     n_plots = sum(len(set(row[1] for row in rows)) for rows in data.values())
 
-    index = 0
+    pbar = tqdm(total=n_plots)
     for table_name in data.keys():
         rows = data[table_name]
 
@@ -391,9 +391,10 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             fig_path = prompt_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
             fig.write_html(fig_path)
             logger.info(
-                f"[{index + 1}/{n_plots}] Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(prompt[:40])}) to {fig_path}"
+                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(prompt[:40])}) to {fig_path}"
             )
-            index += 1
+            pbar.update(1)
+    pbar.close()
 
 
 def test_normality_shapiro():

@@ -7,17 +7,21 @@ requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.11.18",
     "fire>=0.7.0",
+    "matplotlib>=3.10.3",
     "numpy>=2.2.6",
     "openai>=1.78.1",
     "plotly>=6.1.0",
     "python-dotenv>=1.1.0",
     "requests>=2.32.3",
-    "scipy>=1.16.0",
+    "scipy<=1.15.3", # due to a bug https://github.com/statsmodels/statsmodels/issues/9584
+    "statsmodels>=0.14.4",
+    "tqdm>=4.67.1",
 ]
 
 [dependency-groups]
 dev = [
     "pre-commit>=4.2.0",
+    "pytest>=8.4.1",
     "ruff>=0.11.9",
 ]
 
