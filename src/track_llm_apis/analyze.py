@@ -156,6 +156,8 @@ def equivalence_classes(after: datetime | None = None):
 
 
 def get_top_token_logprobs(data, table_name, all_top_tokens: bool = False):
+    # TODO this mixes the data from all tokens! Doesn't make any sense! Even the implementation is dumb
+    # TODO and this also mixes the data from all prompts
     rows = data[table_name]
     if all_top_tokens:
         top_tokens = set(row[2][0] for row in rows)
@@ -173,6 +175,7 @@ def get_top_token_logprobs(data, table_name, all_top_tokens: bool = False):
 
 
 def top_logprob_variability(after: datetime | None = None):
+    # TODO wrong (see get_top_token_logprobs)
     data = get_db_data(after=after)
     for table_name in data.keys():
         top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
@@ -191,6 +194,7 @@ def top_logprob_variability(after: datetime | None = None):
 
 
 def plot_prob_std(after: datetime | None = None):
+    # TODO wrong (see get_top_token_logprobs)
     data = get_db_data(after=after)
     os.makedirs(Config.plots_dir, exist_ok=True)
 
@@ -291,6 +295,7 @@ def boostrap_std_ci(data: list[float], n_samples: int = 1000) -> tuple[float, fl
 
 
 def plot_prob_histograms(after: datetime | None = None):
+    # TODO wrong (see get_top_token_logprobs)
     data = get_db_data(after=after)
     histograms_dir = Config.plots_dir / "histograms"
     os.makedirs(histograms_dir, exist_ok=True)
