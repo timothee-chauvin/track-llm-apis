@@ -7,6 +7,7 @@ import random
 import sqlite3
 import statistics
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -48,9 +49,27 @@ model_types = {
 }
 
 
+@dataclass
+class ResponseData:
+    """Data for a single response from an LLM API."""
+
+    date: datetime
+    prompt: str
+    top_tokens: list[str]
+    logprobs: list[float]
+
+
+@dataclass
+class TokenLogprobs:
+    """Logprobs for a single token and prompt. All dates are included. If the token isn't in the top_tokens for a given date, the logprob is None."""
+
+    dates: list[datetime]
+    logprobs: list[float | None]
+
+
 def get_db_data(
     tables: list[str] | None = None, after: datetime | None = None
-) -> dict[str, list[tuple[str, str, list, list]]]:
+) -> dict[str, list[ResponseData]]:
     logger.info("Getting db data...")
     conn = sqlite3.connect(Config.db_path)
     cursor = conn.cursor()
@@ -77,11 +96,11 @@ def get_db_data(
             results[table_name] = []
             for date, prompt, top_tokens, logprobs in rows:
                 results[table_name].append(
-                    (
-                        date,
-                        base64.b64decode(prompt).decode("utf-8"),
-                        list(json.loads(top_tokens)),
-                        list(json.loads(logprobs)),
+                    ResponseData(
+                        date=datetime.fromisoformat(date),
+                        prompt=base64.b64decode(prompt).decode("utf-8"),
+                        top_tokens=list(json.loads(top_tokens)),
+                        logprobs=list(json.loads(logprobs)),
                     )
                 )
         return results
@@ -90,6 +109,24 @@ def get_db_data(
         raise e
     finally:
         conn.close()
+
+
+def get_token_logprobs(endpoint_data: list[ResponseData], prompt: str) -> dict[str, TokenLogprobs]:
+    """
+    Return a dict of all tokens found in `endpoint_data`, with the corresponding TokenLogprobs.
+    """
+    endpoint_data = [row for row in endpoint_data if row.prompt == prompt]
+    all_tokens = set(token for row in endpoint_data for token in row.top_tokens)
+    token_logprob_dict = {token: TokenLogprobs(dates=[], logprobs=[]) for token in all_tokens}
+    for row in endpoint_data:
+        for token, logprob in zip(row.top_tokens, row.logprobs):
+            token_logprob_dict[token].dates.append(row.date)
+            token_logprob_dict[token].logprobs.append(logprob)
+        tokens_absent_this_time = set(all_tokens) - set(row.top_tokens)
+        for token in tokens_absent_this_time:
+            token_logprob_dict[token].dates.append(row.date)
+            token_logprob_dict[token].logprobs.append(None)
+    return token_logprob_dict
 
 
 def equivalence_classes(after: datetime | None = None):
@@ -298,7 +335,7 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
     time_series_dir = Config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
 
-    n_plots = sum(len(set(row[1] for row in rows)) for rows in data.values())
+    n_plots = sum(len(set(row.prompt for row in rows)) for rows in data.values())
 
     pbar = tqdm(total=n_plots)
     for table_name in data.keys():
@@ -306,8 +343,8 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
 
         # Group rows by prompt
         prompt_groups = defaultdict(list)
-        for date_str, prompt, top_tokens, logprobs in rows:
-            prompt_groups[prompt].append((date_str, top_tokens, logprobs))
+        for row in rows:
+            prompt_groups[row.prompt].append(row)
 
         # Create a plot for each prompt
         for prompt, prompt_rows in prompt_groups.items():
@@ -319,57 +356,17 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             prompt_dir = time_series_dir / f"{prompt_base64}_{prompt_hash}"
             os.makedirs(prompt_dir, exist_ok=True)
 
-            # Collect all unique top tokens across all rows for this prompt
-            all_top_tokens = set()
-            all_dates = []
-
-            # Parse all dates and collect all logprobs to find minimum
-            parsed_rows = []
-            for date_str, top_tokens, logprobs in prompt_rows:
-                try:
-                    date = datetime.fromisoformat(date_str)
-                    parsed_rows.append((date, top_tokens, logprobs))
-                    all_dates.append(date)
-                    all_top_tokens.update(top_tokens)
-                except ValueError:
-                    # Skip rows with invalid dates
-                    continue
-
-            # Sort dates for consistent time series
-            all_dates = sorted(set(all_dates))
-
-            # Create complete time series data for each token
-            token_data = {}
-            for token in all_top_tokens:
-                token_data[token] = {"dates": [], "logprobs": []}
-
-                for date in all_dates:
-                    token_data[token]["dates"].append(date)
-
-                    # Find if this token exists in top_tokens for this date
-                    token_logprob = None  # Default to None for missing values
-
-                    for row_date, row_top_tokens, row_logprobs in parsed_rows:
-                        if row_date == date:
-                            try:
-                                token_index = row_top_tokens.index(token)
-                                token_logprob = row_logprobs[token_index]
-                            except ValueError:
-                                # Token not in top tokens for this date, use missing value
-                                pass
-                            break
-
-                    token_data[token]["logprobs"].append(token_logprob)
+            all_token_logprobs = get_token_logprobs(prompt_rows, prompt)
 
             # Create the plot
             fig = go.Figure()
 
             # Add a line for each top token
-            for token, data_dict in token_data.items():
+            for token, token_logprobs in all_token_logprobs.items():
                 fig.add_trace(
                     go.Scatter(
-                        x=data_dict["dates"],
-                        y=data_dict["logprobs"],
+                        x=token_logprobs.dates,
+                        y=token_logprobs.logprobs,
                         mode="lines+markers",
                         name=f'"{token}"',
                         line=dict(width=2),
