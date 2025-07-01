@@ -19,7 +19,7 @@ import plotly.tools as tls
 import statsmodels.api as sm
 from plotly.subplots import make_subplots
 from scipy import stats
-from scipy.stats import linregress, shapiro
+from scipy.stats import linregress, norm, shapiro
 from tqdm import tqdm
 
 from track_llm_apis.config import Config
@@ -707,7 +707,249 @@ def create_random_qq_plots(n_samples: int = 100):
     logger.info(f"Combined Q-Q plots saved as {num_pages} pages to {qq_plots_dir}")
 
 
+class ProbCUSUM_Detector:
+    # from https://github.com/giobbu/CUSUM
+    """
+    A class to detect change points in sequential data using the Probabilistic Cumulative Sum (CUSUM) algorithm.
+
+    Example:
+    ```
+    detector = ProbCUMSUM_Detector(warmup_period=10, threshold_probability=0.001)
+    data = [10.2, 11.5, 12.6, 12.8, 12.9, 13.2, 12.7, 12.5, 12.3, 12.9, 25.0, 12.2, 11.8, 10.5, 10.1]
+    probabilities, change_points = detector.detect_change_points(data)
+    detector.plot_change_points(data, change_points, probabilities)
+    ```
+    """
+
+    def __init__(self, warmup_period=10, threshold_probability=0.001):
+        """
+        Initializes the Probabilistic CUSUM Detector with the specified parameters.
+
+        Parameters:
+        - warmup_period (int): The number of initial observations before starting to detect change points. Default is 10.
+        - threshold_probability (float): The threshold probability below which a change point is detected. Default is 0.001.
+        """
+
+        if not isinstance(warmup_period, int) or warmup_period < 10:
+            raise ValueError("warmup_period must be equal or greater than 10.")
+        if (
+            not isinstance(threshold_probability, float)
+            or threshold_probability <= 0
+            or threshold_probability >= 1
+        ):
+            raise ValueError("threshold_probability must be a float between 0 and 1.")
+
+        self.warmup_period = warmup_period
+        self.threshold_probability = threshold_probability
+        self.running_sum = 0  # Initialize running sum of standardized observations
+        self._reset()
+
+    def predict_next(self, observation):
+        """
+        Predicts the probability of a change point in the next observation.
+
+        Parameters:
+        - observation (float): The next observation in the sequence.
+
+        Returns:
+        - probability (float): The probability of a change point in the next observation.
+        - is_changepoint (bool): True if a change point is detected, False otherwise.
+        """
+        self._update_data(observation)
+        if self.current_t == self.warmup_period:
+            self._init_params()
+        if self.current_t > self.warmup_period:
+            probability, is_changepoint = self._detect_changepoint()
+            if is_changepoint:
+                self._reset()
+            return (1 - probability), is_changepoint
+        else:
+            return 0, False
+
+    def _reset(self) -> None:
+        """
+        Resets the internal state of the detector.
+        """
+        self.current_t = 0
+        self.observations = []
+        self.mean_observation = None
+        self.std_dev_observation = None
+        self.running_sum = 0  # Reset running sum
+
+    def _update_data(self, observation) -> None:
+        """
+        Updates the internal state with a new observation.
+
+        Parameters:
+        - observation (float): The new observation to be added.
+        """
+        self.current_t += 1
+        self.observations.append(observation)
+
+    def _init_params(self) -> None:
+        """
+        Initializes the mean and standard deviation of observations.
+        """
+
+        if len(self.observations) < 2:
+            raise ValueError("At least two observations are needed to initialize parameters.")
+
+        self.mean_observation = np.nanmean(np.array(self.observations))
+        self.std_dev_observation = np.nanstd(np.array(self.observations))
+
+    def _detect_changepoint(self):
+        """
+        Detects a change point using the CUSUM algorithm.
+
+        Returns:
+        - probability (float): The probability of a change point.
+        - is_changepoint (bool): True if a change point is detected, False otherwise.
+        """
+        self.running_sum += self.observations[-1] - self.mean_observation  # Update running sum
+        standardized_sum = self.running_sum / (self.std_dev_observation * self.current_t**0.5)
+        probability = float(self._calculate_probability(standardized_sum))
+        return probability, probability < self.threshold_probability
+
+    def _calculate_probability(self, standardized_sum) -> bool:
+        """
+        Calculates the probability (p-value) of a change point.
+
+        Parameters:
+        - standardized_sum (float): The standardized sum of observations.
+
+        Returns:
+        - probability (float): The probability of a change point.
+        * low probability indicates a change point (reject the null hypothesis).
+        * high probability indicates no change point (not able to reject the null hypothesis).
+        """
+        p_obs = norm.cdf(np.abs(standardized_sum))
+        probability = 2 * (1 - p_obs)
+        return probability
+
+    def detect_change_points(self, data):
+        """
+        Detects change points in the given data using the CUSUM detector.
+
+        Parameters:
+        - data: numpy array
+            Data points to be analyzed.
+
+        Returns:
+        - probabilities: numpy array
+            Probability values for each data point.
+        - change_points: numpy array
+            Detected change points indices.
+        """
+
+        if not isinstance(data, np.ndarray):
+            raise ValueError("data must be a numpy array.")
+        if len(data) < self.warmup_period:
+            raise ValueError("Data length must be greater than or equal to warmup_period.")
+
+        results = [
+            self.predict_next(point) if not math.isnan(point) else (0, False) for point in data
+        ]
+        probabilities = np.array([result[0] for result in results])
+        is_drift = np.array([result[1] for result in results])
+        change_points = np.where(is_drift)[0]
+
+        return probabilities, change_points
+
+    def plot_change_points(self, data, change_points, probabilities, title: str | None = None):
+        """
+        Plots data with detected change points and probabilities.
+
+        Parameters:
+        - data: numpy array
+            Original data points.
+        - change_points: list
+            List of detected change points.
+        - probabilities: list
+            List of probabilities associated with each data point.
+        """
+        plt.figure(figsize=(20, 8))
+        # Plot the data
+        plt.subplot(2, 1, 1)
+        plt.plot(data, color="blue", label="Data", linestyle="--")
+        X, Y = np.meshgrid(np.arange(len(data)), np.linspace(0, max(data)))
+        Z = probabilities[X]
+        plt.contourf(X, Y, Z, alpha=0.1, cmap="Greys")
+        if len(change_points) != 0:
+            for cp in change_points:
+                plt.axvline(
+                    cp,
+                    color="red",
+                    linestyle="dashed",
+                    lw=2,
+                    label="Change Points" if cp == change_points[0] else None,
+                )
+        plt.xlabel("Time")
+        plt.ylabel("Value")
+        plt.title(title or "Sequential Probabilistic CUSUM Change Point Detection")
+        plt.legend()
+        plt.grid(True)
+        # Plot the probabilities
+        plt.subplot(2, 1, 2)
+        plt.axhline(
+            (1 - self.threshold_probability), color="red", alpha=0.5, linestyle="dashed", lw=2
+        )
+        plt.plot(probabilities, color="gray", alpha=0.5, label="Alert Probability")
+        if len(change_points) != 0:
+            for cp in change_points:
+                plt.axvline(
+                    cp,
+                    color="red",
+                    alpha=0.5,
+                    linestyle="dashed",
+                    lw=2,
+                    label="Change Points" if cp == change_points[0] else None,
+                )
+        plt.xlabel("Time")
+        plt.ylabel("Alert Probability")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(
+            Config.plots_dir / f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_change_points.png"
+        )
+        plt.close()
+
+
+def run_cusum(warmup_period: int, threshold_probability: float):
+    data = get_db_data()
+    count_no_change = 0
+    count_change = 0
+    for table_name, endpoint_data in tqdm(data.items()):
+        prompts = set([response.prompt for response in endpoint_data])
+        for prompt in list(prompts)[:1]:
+            logprobs_by_token = get_token_logprobs(endpoint_data, prompt, missing_policy="min")
+            for token, logprobs in list(logprobs_by_token.items())[:1]:
+                if len(logprobs.logprobs) < warmup_period:
+                    continue
+                data = np.array(logprobs.logprobs)
+                detector = ProbCUSUM_Detector(
+                    warmup_period=warmup_period, threshold_probability=threshold_probability
+                )
+                probs, change_points = detector.detect_change_points(data)
+                if change_points.size > 0:
+                    print(
+                        f"Endpoint: {table_name} Token: {repr(token)} Prompt: {repr(prompt)} Change points: {change_points}"
+                    )
+                    count_change += 1
+                    detector.plot_change_points(
+                        data,
+                        change_points,
+                        probs,
+                        title=f"{table_name} prompt={repr(prompt)} token={repr(token)}",
+                    )
+                else:
+                    count_no_change += 1
+        print(f"Count no change: {count_no_change}")
+        print(f"Count change: {count_change}")
+
+
 if __name__ == "__main__":
+    random.seed(1)
     # equivalence_classes()
     # top_logprob_variability()
     # plot_prob_histograms()
@@ -715,4 +957,5 @@ if __name__ == "__main__":
     # plot_prob_std(after=datetime(2025, 5, 29, 16, 59))
     # plot_top_token_logprobs_over_time()
     # test_normality_shapiro()
-    create_random_qq_plots()
+    # create_random_qq_plots()
+    run_cusum(warmup_period=100, threshold_probability=1e-5)
