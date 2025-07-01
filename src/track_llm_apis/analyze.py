@@ -413,8 +413,12 @@ def plot_top_token_logprobs_over_time(
             # Create the plot
             fig = go.Figure()
 
+            # Get a fixed, sorted order of tokens
+            sorted_tokens = sorted(all_token_logprobs.keys())
+
             # Add a line for each top token
-            for token, token_logprobs in all_token_logprobs.items():
+            for token in sorted_tokens:
+                token_logprobs = all_token_logprobs[token]
                 fig.add_trace(
                     go.Scatter(
                         x=token_logprobs.dates,
@@ -427,17 +431,20 @@ def plot_top_token_logprobs_over_time(
                 )
 
             if with_cusum:
+                colorway = fig.layout.template.layout.colorway
                 detector = ProbCUSUM_Detector(warmup_period=100, threshold_probability=1e-5)
-                for token, token_logprobs in all_token_logprobs.items():
+                for i, token in enumerate(sorted_tokens):
+                    token_logprobs = all_token_logprobs[token]
                     try:
                         _, change_points = detector.detect_change_points(token_logprobs)
                         if change_points:
+                            token_color = colorway[i % len(colorway)]
                             for cp_date in change_points:
                                 fig.add_vline(
                                     x=cp_date,
                                     line_width=1,
                                     line_dash="dash",
-                                    line_color="red",
+                                    line_color=token_color,
                                 )
                                 fig.add_annotation(
                                     x=cp_date,
@@ -448,7 +455,7 @@ def plot_top_token_logprobs_over_time(
                                     xanchor="left",
                                     yanchor="top",
                                     textangle=-90,
-                                    font=dict(size=10),
+                                    font=dict(size=10, color=token_color),
                                 )
                     except ValueError as e:
                         logger.debug(
