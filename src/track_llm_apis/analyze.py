@@ -364,14 +364,21 @@ def plot_prob_histograms(after: datetime | None = None):
         print(f"Saved histogram for {table_name} to {fig_path}")
 
 
-def plot_top_token_logprobs_over_time(after: datetime | None = None, prompt: str | None = None):
+def plot_top_token_logprobs_over_time(
+    after: datetime | None = None,
+    prompt: str | None = None,
+    with_cusum: bool = False,
+    tables: list[str] | None = None,
+):
     """Plot logprobs of top tokens over time for each prompt in each table.
 
     Args:
         after: Only plot data after this date.
         prompt: Only plot data for this prompt.
+        with_cusum: If True, plot the CUSUM change points (if any) detected for each token.
+        tables: Only plot data for these tables.
     """
-    data = get_db_data(after=after)
+    data = get_db_data(after=after, tables=tables)
     time_series_dir = Config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
 
@@ -418,6 +425,36 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None, prompt: str
                         marker=dict(size=4),
                     )
                 )
+
+            if with_cusum:
+                detector = ProbCUSUM_Detector(warmup_period=100, threshold_probability=1e-5)
+                for token, token_logprobs in all_token_logprobs.items():
+                    try:
+                        _, change_points = detector.detect_change_points(token_logprobs)
+                        if change_points:
+                            for cp_date in change_points:
+                                fig.add_vline(
+                                    x=cp_date,
+                                    line_width=1,
+                                    line_dash="dash",
+                                    line_color="red",
+                                )
+                                fig.add_annotation(
+                                    x=cp_date,
+                                    y=0.98,
+                                    yref="paper",
+                                    text=f'"{token}"',
+                                    showarrow=False,
+                                    xanchor="left",
+                                    yanchor="top",
+                                    textangle=-90,
+                                    font=dict(size=10),
+                                )
+                    except ValueError as e:
+                        logger.debug(
+                            f"CUSUM not run for token '{token}' in plot for {table_name} "
+                            f"(prompt hash: {prompt_hash}): {e}"
+                        )
 
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
