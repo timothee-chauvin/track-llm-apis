@@ -399,16 +399,16 @@ def plot_top_token_logprobs_over_time(
                 logger.info(f"Prompt {prompt} not found in {table_name}")
                 continue
             prompt_groups = {prompt: prompt_groups[prompt]}
-        for prompt, prompt_rows in prompt_groups.items():
+        for p, prompt_rows in prompt_groups.items():
             # Create subdirectory based on first 16 characters of base64 of prompt, followed by 8 characters of MD5 hash of prompt
             prompt_base64 = (
-                base64.b64encode(prompt.encode("utf-8")).decode("utf-8").replace("/", "-")[:16]
+                base64.b64encode(p.encode("utf-8")).decode("utf-8").replace("/", "-")[:16]
             )
-            prompt_hash = hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8]
+            prompt_hash = hashlib.md5(p.encode("utf-8")).hexdigest()[:8]
             prompt_dir = time_series_dir / f"{prompt_base64}_{prompt_hash}"
             os.makedirs(prompt_dir, exist_ok=True)
 
-            all_token_logprobs = get_token_logprobs(prompt_rows, prompt, missing_policy="none")
+            all_token_logprobs = get_token_logprobs(prompt_rows, p, missing_policy="none")
 
             # Create the plot
             fig = go.Figure()
@@ -466,7 +466,7 @@ def plot_top_token_logprobs_over_time(
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
             # Truncate prompt for title if it's too long
-            prompt_preview = repr(trim_to_length(prompt, 50))
+            prompt_preview = repr(trim_to_length(p, 50))
             fig.update_layout(
                 title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}<br>Prompt: {prompt_preview}",
                 xaxis_title="Time",
@@ -479,10 +479,12 @@ def plot_top_token_logprobs_over_time(
             # Save the plot
             stub = table_name.replace("/", "_").replace("#", "_")
             filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
-            fig_path = prompt_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
+            fig_dir = prompt_dir if not with_cusum else prompt_dir / "cusum"
+            os.makedirs(fig_dir, exist_ok=True)
+            fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
             fig.write_html(fig_path)
             logger.info(
-                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(prompt[:40])}) to {fig_path}"
+                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(p[:40])}) to {fig_path}"
             )
             pbar.update(1)
     pbar.close()
