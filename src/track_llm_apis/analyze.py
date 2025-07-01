@@ -364,8 +364,13 @@ def plot_prob_histograms(after: datetime | None = None):
         print(f"Saved histogram for {table_name} to {fig_path}")
 
 
-def plot_top_token_logprobs_over_time(after: datetime | None = None):
-    """Plot logprobs of top tokens over time for each prompt in each table."""
+def plot_top_token_logprobs_over_time(after: datetime | None = None, prompt: str | None = None):
+    """Plot logprobs of top tokens over time for each prompt in each table.
+
+    Args:
+        after: Only plot data after this date.
+        prompt: Only plot data for this prompt.
+    """
     data = get_db_data(after=after)
     time_series_dir = Config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
@@ -382,6 +387,11 @@ def plot_top_token_logprobs_over_time(after: datetime | None = None):
             prompt_groups[row.prompt].append(row)
 
         # Create a plot for each prompt
+        if prompt:
+            if prompt not in prompt_groups:
+                logger.info(f"Prompt {prompt} not found in {table_name}")
+                continue
+            prompt_groups = {prompt: prompt_groups[prompt]}
         for prompt, prompt_rows in prompt_groups.items():
             # Create subdirectory based on first 16 characters of base64 of prompt, followed by 8 characters of MD5 hash of prompt
             prompt_base64 = (
