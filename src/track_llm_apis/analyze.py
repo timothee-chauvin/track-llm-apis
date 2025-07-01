@@ -91,29 +91,41 @@ def get_db_data(
             table_names = [name for name in raw_table_names if not name.startswith("sqlite_")]
         else:
             table_names = tables
-        results = {}
 
-        for table_name in tqdm(table_names):
-            if after is not None:
-                cursor.execute(
-                    f'SELECT date, prompt, top_tokens, logprobs FROM "{table_name}" WHERE date > ?',
-                    (after.isoformat(),),
-                )
-            else:
-                cursor.execute(f'SELECT date, prompt, top_tokens, logprobs FROM "{table_name}"')
+        if not table_names:
+            return {}
 
-            rows = cursor.fetchall()
-            results[table_name] = []
-            for date, prompt, top_tokens, logprobs in rows:
-                results[table_name].append(
-                    ResponseData(
-                        date=datetime.fromisoformat(date),
-                        prompt=base64.b64decode(prompt).decode("utf-8"),
-                        top_tokens=list(json.loads(top_tokens)),
-                        logprobs=list(json.loads(logprobs)),
-                    )
+        select_parts = []
+        for table_name in table_names:
+            # Escape single quotes in table name for the string literal.
+            escaped_table_name = table_name.replace("'", "''")
+            select_part = f"SELECT '{escaped_table_name}' as table_name, date, prompt, top_tokens, logprobs FROM \"{table_name}\""
+            if after:
+                select_part += " WHERE date > ?"
+            select_parts.append(select_part)
+
+        query = " UNION ALL ".join(select_parts)
+
+        params = []
+        if after:
+            params = [after.isoformat()] * len(table_names)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        results = defaultdict(list)
+        for table_name_from_db, date, prompt, top_tokens, logprobs in tqdm(
+            rows, desc="Processing DB data"
+        ):
+            results[table_name_from_db].append(
+                ResponseData(
+                    date=datetime.fromisoformat(date),
+                    prompt=base64.b64decode(prompt).decode("utf-8"),
+                    top_tokens=list(json.loads(top_tokens)),
+                    logprobs=list(json.loads(logprobs)),
                 )
-        return results
+            )
+        return dict(results)
     except sqlite3.Error as e:
         Config.logger.error(f"An error occurred during database analysis: {e}")
         raise e
