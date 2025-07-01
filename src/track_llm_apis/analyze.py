@@ -71,6 +71,15 @@ class TokenLogprobs:
 def get_db_data(
     tables: list[str] | None = None, after: datetime | None = None
 ) -> dict[str, list[ResponseData]]:
+    """Get data from the database.
+
+    Args:
+        tables: List of table names to get data from. If None, all tables are returned.
+        after: Only return data after this date.
+
+    Returns:
+        A dict of table names to lists of ResponseData.
+    """
     logger.info("Getting db data...")
     conn = sqlite3.connect(Config.db_path)
     cursor = conn.cursor()
