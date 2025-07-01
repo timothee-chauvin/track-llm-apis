@@ -708,7 +708,7 @@ def create_random_qq_plots(n_samples: int = 100):
 
 
 class ProbCUSUM_Detector:
-    # from https://github.com/giobbu/CUSUM
+    # adapted from https://github.com/giobbu/CUSUM
     """
     A class to detect change points in sequential data using the Probabilistic Cumulative Sum (CUSUM) algorithm.
 
@@ -826,54 +826,66 @@ class ProbCUSUM_Detector:
         probability = 2 * (1 - p_obs)
         return probability
 
-    def detect_change_points(self, data):
+    def detect_change_points(self, token_logprobs: TokenLogprobs):
         """
         Detects change points in the given data using the CUSUM detector.
 
         Parameters:
-        - data: numpy array
-            Data points to be analyzed.
+        - token_logprobs: TokenLogprobs
+            TokenLogprobs object containing logprobs and dates to be analyzed.
 
         Returns:
         - probabilities: numpy array
             Probability values for each data point.
-        - change_points: numpy array
-            Detected change points indices.
+        - change_points: list[datetime]
+            Detected change points dates.
         """
+        data = np.array(
+            [p if p is not None else float("nan") for p in token_logprobs.logprobs], dtype=float
+        )
+        dates = token_logprobs.dates
 
-        if not isinstance(data, np.ndarray):
-            raise ValueError("data must be a numpy array.")
         if len(data) < self.warmup_period:
             raise ValueError("Data length must be greater than or equal to warmup_period.")
 
+        self._reset()
         results = [
             self.predict_next(point) if not math.isnan(point) else (0, False) for point in data
         ]
         probabilities = np.array([result[0] for result in results])
         is_drift = np.array([result[1] for result in results])
-        change_points = np.where(is_drift)[0]
+        change_point_indices = np.where(is_drift)[0]
 
-        return probabilities, change_points
+        change_point_dates = [dates[i] for i in change_point_indices]
 
-    def plot_change_points(self, data, change_points, probabilities, title: str | None = None):
+        return probabilities, change_point_dates
+
+    def plot_change_points(
+        self,
+        token_logprobs: TokenLogprobs,
+        change_points: list[datetime],
+        probabilities: np.ndarray,
+        title: str | None = None,
+    ):
         """
         Plots data with detected change points and probabilities.
 
         Parameters:
-        - data: numpy array
-            Original data points.
+        - token_logprobs: TokenLogprobs
+            TokenLogprobs object containing dates and logprobs.
         - change_points: list
-            List of detected change points.
-        - probabilities: list
+            List of detected change points (datetimes).
+        - probabilities: np.ndarray
             List of probabilities associated with each data point.
         """
+        data = np.array([p if p is not None else np.nan for p in token_logprobs.logprobs])
+        dates = token_logprobs.dates
+
         plt.figure(figsize=(20, 8))
         # Plot the data
         plt.subplot(2, 1, 1)
-        plt.plot(data, color="blue", label="Data", linestyle="--")
-        X, Y = np.meshgrid(np.arange(len(data)), np.linspace(0, max(data)))
-        Z = probabilities[X]
-        plt.contourf(X, Y, Z, alpha=0.1, cmap="Greys")
+        plt.plot(dates, data, color="blue", label="Data", linestyle="--")
+
         if len(change_points) != 0:
             for cp in change_points:
                 plt.axvline(
@@ -893,7 +905,7 @@ class ProbCUSUM_Detector:
         plt.axhline(
             (1 - self.threshold_probability), color="red", alpha=0.5, linestyle="dashed", lw=2
         )
-        plt.plot(probabilities, color="gray", alpha=0.5, label="Alert Probability")
+        plt.plot(dates, probabilities, color="gray", alpha=0.5, label="Alert Probability")
         if len(change_points) != 0:
             for cp in change_points:
                 plt.axvline(
@@ -923,21 +935,20 @@ def run_cusum(warmup_period: int, threshold_probability: float):
         prompts = set([response.prompt for response in endpoint_data])
         for prompt in list(prompts)[:1]:
             logprobs_by_token = get_token_logprobs(endpoint_data, prompt, missing_policy="min")
-            for token, logprobs in list(logprobs_by_token.items())[:1]:
-                if len(logprobs.logprobs) < warmup_period:
+            for token, token_logprobs in list(logprobs_by_token.items())[:1]:
+                if len(token_logprobs.logprobs) < warmup_period:
                     continue
-                data = np.array(logprobs.logprobs)
                 detector = ProbCUSUM_Detector(
                     warmup_period=warmup_period, threshold_probability=threshold_probability
                 )
-                probs, change_points = detector.detect_change_points(data)
-                if change_points.size > 0:
+                probs, change_points = detector.detect_change_points(token_logprobs)
+                if change_points:
                     print(
                         f"Endpoint: {table_name} Token: {repr(token)} Prompt: {repr(prompt)} Change points: {change_points}"
                     )
                     count_change += 1
                     detector.plot_change_points(
-                        data,
+                        token_logprobs,
                         change_points,
                         probs,
                         title=f"{table_name} prompt={repr(prompt)} token={repr(token)}",
