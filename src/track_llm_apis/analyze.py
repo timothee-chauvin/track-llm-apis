@@ -436,6 +436,7 @@ def plot_top_token_logprobs_over_time(
                 detector = ProbCUSUM_Detector(
                     warmup_period=analysis_config.cusum_warmup_period,
                     threshold_probability=analysis_config.cusum_threshold_probability,
+                    ema_factor=analysis_config.ema_factor,
                 )
                 for i, token in enumerate(sorted_tokens):
                     token_logprobs = all_token_logprobs[token]
@@ -777,13 +778,14 @@ class ProbCUSUM_Detector:
     ```
     """
 
-    def __init__(self, warmup_period=10, threshold_probability=0.001):
+    def __init__(self, warmup_period=10, threshold_probability=0.001, ema_factor=1):
         """
         Initializes the Probabilistic CUSUM Detector with the specified parameters.
 
         Parameters:
         - warmup_period (int): The number of initial observations before starting to detect change points. Default is 10.
         - threshold_probability (float): The threshold probability below which a change point is detected. Default is 0.001.
+        - ema_factor (float): The exponential moving average factor for the running sum. Default is 1.
         """
 
         if not isinstance(warmup_period, int) or warmup_period < 10:
@@ -797,6 +799,7 @@ class ProbCUSUM_Detector:
 
         self.warmup_period = warmup_period
         self.threshold_probability = threshold_probability
+        self.ema_factor = ema_factor
         self.running_sum = 0  # Initialize running sum of standardized observations
         self._reset()
 
@@ -861,7 +864,7 @@ class ProbCUSUM_Detector:
         - probability (float): The probability of a change point.
         - is_changepoint (bool): True if a change point is detected, False otherwise.
         """
-        self.running_sum *= analysis_config.ema_factor
+        self.running_sum *= self.ema_factor
         self.running_sum += self.observations[-1] - self.mean_observation
 
         standardized_sum = self.running_sum / (self.std_dev_observation * self.current_t**0.5)
