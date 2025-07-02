@@ -144,6 +144,61 @@ async def main():
     for endpoint, error in failed_endpoints:
         print(f"❌ {endpoint.name} ({endpoint.provider}): {error}")
 
+    # Analysis by provider
+    provider_stats = {}
+    for endpoint, success, _ in test_results:
+        provider = endpoint.provider
+        if provider not in provider_stats:
+            provider_stats[provider] = {"successful": 0, "failed": 0}
+        if success:
+            provider_stats[provider]["successful"] += 1
+        else:
+            provider_stats[provider]["failed"] += 1
+
+    always_logprobs = []
+    sometimes_logprobs = []
+    never_logprobs = []
+
+    for provider, stats in sorted(provider_stats.items()):
+        successful_count = stats["successful"]
+        failed_count = stats["failed"]
+
+        if failed_count == 0 and successful_count > 0:
+            always_logprobs.append((provider, successful_count))
+        elif successful_count > 0 and failed_count > 0:
+            sometimes_logprobs.append((provider, successful_count, failed_count))
+        elif successful_count == 0 and failed_count > 0:
+            never_logprobs.append((provider, failed_count))
+
+    print("\n" + "#" * 100)
+    print("PROVIDER SUMMARY")
+    print("#" * 100)
+
+    print(f"\nProviders always returning logprobs: {len(always_logprobs)}")
+    n_endpoints_always = 0
+    for provider, total in sorted(always_logprobs):
+        n_endpoints_always += total
+        print(f"  - {provider} ({total} endpoints)")
+    print(f"Total endpoints: {n_endpoints_always}")
+
+    n_endpoints_with = 0
+    n_endpoints_without = 0
+    print(f"\nProviders sometimes returning logprobs: {len(sometimes_logprobs)}")
+    for provider, successful, failed in sorted(sometimes_logprobs):
+        n_endpoints_with += successful
+        n_endpoints_without += failed
+        print(
+            f"  - {provider} ({successful} with logprobs, {failed} without, total {successful + failed})"
+        )
+    print(f"Total endpoints: {n_endpoints_with} with, {n_endpoints_without} without")
+
+    print(f"\nProviders never returning logprobs: {len(never_logprobs)}")
+    n_endpoints_never = 0
+    for provider, total in sorted(never_logprobs):
+        n_endpoints_never += total
+        print(f"  - {provider} ({total} endpoints)")
+    print(f"Total endpoints: {n_endpoints_never}")
+
     print("\n" + "#" * 100)
     print("SUMMARY:")
     print(f"✅ Successful: {len(successful_endpoints)}")
