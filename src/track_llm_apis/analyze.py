@@ -488,7 +488,7 @@ def plot_top_token_logprobs_over_time(
                 fig_dir = (
                     fig_dir
                     / "cusum"
-                    / f"{analysis_config.cusum_warmup_period}_{analysis_config.cusum_threshold_probability:.1e}"
+                    / f"{analysis_config.cusum_warmup_period}_{analysis_config.cusum_threshold_probability:.1e}_ema={analysis_config.ema_factor}"
                 )
             os.makedirs(fig_dir, exist_ok=True)
             fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
@@ -861,7 +861,9 @@ class ProbCUSUM_Detector:
         - probability (float): The probability of a change point.
         - is_changepoint (bool): True if a change point is detected, False otherwise.
         """
-        self.running_sum += self.observations[-1] - self.mean_observation  # Update running sum
+        self.running_sum *= analysis_config.ema_factor
+        self.running_sum += self.observations[-1] - self.mean_observation
+
         standardized_sum = self.running_sum / (self.std_dev_observation * self.current_t**0.5)
         probability = float(self._calculate_probability(standardized_sum))
         return probability, probability < self.threshold_probability

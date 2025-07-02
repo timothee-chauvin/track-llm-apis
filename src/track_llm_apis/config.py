@@ -11,7 +11,8 @@ ROOT_DIR = Path(__file__).parent.parent.parent
 
 class AnalysisConfig:
     cusum_warmup_period = 100
-    cusum_threshold_probability = 1e-7
+    cusum_threshold_probability = 1e-5
+    ema_factor = 0.9
 
 
 class Config:
