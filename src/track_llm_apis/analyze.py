@@ -883,8 +883,7 @@ class ProbCUSUM_Detector:
         * low probability indicates a change point (reject the null hypothesis).
         * high probability indicates no change point (not able to reject the null hypothesis).
         """
-        p_obs = norm.cdf(np.abs(standardized_sum))
-        probability = 2 * (1 - p_obs)
+        probability = 2 * norm.sf(np.abs(standardized_sum))
         return probability
 
     def detect_change_points(self, token_logprobs: TokenLogprobs):
