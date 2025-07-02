@@ -26,6 +26,7 @@ from track_llm_apis.config import Config
 from track_llm_apis.util import trim_to_length
 
 logger = Config.logger
+analysis_config = Config.analysis_config
 
 model_types = {
     "gpt-4o-mini": "?",
@@ -432,7 +433,10 @@ def plot_top_token_logprobs_over_time(
 
             if with_cusum:
                 colorway = fig.layout.template.layout.colorway
-                detector = ProbCUSUM_Detector(warmup_period=100, threshold_probability=1e-5)
+                detector = ProbCUSUM_Detector(
+                    warmup_period=analysis_config.cusum_warmup_period,
+                    threshold_probability=analysis_config.cusum_threshold_probability,
+                )
                 for i, token in enumerate(sorted_tokens):
                     token_logprobs = all_token_logprobs[token]
                     try:
@@ -479,7 +483,13 @@ def plot_top_token_logprobs_over_time(
             # Save the plot
             stub = table_name.replace("/", "_").replace("#", "_")
             filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
-            fig_dir = prompt_dir if not with_cusum else prompt_dir / "cusum"
+            fig_dir = prompt_dir
+            if with_cusum:
+                fig_dir = (
+                    fig_dir
+                    / "cusum"
+                    / f"{analysis_config.cusum_warmup_period}_{analysis_config.cusum_threshold_probability:.1e}"
+                )
             os.makedirs(fig_dir, exist_ok=True)
             fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
             fig.write_html(fig_path)

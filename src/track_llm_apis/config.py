@@ -9,6 +9,11 @@ logger = logging.getLogger("track-llm-apis")
 ROOT_DIR = Path(__file__).parent.parent.parent
 
 
+class AnalysisConfig:
+    cusum_warmup_period = 100
+    cusum_threshold_probability = 1e-7
+
+
 class Config:
     logger = logger
     root_dir = ROOT_DIR
@@ -56,3 +61,4 @@ class Config:
     api_seed = 1  # note: the Grok API refuses a seed of 0, says it must be positive
     max_retries = 15
     extended_endpoints_max_cost = 30  # sum of input and output costs per Mtok
+    analysis_config = AnalysisConfig()
