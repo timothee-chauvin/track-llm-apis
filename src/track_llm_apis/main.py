@@ -551,7 +551,7 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
         db_manager = None
 
     # Query all endpoints every delay seconds
-    max_workers = 20
+    max_workers = 60
     try:
         for it in range(num_iterations):
             logger.info(f"Query iteration {it + 1}/{num_iterations}")
