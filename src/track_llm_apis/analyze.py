@@ -63,9 +63,12 @@ class ResponseData:
 
 @dataclass
 class TokenLogprobs:
-    """Logprobs for a single token and prompt. All dates are included. If the token isn't in the top_tokens for a given date, the logprob is None."""
+    """Logprobs for a single token and prompt. All dates are included."""
 
+    # All dates for which we have collected logprobs for this endpoint and prompt
     dates: list[datetime]
+    # Dates where the token is missing from the topk
+    dates_missing: list[datetime]
     logprobs: list[float | None]
 
 
@@ -144,7 +147,9 @@ def get_token_logprobs(
     """
     endpoint_data = [row for row in endpoint_data if row.prompt == prompt]
     all_tokens = set(token for row in endpoint_data for token in row.top_tokens)
-    token_logprob_dict = {token: TokenLogprobs(dates=[], logprobs=[]) for token in all_tokens}
+    token_logprob_dict = {
+        token: TokenLogprobs(dates=[], dates_missing=[], logprobs=[]) for token in all_tokens
+    }
     for row in endpoint_data:
         for token, logprob in zip(row.top_tokens, row.logprobs):
             token_logprob_dict[token].dates.append(row.date)
@@ -152,6 +157,7 @@ def get_token_logprobs(
         tokens_absent_this_time = set(all_tokens) - set(row.top_tokens)
         for token in tokens_absent_this_time:
             token_logprob_dict[token].dates.append(row.date)
+            token_logprob_dict[token].dates_missing.append(row.date)
             match missing_policy:
                 case "min":
                     token_logprob_dict[token].logprobs.append(min(row.logprobs))
@@ -220,24 +226,16 @@ def top_logprob_variability(after: datetime | None = None):
         logger.info(f"# {table_name}")
         prompts = set(row.prompt for row in endpoint_data)
         for prompt in prompts:
-            token_logprobs_policy_min = get_token_logprobs(
-                endpoint_data, prompt, missing_policy="min"
-            )
-            token_logprobs_policy_none = get_token_logprobs(
-                endpoint_data, prompt, missing_policy="none"
-            )
-            # Use the min policy to find the top token
-            top_token = max(token_logprobs_policy_min.items(), key=lambda x: sum(x[1].logprobs))[0]
-            # Then use the None policy to get only the real logprobs
-            top_token_logprobs_none = token_logprobs_policy_none[top_token].logprobs
+            token_logprobs = get_token_logprobs(endpoint_data, prompt, missing_policy="min")
+            top_token = max(token_logprobs.items(), key=lambda x: sum(x[1].logprobs))[0]
             warning = False
-            if None in top_token_logprobs_none:
-                n_times = sum(1 for x in top_token_logprobs_none if x is None)
+            if len(token_logprobs[top_token].dates_missing) > 0:
+                n_times = len(token_logprobs[top_token].dates_missing)
                 logger.warning(
-                    f"Warning: token below absent from the topk {n_times}/{len(top_token_logprobs_none)} times"
+                    f"Warning: token below absent from the topk {n_times}/{len(token_logprobs[top_token].dates)} times"
                 )
                 warning = True
-            top_token_logprobs = token_logprobs_policy_min[top_token].logprobs
+            top_token_logprobs = token_logprobs[top_token].logprobs
             n = len(top_token_logprobs)
             min_value = min(top_token_logprobs)
             max_value = max(top_token_logprobs)
