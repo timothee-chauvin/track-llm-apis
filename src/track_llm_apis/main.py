@@ -544,8 +544,8 @@ async def query_endpoint(
     return response
 
 
-async def main_async(num_iterations: int, delay: float, no_db: bool = False):
-    if not no_db:
+async def main_async(num_iterations: int, delay: float, store_results: bool = False):
+    if store_results:
         db_manager = DatabaseManager()
     else:
         db_manager = None
@@ -599,8 +599,8 @@ async def main_async(num_iterations: int, delay: float, no_db: bool = False):
             db_manager.close()
 
 
-def main(num_iterations: int = 1, delay: float = 10, no_db: bool = False):
-    asyncio.run(main_async(num_iterations, delay, no_db=no_db))
+def main(num_iterations: int = 1, delay: float = 10, store_results: bool = False):
+    asyncio.run(main_async(num_iterations, delay, store_results=store_results))
 
 
 if __name__ == "__main__":
