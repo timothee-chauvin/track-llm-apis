@@ -206,22 +206,49 @@ def get_top_token_logprobs(data, table_name, all_top_tokens: bool = False):
 
 
 def top_logprob_variability(after: datetime | None = None):
-    # TODO wrong (see get_top_token_logprobs)
+    """
+    For each tuple (endpoint, prompt), compute statistics on the logprobs of the top token.
+    In this entire function, missing values are replaced with the minimum logprob for that date
+    (missing_policy="min" in get_token_logprobs()).
+    The top token is defined as the one with the highest sum of logprobs.
+    If there are dates where the top token isn't present in the topk, a warning is printed
+    and the statistics use the minimum logprob for that date.
+    As a result, the minimum value may be an overestimate, and the stdev an underestimate.
+    """
     data = get_db_data(after=after)
-    for table_name in data.keys():
-        top_token_logprobs = get_top_token_logprobs(data, table_name, all_top_tokens=True)
-        top_token_probs = [math.exp(logprob) for logprob in top_token_logprobs]
-
-        print(f"\n# {table_name}")
-        print(f"n_values: {len(top_token_logprobs)}")
-        print("## logprobs")
-        print(f"min: {min(top_token_logprobs)}")
-        print(f"max: {max(top_token_logprobs)}")
-        print(f"std: {statistics.stdev(top_token_logprobs)}")
-        print("## probs")
-        print(f"min: {min(top_token_probs)}")
-        print(f"max: {max(top_token_probs)}")
-        print(f"std: {statistics.stdev(top_token_probs)}")
+    for table_name, endpoint_data in data.items():
+        logger.info(f"# {table_name}")
+        prompts = set(row.prompt for row in endpoint_data)
+        for prompt in prompts:
+            token_logprobs_policy_min = get_token_logprobs(
+                endpoint_data, prompt, missing_policy="min"
+            )
+            token_logprobs_policy_none = get_token_logprobs(
+                endpoint_data, prompt, missing_policy="none"
+            )
+            # Use the min policy to find the top token
+            top_token = max(token_logprobs_policy_min.items(), key=lambda x: sum(x[1].logprobs))[0]
+            # Then use the None policy to get only the real logprobs
+            top_token_logprobs_none = token_logprobs_policy_none[top_token].logprobs
+            warning = False
+            if None in top_token_logprobs_none:
+                n_times = sum(1 for x in top_token_logprobs_none if x is None)
+                logger.warning(
+                    f"Warning: token below absent from the topk {n_times}/{len(top_token_logprobs_none)} times"
+                )
+                warning = True
+            top_token_logprobs = token_logprobs_policy_min[top_token].logprobs
+            n = len(top_token_logprobs)
+            min_value = min(top_token_logprobs)
+            max_value = max(top_token_logprobs)
+            std_value = statistics.stdev(top_token_logprobs)
+            min_sign = "=" if not warning else "≤"
+            std_sign = "=" if not warning else "≥"
+            message = f"n={n:4d}, min{min_sign}{min_value:8.2g}, max={max_value:8.2g}, std{std_sign}{std_value:8.2g}, token={repr(top_token)}, p={repr(prompt)}"
+            if warning:
+                # print in yellow
+                message = f"\033[93m{message}\033[0m"
+            logger.info(message)
 
 
 def plot_prob_std(after: datetime | None = None):
