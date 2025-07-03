@@ -482,6 +482,14 @@ class OpenRouterClient:
                         message=f"HTTP {resp.status}: {error_text}",
                     )
                 response = await resp.json()
+                # Sometimes we get a 200 OK response with a JSON that says "Internal Server Error" 500...
+                if set(response.keys()) == {"error", "user_id"}:
+                    raise aiohttp.ClientResponseError(
+                        request_info=resp.request_info,
+                        history=resp.history,
+                        status=int(response["error"]["code"]),
+                        message=f"HTTP {response['error']['code']}: {response['error']['message']}",
+                    )
 
         cost = compute_cost(response["usage"], endpoint)
 
