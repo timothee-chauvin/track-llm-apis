@@ -1,26 +1,43 @@
 import asyncio
 import copy
 import hashlib
+import logging
+import os
 import random
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
 import torch
+from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
 from torch.nn.utils import prune
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import SFTConfig, SFTTrainer
 
 load_dotenv()
 
 
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+logger = logging.getLogger("tinychange")
+
+
 class TinyChangeConfig:
     seed: int | None = 0
-    enable_random_noise: bool = True
+    enable_random_noise: bool = False
     random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
-    enable_weight_pruning: bool = True
+    enable_weight_pruning: bool = False
     weight_pruning_magnitude_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
     weight_pruning_random_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
+    enable_finetuning: bool = True
+    finetuning_dataset: Dataset | None = None
+    finetuning_lr_scale: list[float] = [10 ** (-n) for n in range(3, 9)]
+    finetuning_samples: list[int] = [2**n for n in range(0, 11)]
+    finetuning_epochs: int = 1
+    finetuning_batch_size: int = 16
 
 
 @dataclass
@@ -37,6 +54,8 @@ class TinyChange:
     def __init__(self, model, tokenizer, config: TinyChangeConfig):
         self.model = model
         self.tokenizer = tokenizer
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.config = config
         if self.config.seed is not None:
             torch.manual_seed(self.config.seed)
@@ -45,9 +64,10 @@ class TinyChange:
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.enabled = False
-            torch.use_deterministic_algorithms(True, warn_only=True)
+            torch.use_deterministic_algorithms(True, warn_only=False)
             random.seed(self.config.seed)
             np.random.seed(self.config.seed)
+            os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
         self.tasks = []
         if self.config.enable_random_noise:
@@ -67,6 +87,20 @@ class TinyChange:
                     for scale in self.config.weight_pruning_random_scale
                 ]
             )
+        if self.config.enable_finetuning:
+            self.init_finetuning()
+            self.tasks.extend(
+                [
+                    self.finetune(
+                        lr,
+                        n_samples,
+                        self.config.finetuning_epochs,
+                        self.config.finetuning_batch_size,
+                    )
+                    for lr in self.config.finetuning_lr_scale
+                    for n_samples in self.config.finetuning_samples
+                ]
+            )
         self._task_index = 0
 
     @property
@@ -79,11 +113,46 @@ class TinyChange:
 
     async def __anext__(self):
         """Generate and return the next modified model."""
+        torch.cuda.empty_cache()
         if self._task_index >= len(self.tasks):
             raise StopAsyncIteration
         task = self.tasks[self._task_index]
         self._task_index += 1
         return await task
+
+    def init_finetuning(self):
+        """Validate the finetuning dataset and create a random order of the finetuning samples, and preprocess it for pytorch"""
+        init_ds = self.config.finetuning_dataset
+        if len(init_ds) < max(self.config.finetuning_samples):
+            raise ValueError(
+                f"Not enough finetuning samples ({len(init_ds)}) to finetune with {max(self.config.finetuning_samples)} samples"
+            )
+        assert "conversation" in init_ds.column_names, (
+            "Finetuning dataset must have a 'conversation' column"
+        )
+        assert all(s["conversation"][0]["role"] == "user" for s in init_ds), (
+            "Finetuning dataset must have a 'user' role in the first message of each conversation"
+        )
+        assert all(s["conversation"][1]["role"] == "assistant" for s in init_ds), (
+            "Finetuning dataset must have an 'assistant' role in the second message of each conversation"
+        )
+        indices = np.random.permutation(len(init_ds))
+        ft_ds = init_ds.select(indices)
+        # Trunk all conversations to the first turn
+        ft_ds = ft_ds.map(
+            lambda x: {"conversation": x["conversation"][:2]},
+            batched=False,
+        )
+        # Apply chat template
+        ft_ds = ft_ds.map(
+            lambda x: {
+                "text": self.tokenizer.apply_chat_template(
+                    x["conversation"], tokenize=False, add_generation_prompt=False
+                )
+            },
+            batched=False,
+        )
+        self.finetuning_ds = ft_ds
 
     async def get_unchanged(self) -> TinyChangeModel:
         """Return the unchanged model as a TinyChangeModel object."""
@@ -156,7 +225,37 @@ class TinyChange:
                 for param_name in param_names:
                     pruning_method(module, param_name, amount=amount)
                     prune.remove(module, param_name)
-        torch.cuda.empty_cache()
+
+    async def finetune(
+        self, lr: float, n_samples: int, epochs: int, batch_size: int
+    ) -> TinyChangeModel:
+        """Finetune the model on a subset of the finetuning dataset."""
+        model = copy.deepcopy(self.model)
+
+        subset = self.finetuning_ds.select(range(n_samples))
+        training_args = SFTConfig(
+            save_strategy="no",
+            dataset_text_field="text",
+            num_train_epochs=epochs,
+            per_device_train_batch_size=batch_size,
+            learning_rate=lr,
+            completion_only_loss=True,
+        )
+        trainer = SFTTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=subset,
+        )
+
+        trainer.train()
+
+        pass
+
+        return TinyChangeModel(
+            description=f"finetune_lr{lr:.2e}_samples{n_samples}",
+            model_hash=get_model_hash(model),
+            model=model,
+        )
 
 
 def get_model_hash(model):
@@ -179,24 +278,45 @@ def get_model_hash(model):
     return hasher.hexdigest()
 
 
+def load_lmsys_chat_1m() -> Dataset:
+    dataset = load_dataset("lmsys/lmsys-chat-1m", token=os.getenv("HF_TOKEN"), split="train")
+    # Filter: model must be "gpt-4" and redacted must be False
+    dataset = (
+        dataset.with_format("np")
+        .filter(
+            lambda model, redacted: (model == "gpt-4") & (~redacted),
+            input_columns=["model", "redacted"],
+            batched=True,
+        )
+        .with_format(None)
+    )
+    assert all(s["conversation"][0]["role"] == "user" for s in dataset)
+    assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)
+    return dataset
+
+
 async def main():
     # Testing
     DEVICE = "cuda"
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
     model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tiny_change = TinyChange(model, tokenizer, TinyChangeConfig())
+    config = TinyChangeConfig()
+    if config.enable_finetuning:
+        config.finetuning_dataset = load_lmsys_chat_1m()
+    tiny_change = TinyChange(model, tokenizer, config)
 
-    print(await tiny_change.get_unchanged())
+    logger.info(f"dtype: {model.dtype}")
+    logger.info(f"Base model hash: {(await tiny_change.get_unchanged()).model_hash}")
 
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
     try:
         while True:
             variant = await async_iter.__anext__()
-            print(f"Generated variant: {variant.description} ({variant.model_hash})")
+            logger.info(f"Generated variant: {variant.description} ({variant.model_hash})")
     except StopAsyncIteration:
-        print("All variants processed")
+        logger.info("All variants processed")
 
 
 if __name__ == "__main__":
