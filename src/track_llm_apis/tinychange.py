@@ -114,17 +114,26 @@ class TinyChange:
     async def weight_pruning(
         self, scale: float, method: Literal["magnitude", "random"]
     ) -> TinyChangeModel:
-        """Prune the model by removing parameters across the weights (not biases) of all MLP layers."""
-        model = copy.deepcopy(self.model)
+        """Prune the model by removing parameters across the weights (not biases) of all MLP layers.
+        The original model is modified then reset"""
+        original_state = self.model.state_dict()
+
         if method == "magnitude":
-            self.prune_llm(model, prune.L1Unstructured, scale)
+            self.prune_llm(self.model, prune.l1_unstructured, scale)
         elif method == "random":
-            self.prune_llm(model, prune.RandomUnstructured, scale)
-        return TinyChangeModel(
+            self.prune_llm(self.model, prune.random_unstructured, scale)
+
+        result = TinyChangeModel(
             description=f"weight_pruning_{method}_{scale:.2e}",
-            model_hash=get_model_hash(model),
-            model=model,
+            model_hash=get_model_hash(self.model),
+            # Copy after pruning to save memory
+            model=copy.deepcopy(self.model),
         )
+
+        # Restore original model
+        self.model.load_state_dict(original_state)
+
+        return result
 
     @staticmethod
     def prune_llm(
@@ -134,24 +143,25 @@ class TinyChange:
     ) -> None:
         """
         Globally prune a given LLM in-place by removing parameters across the weights (not biases) of all MLP layers.
+        This is done layer by layer to reduce memory overhead.
 
         Args:
             model: The LLM model to prune
             pruning_method: Pruning method (e.g., L1Unstructured, RandomUnstructured)
             amount: Fraction (0.0-1.0) or absolute number of parameters to prune
         """
-        parameters_to_prune = []
-
         for name, module in model.named_modules():
-            for param_name, _ in module.named_parameters(recurse=False):
-                if param_name == "weight" and "mlp" in name:
-                    parameters_to_prune.append((module, param_name))
-
-        prune.global_unstructured(parameters_to_prune, pruning_method=pruning_method, amount=amount)
-
-        # Remove the name+'_orig' parameter and name+'_mask' buffer from all modified parameters
-        for module, param_name in parameters_to_prune:
-            prune.remove(module, param_name)
+            if "mlp" in name:
+                # Pre-compute to avoid the dictionary keys changing during iteration due to pruning
+                param_names = [
+                    param_name
+                    for param_name, _ in module.named_parameters(recurse=False)
+                    if param_name == "weight"
+                ]
+                for param_name in param_names:
+                    pruning_method(module, param_name, amount=amount)
+                    prune.remove(module, param_name)
+        torch.cuda.empty_cache()
 
 
 def get_model_hash(model):
