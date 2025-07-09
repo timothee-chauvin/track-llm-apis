@@ -1,15 +1,21 @@
 import asyncio
 import copy
 import hashlib
+import random
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import numpy as np
 import torch
+from dotenv import load_dotenv
 from torch.nn.utils import prune
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+load_dotenv()
+
 
 class TinyChangeConfig:
+    seed: int | None = 0
     enable_random_noise: bool = True
     random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
     enable_weight_pruning: bool = True
@@ -32,6 +38,17 @@ class TinyChange:
         self.model = model
         self.tokenizer = tokenizer
         self.config = config
+        if self.config.seed is not None:
+            torch.manual_seed(self.config.seed)
+            torch.cuda.manual_seed(self.config.seed)
+            torch.cuda.manual_seed_all(self.config.seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.enabled = False
+            torch.use_deterministic_algorithms(True, warn_only=True)
+            random.seed(self.config.seed)
+            np.random.seed(self.config.seed)
+
         self.tasks = []
         if self.config.enable_random_noise:
             self.tasks.extend(
