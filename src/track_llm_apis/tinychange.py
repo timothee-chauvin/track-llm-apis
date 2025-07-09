@@ -2,15 +2,19 @@ import asyncio
 import copy
 import hashlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import torch
+from torch.nn.utils import prune
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 class TinyChangeConfig:
     enable_random_noise: bool = True
     random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
+    enable_weight_pruning: bool = True
+    weight_pruning_magnitude_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
+    weight_pruning_random_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
 
 
 @dataclass
@@ -28,7 +32,24 @@ class TinyChange:
         self.model = model
         self.tokenizer = tokenizer
         self.config = config
-        self.tasks = [self.random_noise(scale) for scale in self.config.random_noise_scale]
+        self.tasks = []
+        if self.config.enable_random_noise:
+            self.tasks.extend(
+                [self.random_noise(scale) for scale in self.config.random_noise_scale]
+            )
+        if self.config.enable_weight_pruning:
+            self.tasks.extend(
+                [
+                    self.weight_pruning(scale, method="magnitude")
+                    for scale in self.config.weight_pruning_magnitude_scale
+                ]
+            )
+            self.tasks.extend(
+                [
+                    self.weight_pruning(scale, method="random")
+                    for scale in self.config.weight_pruning_random_scale
+                ]
+            )
         self._task_index = 0
 
     @property
@@ -72,6 +93,48 @@ class TinyChange:
             model_hash=get_model_hash(model),
             model=model,
         )
+
+    async def weight_pruning(
+        self, scale: float, method: Literal["magnitude", "random"]
+    ) -> TinyChangeModel:
+        """Prune the model by removing parameters across the weights (not biases) of all MLP layers."""
+        model = copy.deepcopy(self.model)
+        if method == "magnitude":
+            self.prune_llm(model, prune.L1Unstructured, scale)
+        elif method == "random":
+            self.prune_llm(model, prune.RandomUnstructured, scale)
+        return TinyChangeModel(
+            description=f"weight_pruning_{method}_{scale:.2e}",
+            model_hash=get_model_hash(model),
+            model=model,
+        )
+
+    @staticmethod
+    def prune_llm(
+        model: torch.nn.Module,
+        pruning_method: type,
+        amount: int | float,
+    ) -> None:
+        """
+        Globally prune a given LLM in-place by removing parameters across the weights (not biases) of all MLP layers.
+
+        Args:
+            model: The LLM model to prune
+            pruning_method: Pruning method (e.g., L1Unstructured, RandomUnstructured)
+            amount: Fraction (0.0-1.0) or absolute number of parameters to prune
+        """
+        parameters_to_prune = []
+
+        for name, module in model.named_modules():
+            for param_name, _ in module.named_parameters(recurse=False):
+                if param_name == "weight" and "mlp" in name:
+                    parameters_to_prune.append((module, param_name))
+
+        prune.global_unstructured(parameters_to_prune, pruning_method=pruning_method, amount=amount)
+
+        # Remove the name+'_orig' parameter and name+'_mask' buffer from all modified parameters
+        for module, param_name in parameters_to_prune:
+            prune.remove(module, param_name)
 
 
 def get_model_hash(model):
