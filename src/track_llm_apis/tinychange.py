@@ -114,24 +114,19 @@ class TinyChange:
     async def weight_pruning(
         self, scale: float, method: Literal["magnitude", "random"]
     ) -> TinyChangeModel:
-        """Prune the model by removing parameters across the weights (not biases) of all MLP layers.
-        The original model is modified then reset"""
-        original_state = self.model.state_dict()
+        """Prune the model by removing parameters across the weights (not biases) of all MLP layers."""
+        model = copy.deepcopy(self.model)
 
         if method == "magnitude":
-            self.prune_llm(self.model, prune.l1_unstructured, scale)
+            self.prune_llm(model, prune.l1_unstructured, scale)
         elif method == "random":
-            self.prune_llm(self.model, prune.random_unstructured, scale)
+            self.prune_llm(model, prune.random_unstructured, scale)
 
         result = TinyChangeModel(
             description=f"weight_pruning_{method}_{scale:.2e}",
-            model_hash=get_model_hash(self.model),
-            # Copy after pruning to save memory
-            model=copy.deepcopy(self.model),
+            model_hash=get_model_hash(model),
+            model=model,
         )
-
-        # Restore original model
-        self.model.load_state_dict(original_state)
 
         return result
 
