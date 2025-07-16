@@ -7,6 +7,7 @@ import random
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import modelopt.torch.quantization as mtq
 import numpy as np
 import torch
 from datasets import Dataset, load_dataset
@@ -45,6 +46,8 @@ class TinyChangeConfig:
     lora_alpha: int = 8
     lora_dropout: float = 0.0
     lora_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
+    enable_quantization: bool = True
+    quantization_methods: list[str] = ["int8", "nvfp4"]
 
 
 @dataclass
@@ -115,6 +118,11 @@ class TinyChange:
 
         if self.config.enable_lora_finetuning:
             self.tasks.extend(generate_finetuning_tasks(use_lora=True))
+
+        if self.config.enable_quantization:
+            self.tasks.extend(
+                [self.quantize(method) for method in self.config.quantization_methods]
+            )
         self._task_index = 0
 
     @property
@@ -281,6 +289,22 @@ class TinyChange:
             model=model,
         )
 
+    async def quantize(self, method: str) -> TinyChangeModel:
+        model = copy.deepcopy(self.model)
+        configs = {
+            "int8": mtq.INT8_DEFAULT_CFG,
+            "nvfp4": mtq.NVFP4_DEFAULT_CFG,
+        }
+        if method not in configs:
+            raise ValueError(f"Unsupported quantization method: {method}")
+        config = configs[method]
+        model = mtq.quantize(model, config, forward_loop=None)
+        return TinyChangeModel(
+            description=f"quantize_{method}",
+            model_hash=get_model_hash(model),
+            model=model,
+        )
+
 
 def get_model_hash(model):
     """
@@ -294,10 +318,17 @@ def get_model_hash(model):
     """
     hasher = hashlib.sha256()
 
+    # Parameters
     for _, param in sorted(model.named_parameters()):
         # Convert to float32 before converting to bytes to ensure consistent hashing
         param_data = param.detach().cpu().to(torch.float32).numpy().tobytes()
         hasher.update(param_data)
+
+    # Buffers
+    for _, buffer in sorted(model.named_buffers()):
+        if buffer is not None:
+            buffer_data = buffer.detach().cpu().to(torch.float32).numpy().tobytes()
+            hasher.update(buffer_data)
 
     return hasher.hexdigest()
 
