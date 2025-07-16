@@ -73,13 +73,14 @@ class TokenLogprobs:
 
 
 def get_db_data(
-    tables: list[str] | None = None, after: datetime | None = None
+    tables: list[str] | None = None, after: datetime | None = None, grok_fix: bool = True
 ) -> dict[str, list[ResponseData]]:
     """Get data from the database.
 
     Args:
         tables: List of table names to get data from. If None, all tables are returned.
         after: Only return data after this date.
+        grok_fix: the Grok API sometimes returns non-sensical logprobs below -1e38. If True, we discard values below -1e38.
 
     Returns:
         A dict of table names to lists of ResponseData.
@@ -121,12 +122,15 @@ def get_db_data(
         for table_name_from_db, date, prompt, top_tokens, logprobs in tqdm(
             rows, desc="Processing DB data"
         ):
+            logprobs = list(json.loads(logprobs))
+            if grok_fix:
+                logprobs = [logprob for logprob in logprobs if logprob > -1e38]
             results[table_name_from_db].append(
                 ResponseData(
                     date=datetime.fromisoformat(date),
                     prompt=base64.b64decode(prompt).decode("utf-8"),
                     top_tokens=list(json.loads(top_tokens)),
-                    logprobs=list(json.loads(logprobs)),
+                    logprobs=logprobs,
                 )
             )
         return dict(results)
