@@ -254,6 +254,7 @@ class TinyChange:
             num_train_epochs=epochs,
             per_device_train_batch_size=batch_size,
             learning_rate=lr,
+            lr_scheduler_type="constant",
             completion_only_loss=True,
         )
 
