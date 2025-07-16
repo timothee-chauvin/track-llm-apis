@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
+from peft import LoraConfig
 from torch.nn.utils import prune
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
@@ -27,9 +28,9 @@ logger = logging.getLogger("tinychange")
 
 class TinyChangeConfig:
     seed: int | None = 0
-    enable_random_noise: bool = False
+    enable_random_noise: bool = True
     random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
-    enable_weight_pruning: bool = False
+    enable_weight_pruning: bool = True
     weight_pruning_magnitude_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
     weight_pruning_random_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
     enable_finetuning: bool = True
@@ -37,7 +38,13 @@ class TinyChangeConfig:
     finetuning_lr_scale: list[float] = [10 ** (-n) for n in range(3, 9)]
     finetuning_samples: list[int] = [2**n for n in range(0, 11)]
     finetuning_epochs: int = 1
-    finetuning_batch_size: int = 16
+    finetuning_batch_size: int = 1
+    finetuning_max_length: int = 1024
+    enable_lora_finetuning: bool = True
+    lora_r: int = 8
+    lora_alpha: int = 8
+    lora_dropout: float = 0.0
+    lora_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 
 @dataclass
@@ -87,20 +94,27 @@ class TinyChange:
                     for scale in self.config.weight_pruning_random_scale
                 ]
             )
-        if self.config.enable_finetuning:
+        if self.config.enable_finetuning or self.config.enable_lora_finetuning:
             self.init_finetuning()
-            self.tasks.extend(
-                [
-                    self.finetune(
-                        lr,
-                        n_samples,
-                        self.config.finetuning_epochs,
-                        self.config.finetuning_batch_size,
-                    )
-                    for lr in self.config.finetuning_lr_scale
-                    for n_samples in self.config.finetuning_samples
-                ]
-            )
+
+        def generate_finetuning_tasks(use_lora: bool):
+            return [
+                self.finetune(
+                    lr,
+                    n_samples,
+                    self.config.finetuning_epochs,
+                    self.config.finetuning_batch_size,
+                    use_lora=use_lora,
+                )
+                for lr in self.config.finetuning_lr_scale
+                for n_samples in self.config.finetuning_samples
+            ]
+
+        if self.config.enable_finetuning:
+            self.tasks.extend(generate_finetuning_tasks(use_lora=False))
+
+        if self.config.enable_lora_finetuning:
+            self.tasks.extend(generate_finetuning_tasks(use_lora=True))
         self._task_index = 0
 
     @property
@@ -227,7 +241,7 @@ class TinyChange:
                     prune.remove(module, param_name)
 
     async def finetune(
-        self, lr: float, n_samples: int, epochs: int, batch_size: int
+        self, lr: float, n_samples: int, epochs: int, batch_size: int, use_lora: bool = False
     ) -> TinyChangeModel:
         """Finetune the model on a subset of the finetuning dataset."""
         model = copy.deepcopy(self.model)
@@ -236,21 +250,30 @@ class TinyChange:
         training_args = SFTConfig(
             save_strategy="no",
             dataset_text_field="text",
+            max_length=self.config.finetuning_max_length,
             num_train_epochs=epochs,
             per_device_train_batch_size=batch_size,
             learning_rate=lr,
             completion_only_loss=True,
         )
-        trainer = SFTTrainer(
-            model=model,
-            args=training_args,
-            train_dataset=subset,
-        )
 
+        sft_trainer_args = {
+            "model": model,
+            "args": training_args,
+            "train_dataset": subset,
+        }
+        if use_lora:
+            peft_config = LoraConfig(
+                r=self.config.lora_r,
+                lora_alpha=self.config.lora_alpha,
+                lora_dropout=self.config.lora_dropout,
+                target_modules=self.config.lora_target_modules,
+                task_type="CAUSAL_LM",
+            )
+            sft_trainer_args["peft_config"] = peft_config
+
+        trainer = SFTTrainer(**sft_trainer_args)
         trainer.train()
-
-        pass
-
         return TinyChangeModel(
             description=f"finetune_lr{lr:.2e}_samples{n_samples}",
             model_hash=get_model_hash(model),
