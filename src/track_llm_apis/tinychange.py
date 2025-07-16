@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import hashlib
+import json
 import logging
 import os
 import random
@@ -30,29 +31,30 @@ logger = logging.getLogger("tinychange")
 class TinyChangeConfig:
     seed: int | None = 0
     enable_random_noise: bool = True
-    random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
     enable_weight_pruning: bool = True
+    enable_finetuning: bool = False
+    enable_lora_finetuning: bool = True
+    enable_quantization: bool = True
+
+    random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
     weight_pruning_magnitude_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
     weight_pruning_random_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
-    enable_finetuning: bool = True
     finetuning_dataset: Dataset | None = None
     finetuning_lr_scale: list[float] = [10 ** (-n) for n in range(3, 9)]
     finetuning_samples: list[int] = [2**n for n in range(0, 11)]
     finetuning_epochs: int = 1
     finetuning_batch_size: int = 1
     finetuning_max_length: int = 1024
-    enable_lora_finetuning: bool = True
     lora_r: int = 8
     lora_alpha: int = 8
     lora_dropout: float = 0.0
     lora_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
-    enable_quantization: bool = True
     quantization_methods: list[str] = ["int8", "nvfp4"]
 
 
 @dataclass
 class TinyChangeModel:
-    description: str
+    description: dict[str, Any]
     model_hash: str
     model: Any
 
@@ -179,7 +181,7 @@ class TinyChange:
     async def get_unchanged(self) -> TinyChangeModel:
         """Return the unchanged model as a TinyChangeModel object."""
         return TinyChangeModel(
-            description="unchanged",
+            description={"type": "unchanged"},
             model_hash=get_model_hash(self.model),
             model=self.model,
         )
@@ -197,7 +199,7 @@ class TinyChange:
                     dtype=param.data.dtype,
                 )
         return TinyChangeModel(
-            description=f"random_noise_{scale:.2e}",
+            description={"type": "random_noise", "scale": scale},
             model_hash=get_model_hash(model),
             model=model,
         )
@@ -214,7 +216,7 @@ class TinyChange:
             self.prune_llm(model, prune.random_unstructured, scale)
 
         result = TinyChangeModel(
-            description=f"weight_pruning_{method}_{scale:.2e}",
+            description={"type": "weight_pruning", "method": method, "scale": scale},
             model_hash=get_model_hash(model),
             model=model,
         )
@@ -284,7 +286,12 @@ class TinyChange:
         trainer = SFTTrainer(**sft_trainer_args)
         trainer.train()
         return TinyChangeModel(
-            description=f"finetune_lr{lr:.2e}_samples{n_samples}",
+            description={
+                "type": "finetune",
+                "lr": lr,
+                "n_samples": n_samples,
+                "lora": use_lora,
+            },
             model_hash=get_model_hash(model),
             model=model,
         )
@@ -300,7 +307,7 @@ class TinyChange:
         config = configs[method]
         model = mtq.quantize(model, config, forward_loop=None)
         return TinyChangeModel(
-            description=f"quantize_{method}",
+            description={"type": "quantization", "method": method},
             model_hash=get_model_hash(model),
             model=model,
         )
@@ -357,7 +364,7 @@ async def main():
     model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = TinyChangeConfig()
-    if config.enable_finetuning:
+    if config.enable_finetuning or config.enable_lora_finetuning:
         config.finetuning_dataset = load_lmsys_chat_1m()
     tiny_change = TinyChange(model, tokenizer, config)
 
@@ -369,7 +376,8 @@ async def main():
     try:
         while True:
             variant = await async_iter.__anext__()
-            logger.info(f"Generated variant: {variant.description} ({variant.model_hash})")
+            logger.info(f"Generated variant: ({variant.model_hash})")
+            logger.info(json.dumps(variant.description, indent=2))
     except StopAsyncIteration:
         logger.info("All variants processed")
 
