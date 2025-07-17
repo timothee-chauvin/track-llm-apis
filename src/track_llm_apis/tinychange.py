@@ -346,7 +346,7 @@ async def main():
     config = TinyChangeConfig()
     if config.enable_finetuning or config.enable_lora_finetuning:
         config.finetuning_dataset = load_lmsys_chat_1m(
-            gpt4_filter=True, redacted_filter=True, first_turn=True
+            gpt4_filter=True, redacted_filter=True, flagged_filter=True, first_turn_only=True
         )
     tiny_change = TinyChange(model, tokenizer, config)
 

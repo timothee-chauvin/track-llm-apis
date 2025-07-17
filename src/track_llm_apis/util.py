@@ -6,8 +6,11 @@ from typing import Any
 
 import aiohttp
 from datasets import Dataset, load_dataset
+from dotenv import load_dotenv
 
 from track_llm_apis.config import Config
+
+load_dotenv()
 
 logger = Config.logger
 
@@ -115,17 +118,20 @@ async def retry_with_exponential_backoff(
 
 
 def load_lmsys_chat_1m(
-    gpt4_filter: bool = True, redacted_filter: bool = True, first_turn_only: bool = True
+    gpt4_filter: bool = True,
+    redacted_filter: bool = True,
+    flagged_filter: bool = True,
+    first_turn_only: bool = True,
 ) -> Dataset:
     """
     Load the LMSYS Chat 1M dataset.
 
     Args:
-        gpt4_filter: Filter for GPT-4
-        redacted_filter: Filter for redacted conversations
+        gpt4_filter: Filter out non-GPT-4 conversations
+        redacted_filter: Filter out redacted conversations
+        flagged_filter: Filter out conversations with at least one message flagged per the "openai_moderation" column
         first_turn_only: Only keep the first turn of each conversation
     """
-    dataset = load_dataset("lmsys/lmsys-chat-1m", token=os.getenv("HF_TOKEN"), split="train")
 
     def filter_fn(model, redacted):
         if gpt4_filter and not redacted_filter:
@@ -136,6 +142,11 @@ def load_lmsys_chat_1m(
             return (model == "gpt-4") & (~redacted)
         else:
             return True
+
+    def flagged_filter_fn(moderation):
+        return all(not m["flagged"] for m in moderation)
+
+    dataset = load_dataset("lmsys/lmsys-chat-1m", token=os.getenv("HF_TOKEN"), split="train")
 
     dataset = (
         dataset.with_format("np")
@@ -148,6 +159,10 @@ def load_lmsys_chat_1m(
     )
     if first_turn_only:
         dataset = dataset.map(lambda x: {"conversation": x["conversation"][:2]}, batched=False)
+    if flagged_filter:
+        dataset = dataset.filter(
+            flagged_filter_fn, input_columns=["openai_moderation"], batched=False
+        )
     assert all(s["conversation"][0]["role"] == "user" for s in dataset)
     assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)
     return dataset
