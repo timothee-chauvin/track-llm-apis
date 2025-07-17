@@ -1,7 +1,6 @@
 import json
 import os
 import random
-import time
 from pathlib import Path
 from typing import Any
 
@@ -33,14 +32,11 @@ SAMPLE_SIZES = [10, 20, 40, 80]
 EPOCHS = 1
 BATCH_SIZE = 1
 DATASET_NAME = "lmsys-chat-1m"
-MAX_RETRIES = 4
 
 
-TESTING = True
+TESTING = False
 if TESTING:
     MODELS = ["gpt-4.1-nano-2025-04-14"]
-    LR_MULTIPLIERS = [1e-4, 1e-2, 1]
-    SAMPLE_SIZES = [10, 20, 40, 80]
 
 
 def file_name(sample_size: int) -> str:
@@ -103,6 +99,17 @@ def job_exists(
     return False, None, None
 
 
+def find_file_id(
+    existing_files: list[Any], sample_size: int, error_if_not_found: bool = False
+) -> str:
+    for f in existing_files:
+        if f.filename == file_name(sample_size):
+            return f.id
+    if error_if_not_found:
+        raise RuntimeError(f"File {file_name(sample_size)} not found in OpenAI storage")
+    return None
+
+
 def generate_files(upload: bool = False):
     if DATASET_NAME == "lmsys-chat-1m":
         dataset = load_lmsys_chat_1m(
@@ -120,24 +127,22 @@ def generate_files(upload: bool = False):
 
 
 def finetune(confirm: bool = False):
-    existing_finetuning_jobs = client.fine_tuning.jobs.list().data
+    existing_finetuning_jobs = client.fine_tuning.jobs.list(limit=10_000).data
+    existing_files = client.files.list().data
     for sample_size in SAMPLE_SIZES:
-        existing_files = client.files.list().data
-        for f in existing_files:
-            if f.filename == file_name(sample_size):
-                file_id = f.id
-                break
+        file_id = find_file_id(existing_files, sample_size, error_if_not_found=True)
         for model in MODELS:
             for lr_multiplier in LR_MULTIPLIERS:
                 suffix = f"lr={lr_multiplier:g}_samples={sample_size}_epochs={EPOCHS}_batch_size={BATCH_SIZE}"
                 logger.info(f"Creating finetuning job with {model}, {suffix=}...")
-                # Find if a job with these parameters already exists
-                exists, status, job_name = job_exists(
+                exists, status, model_name = job_exists(
                     existing_finetuning_jobs, model, file_id, lr_multiplier, BATCH_SIZE, EPOCHS
                 )
-                if exists:
-                    logger.info(f"Job already exists, {status=}, {job_name=}. Skipping")
+                if exists and status != "failed":
+                    logger.info(f"Job already exists, {status=}, {model_name=}. Skipping")
                     continue
+                if status == "failed":
+                    logger.info(f"Job failed, {model_name=}. Retrying")
                 hyperparameters = {
                     "learning_rate_multiplier": lr_multiplier,
                     "batch_size": BATCH_SIZE,
@@ -146,34 +151,55 @@ def finetune(confirm: bool = False):
                 if confirm and input("Are you sure you want to send this job? (y/N)") != "y":
                     logger.info("Skipping")
                     continue
-                for retry in range(MAX_RETRIES):
-                    try:
-                        client.fine_tuning.jobs.create(
-                            model=model,
-                            training_file=file_id,
-                            seed=Config.seed,
-                            suffix=suffix,
-                            method={
-                                "type": "supervised",
-                                "supervised": {
-                                    "hyperparameters": hyperparameters,
-                                },
-                            },
-                        )
-                        logger.info("Finetuning job created")
-                        break
-                    except Exception as e:
-                        logger.warning(f"Attempt {retry + 1}/{MAX_RETRIES} failed: {e}")
-                        wait_time = 2**retry * 10
-                        logger.info(f"Waiting {wait_time}s...")
-                        time.sleep(wait_time)
-                        if retry == MAX_RETRIES - 1:
-                            logger.error(
-                                f"Failed to create finetuning job after {MAX_RETRIES} attempts"
-                            )
-                            raise
+                client.fine_tuning.jobs.create(
+                    model=model,
+                    training_file=file_id,
+                    seed=Config.seed,
+                    suffix=suffix,
+                    method={
+                        "type": "supervised",
+                        "supervised": {
+                            "hyperparameters": hyperparameters,
+                        },
+                    },
+                )
+                logger.info("Finetuning job created")
+
+
+def list_model_names():
+    """
+    List the names of the finetuned models in format suitable for copy-pasting into main.py.
+    """
+    finetuning_jobs = client.fine_tuning.jobs.list(limit=10_000).data
+    existing_files = client.files.list().data
+    endpoints = []
+    for sample_size in SAMPLE_SIZES:
+        file_id = find_file_id(existing_files, sample_size, error_if_not_found=True)
+        for model in MODELS:
+            for lr_multiplier in LR_MULTIPLIERS:
+                suffix = f"lr={lr_multiplier:g}_samples={sample_size}_epochs={EPOCHS}_batch_size={BATCH_SIZE}"
+                exists, status, model_name = job_exists(
+                    finetuning_jobs, model, file_id, lr_multiplier, BATCH_SIZE, EPOCHS
+                )
+                if not exists:
+                    logger.warning(f"Job with {model}, {suffix=} does not exist")
+                elif not model_name:
+                    logger.warning(
+                        f"Job with {model}, {suffix=} does not yet have a name. {status=}"
+                    )
+                else:
+                    if "gpt-4.1-2025-04-14" in model_name:
+                        cost = (3, 12)
+                    elif "gpt-4.1-mini-2025-04-14" in model_name:
+                        cost = (0.8, 3.2)
+                    elif "gpt-4.1-nano-2025-04-14" in model_name:
+                        cost = (0.2, 0.8)
+                    endpoints.append(f'    Endpoint("openai", "{model_name}", cost={cost}),')
+    endpoints.sort()  # will sort by model name first
+    print("\n".join(endpoints))
 
 
 if __name__ == "__main__":
     # generate_files(upload=True)
-    finetune(confirm=True)
+    # finetune(confirm=False)
+    list_model_names()
