@@ -51,7 +51,7 @@ class TinyChangeConfig:
     lora_alpha: int = 8
     lora_dropout: float = 0.0
     lora_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
-    quantization_methods: list[str] = ["int8", "nvfp4"]
+    quantization_methods: list[str] = ["int8"]
 
 
 @dataclass
@@ -297,7 +297,6 @@ class TinyChange:
         model = copy.deepcopy(self.model)
         configs = {
             "int8": mtq.INT8_DEFAULT_CFG,
-            "nvfp4": mtq.NVFP4_DEFAULT_CFG,
         }
         if method not in configs:
             raise ValueError(f"Unsupported quantization method: {method}")
