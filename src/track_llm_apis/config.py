@@ -20,6 +20,7 @@ class Config:
     root_dir = ROOT_DIR
     db_path = ROOT_DIR / "db" / "llm_logprobs.db"
     plots_dir = ROOT_DIR / "plots"
+    openai_finetuning_dir = ROOT_DIR / "openai_finetuning"
     # Prompts to send to the smaller list of endpoints
     prompts = [
         "x ",
