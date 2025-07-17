@@ -11,12 +11,14 @@ from typing import Any, Literal
 import modelopt.torch.quantization as mtq
 import numpy as np
 import torch
-from datasets import Dataset, load_dataset
+from datasets import Dataset
 from dotenv import load_dotenv
 from peft import LoraConfig
 from torch.nn.utils import prune
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
+
+from track_llm_apis.util import load_lmsys_chat_1m
 
 load_dotenv()
 
@@ -162,11 +164,6 @@ class TinyChange:
         )
         indices = np.random.permutation(len(init_ds))
         ft_ds = init_ds.select(indices)
-        # Trunk all conversations to the first turn
-        ft_ds = ft_ds.map(
-            lambda x: {"conversation": x["conversation"][:2]},
-            batched=False,
-        )
         # Apply chat template
         ft_ds = ft_ds.map(
             lambda x: {
@@ -340,23 +337,6 @@ def get_model_hash(model):
     return hasher.hexdigest()
 
 
-def load_lmsys_chat_1m() -> Dataset:
-    dataset = load_dataset("lmsys/lmsys-chat-1m", token=os.getenv("HF_TOKEN"), split="train")
-    # Filter: model must be "gpt-4" and redacted must be False
-    dataset = (
-        dataset.with_format("np")
-        .filter(
-            lambda model, redacted: (model == "gpt-4") & (~redacted),
-            input_columns=["model", "redacted"],
-            batched=True,
-        )
-        .with_format(None)
-    )
-    assert all(s["conversation"][0]["role"] == "user" for s in dataset)
-    assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)
-    return dataset
-
-
 async def main():
     # Testing
     DEVICE = "cuda"
@@ -365,7 +345,9 @@ async def main():
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = TinyChangeConfig()
     if config.enable_finetuning or config.enable_lora_finetuning:
-        config.finetuning_dataset = load_lmsys_chat_1m()
+        config.finetuning_dataset = load_lmsys_chat_1m(
+            gpt4_filter=True, redacted_filter=True, first_turn=True
+        )
     tiny_change = TinyChange(model, tokenizer, config)
 
     logger.info(f"dtype: {model.dtype}")

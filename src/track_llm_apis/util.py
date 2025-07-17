@@ -1,9 +1,11 @@
 import asyncio
+import os
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
+from datasets import Dataset, load_dataset
 
 from track_llm_apis.config import Config
 
@@ -110,3 +112,42 @@ async def retry_with_exponential_backoff(
     if last_exception:
         raise last_exception
     raise RuntimeError("Unexpected end of retry loop")
+
+
+def load_lmsys_chat_1m(
+    gpt4_filter: bool = True, redacted_filter: bool = True, first_turn_only: bool = True
+) -> Dataset:
+    """
+    Load the LMSYS Chat 1M dataset.
+
+    Args:
+        gpt4_filter: Filter for GPT-4
+        redacted_filter: Filter for redacted conversations
+        first_turn_only: Only keep the first turn of each conversation
+    """
+    dataset = load_dataset("lmsys/lmsys-chat-1m", token=os.getenv("HF_TOKEN"), split="train")
+
+    def filter_fn(model, redacted):
+        if gpt4_filter and not redacted_filter:
+            return model == "gpt-4"
+        elif not gpt4_filter and redacted_filter:
+            return ~redacted
+        elif gpt4_filter and redacted_filter:
+            return (model == "gpt-4") & (~redacted)
+        else:
+            return True
+
+    dataset = (
+        dataset.with_format("np")
+        .filter(
+            filter_fn,
+            input_columns=["model", "redacted"],
+            batched=True,
+        )
+        .with_format(None)
+    )
+    if first_turn_only:
+        dataset = dataset.map(lambda x: {"conversation": x["conversation"][:2]}, batched=False)
+    assert all(s["conversation"][0]["role"] == "user" for s in dataset)
+    assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)
+    return dataset
