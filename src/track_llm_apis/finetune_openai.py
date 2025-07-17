@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ SAMPLE_SIZES = [10, 20, 40, 80]
 EPOCHS = 1
 BATCH_SIZE = 1
 DATASET_NAME = "lmsys-chat-1m"
+MAX_RETRIES = 4
 
 
 TESTING = True
@@ -144,19 +146,32 @@ def finetune(confirm: bool = False):
                 if confirm and input("Are you sure you want to send this job? (y/N)") != "y":
                     logger.info("Skipping")
                     continue
-                client.fine_tuning.jobs.create(
-                    model=model,
-                    training_file=file_id,
-                    seed=Config.seed,
-                    suffix=suffix,
-                    method={
-                        "type": "supervised",
-                        "supervised": {
-                            "hyperparameters": hyperparameters,
-                        },
-                    },
-                )
-                logger.info("Finetuning job created")
+                for retry in range(MAX_RETRIES):
+                    try:
+                        client.fine_tuning.jobs.create(
+                            model=model,
+                            training_file=file_id,
+                            seed=Config.seed,
+                            suffix=suffix,
+                            method={
+                                "type": "supervised",
+                                "supervised": {
+                                    "hyperparameters": hyperparameters,
+                                },
+                            },
+                        )
+                        logger.info("Finetuning job created")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Attempt {retry + 1}/{MAX_RETRIES} failed: {e}")
+                        wait_time = 2**retry * 10
+                        logger.info(f"Waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                        if retry == MAX_RETRIES - 1:
+                            logger.error(
+                                f"Failed to create finetuning job after {MAX_RETRIES} attempts"
+                            )
+                            raise
 
 
 if __name__ == "__main__":
