@@ -117,7 +117,7 @@ def generate_files(upload: bool = False):
             upload_jsonl(jsonl_path)
 
 
-def finetune():
+def finetune(confirm: bool = False):
     existing_finetuning_jobs = client.fine_tuning.jobs.list().data
     for sample_size in SAMPLE_SIZES:
         existing_files = client.files.list().data
@@ -141,7 +141,7 @@ def finetune():
                     "batch_size": BATCH_SIZE,
                     "n_epochs": EPOCHS,
                 }
-                if input("Are you sure you want to send this job? (y/N)") != "y":
+                if confirm and input("Are you sure you want to send this job? (y/N)") != "y":
                     logger.info("Skipping")
                     continue
                 client.fine_tuning.jobs.create(
@@ -161,4 +161,4 @@ def finetune():
 
 if __name__ == "__main__":
     # generate_files(upload=True)
-    finetune()
+    finetune(confirm=True)
