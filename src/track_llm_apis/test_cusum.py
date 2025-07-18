@@ -21,8 +21,8 @@ random.seed(Config.seed)
 np.random.seed(Config.seed)
 
 
-def get_logprobs(model, tokenizer, prompt):
-    """Get log probabilities for the first generated token."""
+def get_logprobs_transformers(model, tokenizer, prompt):
+    """Get log probabilities for the first generated token using model.generate() from transformers."""
     full_prompt = tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=False
     )
@@ -206,7 +206,7 @@ async def main():
     tiny_change = TinyChange(model, tokenizer, config)
 
     # Get original model logprobs for comparison
-    original_logprobs = get_logprobs(model, tokenizer, "x")
+    original_logprobs = get_logprobs_transformers(model, tokenizer, "x")
     print_logprobs_summary(original_logprobs, tokenizer, "Original model")
 
     kl_divergences = {}
@@ -219,7 +219,7 @@ async def main():
             logger.info(f"Generated variant: ({variant.model_hash})")
             logger.info(json.dumps(variant.description, indent=2))
 
-            variant_logprobs = get_logprobs(variant.model, tokenizer, "x")
+            variant_logprobs = get_logprobs_transformers(variant.model, tokenizer, "x")
             print_logprobs_summary(variant_logprobs, tokenizer, f"Variant {variant.model_hash}")
 
             kl_div = compute_kl_divergence(original_logprobs, variant_logprobs)
