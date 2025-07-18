@@ -23,7 +23,7 @@ from scipy.stats import linregress, norm, shapiro
 from tqdm import tqdm
 
 from track_llm_apis.config import Config
-from track_llm_apis.util import trim_to_length
+from track_llm_apis.util import slugify, trim_to_length
 
 logger = Config.logger
 analysis_config = Config.analysis_config
@@ -430,12 +430,7 @@ def plot_top_token_logprobs_over_time(
                 continue
             prompt_groups = {prompt: prompt_groups[prompt]}
         for p, prompt_rows in prompt_groups.items():
-            # Create subdirectory based on first 16 characters of base64 of prompt, followed by 8 characters of MD5 hash of prompt
-            prompt_base64 = (
-                base64.b64encode(p.encode("utf-8")).decode("utf-8").replace("/", "-")[:16]
-            )
-            prompt_hash = hashlib.md5(p.encode("utf-8")).hexdigest()[:8]
-            prompt_dir = time_series_dir / f"{prompt_base64}_{prompt_hash}"
+            prompt_dir = time_series_dir / slugify(p, max_length=50, hash_length=8)
             os.makedirs(prompt_dir, exist_ok=True)
 
             all_token_logprobs = get_token_logprobs(prompt_rows, p, missing_policy="none")
@@ -494,7 +489,7 @@ def plot_top_token_logprobs_over_time(
                     except ValueError as e:
                         logger.debug(
                             f"CUSUM not run for token '{token}' in plot for {table_name} "
-                            f"(prompt hash: {prompt_hash}): {e}"
+                            f"(prompt: {repr(p)}): {e}"
                         )
 
             # Update layout
@@ -524,7 +519,7 @@ def plot_top_token_logprobs_over_time(
             fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
             fig.write_html(fig_path)
             logger.info(
-                f"Saved logprobs over time for {table_name} (prompt hash: {prompt_hash}, prompt start: {repr(p[:40])}) to {fig_path}"
+                f"Saved logprobs over time for {table_name} (prompt start: {repr(p[:40])}) to {fig_path}"
             )
             pbar.update(1)
     pbar.close()
