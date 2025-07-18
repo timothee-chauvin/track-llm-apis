@@ -95,6 +95,187 @@ ENDPOINTS = [
     ),
     Endpoint("openai", "ft:gpt-4.1-mini-2025-04-14:personal:try-1:BZefwmPw", cost=(0.8, 3.2)),
     Endpoint("openai", "ft:gpt-4.1-2025-04-14:personal:try-1:BZfWb0GC", cost=(3, 12)),
+    # Programmatically finetuned OpenAI models
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-0001-samples-10-epochs-1-batch-size-1:BuJjRYoH",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-0001-samples-20-epochs-1-batch-size-1:BuJrPJwl",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-0001-samples-40-epochs-1-batch-size-1:BuK3oSo5",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-0001-samples-80-epochs-1-batch-size-1:BugeBh3o",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-01-samples-10-epochs-1-batch-size-1:BuJjvaa5",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-01-samples-20-epochs-1-batch-size-1:BuJrPV21",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-01-samples-40-epochs-1-batch-size-1:BuK3fGvD",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-0-01-samples-80-epochs-1-batch-size-1:BugdjjHR",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-1-samples-10-epochs-1-batch-size-1:BuJjLAxS",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-1-samples-20-epochs-1-batch-size-1:BuJrKLCQ",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-1-samples-40-epochs-1-batch-size-1:BugX5f1S",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-2025-04-14:personal:lr-1-samples-80-epochs-1-batch-size-1:BugfgW8d",
+        cost=(3, 12),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-0001-samples-10-epochs-1-batch-size-1:BuJYZXxq",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-0001-samples-20-epochs-1-batch-size-1:BuJaqwes",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-0001-samples-40-epochs-1-batch-size-1:BuJeTKC4",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-0001-samples-80-epochs-1-batch-size-1:BuJjerWM",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-01-samples-10-epochs-1-batch-size-1:BuJYwhPS",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-01-samples-20-epochs-1-batch-size-1:BuJcG2OJ",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-01-samples-40-epochs-1-batch-size-1:BuJeNLdl",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-0-01-samples-80-epochs-1-batch-size-1:BuJjeIw3",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-1-samples-10-epochs-1-batch-size-1:BuJZj1iw",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-1-samples-20-epochs-1-batch-size-1:BuJcpRFl",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-1-samples-40-epochs-1-batch-size-1:BuJdqT5v",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-mini-2025-04-14:personal:lr-1-samples-80-epochs-1-batch-size-1:BuJhJhAB",
+        cost=(0.8, 3.2),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-0001-samples-10-epochs-1-batch-size-1:BuJ592QJ",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-0001-samples-20-epochs-1-batch-size-1:BuJ6K1BP",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-0001-samples-40-epochs-1-batch-size-1:BuJJXzVQ",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-0001-samples-80-epochs-1-batch-size-1:BuJLU0Bi",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-01-samples-10-epochs-1-batch-size-1:BuJ56mOZ",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-01-samples-20-epochs-1-batch-size-1:BuJ5oK3L",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-01-samples-40-epochs-1-batch-size-1:BuJJvs7V",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-0-01-samples-80-epochs-1-batch-size-1:BuJJiBmO",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-1-samples-10-epochs-1-batch-size-1:BuJ4LuUJ",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-1-samples-20-epochs-1-batch-size-1:BuJ6ZTZC",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-1-samples-40-epochs-1-batch-size-1:BuKVEtv3",
+        cost=(0.2, 0.8),
+    ),
+    Endpoint(
+        "openai",
+        "ft:gpt-4.1-nano-2025-04-14:personal:lr-1-samples-80-epochs-1-batch-size-1:BuJKYx3t",
+        cost=(0.2, 0.8),
+    ),
 ]
 
 ENDPOINTS_WITH_SEED = []
