@@ -31,13 +31,13 @@ logger = logging.getLogger("tinychange")
 
 
 class TinyChangeConfig:
-    seed: int | None = 0
     enable_random_noise: bool = True
     enable_weight_pruning: bool = True
-    enable_finetuning: bool = False
+    enable_finetuning: bool = True
     enable_lora_finetuning: bool = True
     enable_quantization: bool = True
 
+    seed: int | None = 0
     random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
     weight_pruning_magnitude_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
     weight_pruning_random_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
@@ -84,6 +84,10 @@ class TinyChange:
             os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
         self.tasks = []
+        if self.config.enable_quantization:
+            self.tasks.extend(
+                [self.quantize(method) for method in self.config.quantization_methods]
+            )
         if self.config.enable_random_noise:
             self.tasks.extend(
                 [self.random_noise(scale) for scale in self.config.random_noise_scale]
@@ -123,10 +127,6 @@ class TinyChange:
         if self.config.enable_lora_finetuning:
             self.tasks.extend(generate_finetuning_tasks(use_lora=True))
 
-        if self.config.enable_quantization:
-            self.tasks.extend(
-                [self.quantize(method) for method in self.config.quantization_methods]
-            )
         self._task_index = 0
 
     @property
