@@ -85,6 +85,7 @@ def job_exists(
 
     Return a tuple of (exists, status, name of finetuned model).
     """
+    matching_jobs = []
     for job in existing_jobs:
         if all(
             (
@@ -95,8 +96,17 @@ def job_exists(
                 job.hyperparameters.n_epochs == n_epochs,
             )
         ):
-            return True, job.status, job.fine_tuned_model
-    return False, None, None
+            matching_jobs.append(job)
+
+    if not matching_jobs:
+        return False, None, None
+    # In case there are multiple jobs, we return only the best one, based on its status:
+    # succeeded > running > pending > failed
+    best_job = max(
+        matching_jobs,
+        key=lambda job: {"succeeded": 0, "running": 1, "pending": 2, "failed": 3}[job.status],
+    )
+    return True, best_job.status, best_job.fine_tuned_model
 
 
 def find_file_id(
