@@ -157,19 +157,31 @@ def vllm_batch_inference(
     return target_output.outputs[0]
 
 
-def variance_with_random_traffic(
+def vllm_time_series_random_traffic(
     prompt: str,
     model_path: str,
     other_prompts: list[str],
     batch_size: int = 16,
     n_inferences: int = 200,
 ):
+    """
+    Return logprobs over time for the first inference token of a target prompt mixed with random traffic.
+
+    Args:
+        prompt: The target prompt to track
+        model_path: Path or name of a vLLM-compatible model
+        other_prompts: List of other prompts to mix with the target prompt
+        batch_size: Number of prompts to generate in each batch
+        n_inferences: Number of inferences to run
+    Returns:
+        List of logprobs over time for the first inference token of the target prompt
+    """
     # enforce_eager=True just to run faster without the CUDA graph optimization step
     llm = LLM(model=model_path, enforce_eager=True)
 
     all_logprobs = []
 
-    for i in range(n_inferences):
+    for _ in range(n_inferences):
         traffic_prompts = random.sample(other_prompts, batch_size - 1)
         target_position = random.randint(0, batch_size - 1)
         batch_prompts = (
@@ -178,7 +190,7 @@ def variance_with_random_traffic(
         result = vllm_batch_inference(llm, batch_prompts, target_position)
         all_logprobs.append(result.logprobs[0])
 
-    plot_logprobs_over_time(all_logprobs, prompt)
+    return all_logprobs
 
 
 def plot_logprobs_over_time(all_logprobs, prompt):
@@ -232,4 +244,5 @@ if __name__ == "__main__":
     prompt = "x"
     model_path = "Qwen/Qwen2.5-0.5B-Instruct"
     other_prompts = [item["conversation"][0]["content"] for item in dataset]
-    variance_with_random_traffic(prompt, model_path, other_prompts)
+    logprobs = vllm_time_series_random_traffic(prompt, model_path, other_prompts)
+    plot_logprobs_over_time(logprobs, prompt)
