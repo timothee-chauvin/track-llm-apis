@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import random
 from collections.abc import Awaitable, Callable
@@ -166,3 +167,33 @@ def load_lmsys_chat_1m(
     assert all(s["conversation"][0]["role"] == "user" for s in dataset)
     assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)
     return dataset
+
+
+def slugify(s: str, max_length: int = 50, hash_length: int = 8) -> str:
+    """
+    Convert a string to a slugified version suitable for Linux filenames.
+
+    Special characters are hex-encoded to preserve information while keeping
+    the filename safe. For example, "|" becomes "-x7c-".
+
+    Args:
+        s: The input string to slugify
+        max_length: Maximum length of the output (default: 50)
+
+    Returns:
+        A slugified string safe for use as a Linux filename
+    """
+    string_hash = hashlib.md5(s.encode("utf-8")).hexdigest()[:hash_length]
+    slug = ""
+
+    for char in s:
+        if char.isalnum() or char in "._-":
+            slug += char
+        elif char == " ":
+            slug += "-"
+        else:
+            slug += f"-x{ord(char):02x}-"
+
+    slug = slug[:max_length]
+
+    return slug + "_" + string_hash
