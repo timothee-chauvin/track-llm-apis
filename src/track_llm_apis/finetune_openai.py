@@ -100,12 +100,24 @@ def job_exists(
 
     if not matching_jobs:
         return False, None, None
+
     # In case there are multiple jobs, we return only the best one, based on its status:
-    # succeeded > running > pending > failed
-    best_job = max(
-        matching_jobs,
-        key=lambda job: {"succeeded": 0, "running": 1, "pending": 2, "failed": 3}[job.status],
-    )
+    # "succeeded" > "running" = other > "pending" > "failed"
+    def job_score(job: Any) -> int:
+        match job.status:
+            case "succeeded":
+                return 3
+            case "running":
+                return 2
+            case "pending":
+                return 1
+            case "failed":
+                return 0
+            case _:
+                # Other statuses are considered to probably be akin to running
+                return 2
+
+    best_job = max(matching_jobs, key=job_score)
     return True, best_job.status, best_job.fine_tuned_model
 
 
