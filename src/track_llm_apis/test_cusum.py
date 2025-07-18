@@ -2,6 +2,7 @@ import json
 import random
 
 import numpy as np
+import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -9,6 +10,7 @@ from vllm import LLM, SamplingParams
 
 from track_llm_apis.config import Config
 from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_chat_1m
+from track_llm_apis.util import slugify
 
 logger = Config.logger
 
@@ -155,29 +157,79 @@ def vllm_batch_inference(
     return target_output.outputs[0]
 
 
-def variance_with_random_traffic():
-    batch_size = 16
-    target_prompt = "Hello, how are you?"
-    n_inferences = 10
-    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-
-    dataset = load_lmsys_chat_1m(
-        gpt4_filter=True, redacted_filter=True, flagged_filter=True, first_turn_only=True
-    )
+def variance_with_random_traffic(
+    prompt: str,
+    model_path: str,
+    other_prompts: list[str],
+    batch_size: int = 16,
+    n_inferences: int = 200,
+):
     # enforce_eager=True just to run faster without the CUDA graph optimization step
-    llm = LLM(model=model_name, enforce_eager=True)
-    user_prompts = [item["conversation"][0]["content"] for item in dataset]
+    llm = LLM(model=model_path, enforce_eager=True)
+
+    all_logprobs = []
+
     for i in range(n_inferences):
-        traffic_prompts = random.sample(user_prompts, batch_size - 1)
+        traffic_prompts = random.sample(other_prompts, batch_size - 1)
         target_position = random.randint(0, batch_size - 1)
         batch_prompts = (
-            traffic_prompts[:target_position] + [target_prompt] + traffic_prompts[target_position:]
+            traffic_prompts[:target_position] + [prompt] + traffic_prompts[target_position:]
         )
         result = vllm_batch_inference(llm, batch_prompts, target_position)
-        for token_id, logprobs in result.logprobs[0].items():
-            print(token_id, logprobs.logprob, logprobs.decoded_token)
+        all_logprobs.append(result.logprobs[0])
+
+    plot_logprobs_over_time(all_logprobs, prompt)
+
+
+def plot_logprobs_over_time(all_logprobs, prompt):
+    """Plot logprobs over time for all tokens that appear in the series."""
+    # Collect all unique tokens
+    all_tokens = set()
+    for logprob_dict in all_logprobs:
+        all_tokens.update(logprob_dict.keys())
+
+    fig = go.Figure()
+
+    # For each token, create its time series
+    for token_id in sorted(all_tokens):
+        logprob_series = []
+
+        for logprob_dict in all_logprobs:
+            if token_id in logprob_dict:
+                logprob_obj = logprob_dict[token_id]
+                decoded_token = logprob_obj.decoded_token
+                logprob_series.append(logprob_obj.logprob)
+            else:
+                logprob_series.append(None)
+
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(all_logprobs))),
+                y=logprob_series,
+                mode="lines+markers",
+                name=decoded_token,
+                connectgaps=False,
+            )
+        )
+
+    prompt_slug = slugify(prompt, max_length=50, hash_length=8)
+
+    fig.update_layout(
+        title=f"Logprobs Over Time - {prompt_slug}",
+        xaxis_title="Iteration",
+        yaxis_title="Log Probability",
+        template="plotly_white",
+    )
+
+    fig.show()
 
 
 if __name__ == "__main__":
     # asyncio.run(main())
-    variance_with_random_traffic()
+    dataset = load_lmsys_chat_1m(
+        gpt4_filter=True, redacted_filter=True, flagged_filter=True, first_turn_only=True
+    )
+    prompt = "x"
+    model_path = "Qwen/Qwen2.5-0.5B-Instruct"
+    other_prompts = [item["conversation"][0]["content"] for item in dataset]
+    variance_with_random_traffic(prompt, model_path, other_prompts)
