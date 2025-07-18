@@ -34,11 +34,6 @@ BATCH_SIZE = 1
 DATASET_NAME = "lmsys-chat-1m"
 
 
-TESTING = False
-if TESTING:
-    MODELS = ["gpt-4.1-nano-2025-04-14"]
-
-
 def file_name(sample_size: int) -> str:
     return f"{DATASET_NAME}_{sample_size}_seed={Config.seed}.jsonl"
 
