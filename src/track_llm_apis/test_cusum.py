@@ -21,46 +21,6 @@ random.seed(Config.seed)
 np.random.seed(Config.seed)
 
 
-async def main():
-    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    config = TinyChangeConfig()
-    if config.enable_finetuning or config.enable_lora_finetuning:
-        config.finetuning_dataset = load_lmsys_chat_1m()
-    tiny_change = TinyChange(model, tokenizer, config)
-
-    # Get original model logprobs for comparison
-    original_logprobs = get_logprobs(model, tokenizer, "x")
-    print_logprobs_summary(original_logprobs, tokenizer, "Original model")
-
-    kl_divergences = {}
-
-    # Synchronous iteration for testing
-    async_iter = tiny_change.__aiter__()
-    try:
-        while True:
-            variant = await async_iter.__anext__()
-            logger.info(f"Generated variant: ({variant.model_hash})")
-            logger.info(json.dumps(variant.description, indent=2))
-
-            variant_logprobs = get_logprobs(variant.model, tokenizer, "x")
-            print_logprobs_summary(variant_logprobs, tokenizer, f"Variant {variant.model_hash}")
-
-            kl_div = compute_kl_divergence(original_logprobs, variant_logprobs)
-
-            description_key = json.dumps(variant.description, separators=(",", ":"))
-            kl_divergences[description_key] = kl_div.item()
-
-            logger.info(f"KL divergence: {kl_div.item():g}")
-
-    except StopAsyncIteration:
-        logger.info("All variants processed")
-        logger.info("KL Divergences summary:")
-        for desc, kl in kl_divergences.items():
-            logger.info(f"  {desc}: {kl:g}")
-
-
 def get_logprobs(model, tokenizer, prompt):
     """Get log probabilities for the first generated token."""
     full_prompt = tokenizer.apply_chat_template(
@@ -234,6 +194,46 @@ def plot_logprobs_over_time(all_logprobs, prompt):
     )
 
     fig.show()
+
+
+async def main():
+    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    config = TinyChangeConfig()
+    if config.enable_finetuning or config.enable_lora_finetuning:
+        config.finetuning_dataset = load_lmsys_chat_1m()
+    tiny_change = TinyChange(model, tokenizer, config)
+
+    # Get original model logprobs for comparison
+    original_logprobs = get_logprobs(model, tokenizer, "x")
+    print_logprobs_summary(original_logprobs, tokenizer, "Original model")
+
+    kl_divergences = {}
+
+    # Synchronous iteration for testing
+    async_iter = tiny_change.__aiter__()
+    try:
+        while True:
+            variant = await async_iter.__anext__()
+            logger.info(f"Generated variant: ({variant.model_hash})")
+            logger.info(json.dumps(variant.description, indent=2))
+
+            variant_logprobs = get_logprobs(variant.model, tokenizer, "x")
+            print_logprobs_summary(variant_logprobs, tokenizer, f"Variant {variant.model_hash}")
+
+            kl_div = compute_kl_divergence(original_logprobs, variant_logprobs)
+
+            description_key = json.dumps(variant.description, separators=(",", ":"))
+            kl_divergences[description_key] = kl_div.item()
+
+            logger.info(f"KL divergence: {kl_div.item():g}")
+
+    except StopAsyncIteration:
+        logger.info("All variants processed")
+        logger.info("KL Divergences summary:")
+        for desc, kl in kl_divergences.items():
+            logger.info(f"  {desc}: {kl:g}")
 
 
 if __name__ == "__main__":
