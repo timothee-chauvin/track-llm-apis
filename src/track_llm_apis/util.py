@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
+import torch
 from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
 
@@ -201,3 +202,11 @@ def slugify(s: str, max_length: int = 50, hash_length: int = 8) -> str:
         slug += "_" + string_hash
 
     return slug
+
+
+def available_gpu_memory_fraction():
+    """
+    Calculate the fraction of GPU memory that is currently available.
+    """
+    free, total = torch.cuda.mem_get_info()
+    return free / total

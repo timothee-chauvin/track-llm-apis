@@ -14,7 +14,7 @@ from vllm import LLM, SamplingParams
 
 from track_llm_apis.config import Config
 from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_chat_1m
-from track_llm_apis.util import slugify
+from track_llm_apis.util import available_gpu_memory_fraction, slugify, trim_to_length
 
 logger = Config.logger
 
@@ -123,8 +123,8 @@ def vllm_batch_inference(
 
 def vllm_time_series_random_traffic(
     prompt: str,
-    model_path: str,
     other_prompts: list[str],
+    model_path: str,
     batch_size: int = 16,
     n_inferences: int = 200,
 ):
@@ -141,7 +141,12 @@ def vllm_time_series_random_traffic(
         List of logprobs over time for the first inference token of the target prompt
     """
     # enforce_eager=True just to run faster without the CUDA graph optimization step
-    llm = LLM(model=model_path, enforce_eager=True)
+    available_memory_fraction = available_gpu_memory_fraction()
+    llm = LLM(
+        model=model_path,
+        enforce_eager=True,
+        gpu_memory_utilization=0.95 * available_memory_fraction,
+    )
 
     all_logprobs = []
 
@@ -162,11 +167,11 @@ def plot_logprobs_over_time(
 ):
     """Plot logprobs over time for all tokens that appear in the series."""
     prompt_slug = slugify(prompt, max_length=50, hash_length=8)
-    prompt_dir = Config.plots_dir / "time_series_local" / prompt_slug / base_model_name
+    model_name_slug = slugify(base_model_name, hash_length=0)
+    prompt_dir = Config.plots_dir / "time_series_local" / prompt_slug / model_name_slug
     os.makedirs(prompt_dir, exist_ok=True)
-    description_slug = slugify(
-        json.dumps(variant_description, separators=(",", ":")), max_length=50, hash_length=8
-    )
+    description_str = json.dumps(variant_description, separators=(",", ":"))
+    description_slug = slugify(description_str, max_length=50, hash_length=8)
     filename = f"{description_slug}.html"
 
     # Collect all unique tokens
@@ -198,8 +203,9 @@ def plot_logprobs_over_time(
             )
         )
 
+    prompt_preview = repr(trim_to_length(prompt, 50))
     fig.update_layout(
-        title=f"Logprobs Over Time - {prompt_slug}",
+        title=f"Top Token Logprobs Over Time - {variant_description}<br>Prompt: {prompt_preview}",
         xaxis_title="Iteration",
         yaxis_title="Log Probability",
         template="plotly_white",
@@ -229,8 +235,14 @@ async def main():
             # Export the model to a temporary directory in huggingface format for use by vLLM
             with tempfile.TemporaryDirectory() as temp_dir:
                 variant.model.save_pretrained(temp_dir)
+                tokenizer.save_pretrained(temp_dir)
+
                 logprobs = vllm_time_series_random_traffic(
-                    prompt, temp_dir, other_prompts, batch_size=16, n_inferences=200
+                    prompt=prompt,
+                    other_prompts=other_prompts,
+                    model_path=temp_dir,
+                    batch_size=16,
+                    n_inferences=200,
                 )
                 plot_logprobs_over_time(logprobs, prompt, model_name, variant.description)
 
