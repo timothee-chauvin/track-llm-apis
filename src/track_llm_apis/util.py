@@ -178,12 +178,12 @@ def slugify(s: str, max_length: int = 50, hash_length: int = 8) -> str:
 
     Args:
         s: The input string to slugify
-        max_length: Maximum length of the output (default: 50)
+        max_length: Maximum length of the output without the hash (default: 50)
+        hash_length: Length of the hash to append to the output (default: 8)
 
     Returns:
         A slugified string safe for use as a Linux filename
     """
-    string_hash = hashlib.md5(s.encode("utf-8")).hexdigest()[:hash_length]
     slug = ""
 
     for char in s:
@@ -196,4 +196,8 @@ def slugify(s: str, max_length: int = 50, hash_length: int = 8) -> str:
 
     slug = slug[:max_length]
 
-    return slug + "_" + string_hash
+    if hash_length > 0:
+        string_hash = hashlib.md5(s.encode("utf-8")).hexdigest()[:hash_length]
+        slug += "_" + string_hash
+
+    return slug
