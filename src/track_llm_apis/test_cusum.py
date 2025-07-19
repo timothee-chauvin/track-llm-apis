@@ -1,5 +1,9 @@
+import asyncio
 import json
+import os
 import random
+import tempfile
+from typing import Any
 
 import numpy as np
 import plotly.graph_objects as go
@@ -153,8 +157,18 @@ def vllm_time_series_random_traffic(
     return all_logprobs
 
 
-def plot_logprobs_over_time(all_logprobs, prompt):
+def plot_logprobs_over_time(
+    all_logprobs, prompt: str, base_model_name: str, variant_description: dict[str, Any]
+):
     """Plot logprobs over time for all tokens that appear in the series."""
+    prompt_slug = slugify(prompt, max_length=50, hash_length=8)
+    prompt_dir = Config.plots_dir / "time_series_local" / prompt_slug / base_model_name
+    os.makedirs(prompt_dir, exist_ok=True)
+    description_slug = slugify(
+        json.dumps(variant_description, separators=(",", ":")), max_length=50, hash_length=8
+    )
+    filename = f"{description_slug}.html"
+
     # Collect all unique tokens
     all_tokens = set()
     for logprob_dict in all_logprobs:
@@ -184,8 +198,6 @@ def plot_logprobs_over_time(all_logprobs, prompt):
             )
         )
 
-    prompt_slug = slugify(prompt, max_length=50, hash_length=8)
-
     fig.update_layout(
         title=f"Logprobs Over Time - {prompt_slug}",
         xaxis_title="Iteration",
@@ -193,23 +205,18 @@ def plot_logprobs_over_time(all_logprobs, prompt):
         template="plotly_white",
     )
 
-    fig.show()
+    fig.write_html(prompt_dir / filename)
 
 
 async def main():
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+    prompt = "x"
     model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = TinyChangeConfig()
-    if config.enable_finetuning or config.enable_lora_finetuning:
-        config.finetuning_dataset = load_lmsys_chat_1m()
+    config.finetuning_dataset = load_lmsys_chat_1m()
+    other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]
     tiny_change = TinyChange(model, tokenizer, config)
-
-    # Get original model logprobs for comparison
-    original_logprobs = get_logprobs_transformers(model, tokenizer, "x")
-    print_logprobs_summary(original_logprobs, tokenizer, "Original model")
-
-    kl_divergences = {}
 
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
@@ -219,30 +226,17 @@ async def main():
             logger.info(f"Generated variant: ({variant.model_hash})")
             logger.info(json.dumps(variant.description, indent=2))
 
-            variant_logprobs = get_logprobs_transformers(variant.model, tokenizer, "x")
-            print_logprobs_summary(variant_logprobs, tokenizer, f"Variant {variant.model_hash}")
-
-            kl_div = compute_kl_divergence(original_logprobs, variant_logprobs)
-
-            description_key = json.dumps(variant.description, separators=(",", ":"))
-            kl_divergences[description_key] = kl_div.item()
-
-            logger.info(f"KL divergence: {kl_div.item():g}")
+            # Export the model to a temporary directory in huggingface format for use by vLLM
+            with tempfile.TemporaryDirectory() as temp_dir:
+                variant.model.save_pretrained(temp_dir)
+                logprobs = vllm_time_series_random_traffic(
+                    prompt, temp_dir, other_prompts, batch_size=16, n_inferences=200
+                )
+                plot_logprobs_over_time(logprobs, prompt, model_name, variant.description)
 
     except StopAsyncIteration:
         logger.info("All variants processed")
-        logger.info("KL Divergences summary:")
-        for desc, kl in kl_divergences.items():
-            logger.info(f"  {desc}: {kl:g}")
 
 
 if __name__ == "__main__":
-    # asyncio.run(main())
-    dataset = load_lmsys_chat_1m(
-        gpt4_filter=True, redacted_filter=True, flagged_filter=True, first_turn_only=True
-    )
-    prompt = "x"
-    model_path = "Qwen/Qwen2.5-0.5B-Instruct"
-    other_prompts = [item["conversation"][0]["content"] for item in dataset]
-    logprobs = vllm_time_series_random_traffic(prompt, model_path, other_prompts)
-    plot_logprobs_over_time(logprobs, prompt)
+    asyncio.run(main())
