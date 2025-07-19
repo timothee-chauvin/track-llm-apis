@@ -163,15 +163,25 @@ def vllm_time_series_random_traffic(
 
 
 def plot_logprobs_over_time(
-    all_logprobs, prompt: str, base_model_name: str, variant_description: dict[str, Any]
+    all_logprobs,
+    prompt: str,
+    base_model_name: str,
+    variant_description: dict[str, Any],
+    batch_size: int,
 ):
     """Plot logprobs over time for all tokens that appear in the series."""
     prompt_slug = slugify(prompt, max_length=50, hash_length=8)
     model_name_slug = slugify(base_model_name, hash_length=0)
-    prompt_dir = Config.plots_dir / "time_series_local" / prompt_slug / model_name_slug
+    prompt_dir = (
+        Config.plots_dir
+        / "time_series_local"
+        / prompt_slug
+        / model_name_slug
+        / f"batch_size={batch_size}"
+    )
     os.makedirs(prompt_dir, exist_ok=True)
-    description_str = json.dumps(variant_description, separators=(",", ":"))
-    description_slug = slugify(description_str, max_length=50, hash_length=8)
+    description_str = "_".join(str(v) for v in variant_description.values())
+    description_slug = slugify(description_str, max_length=100, hash_length=8)
     filename = f"{description_slug}.html"
 
     # Collect all unique tokens
@@ -244,7 +254,13 @@ async def main():
                     batch_size=16,
                     n_inferences=200,
                 )
-                plot_logprobs_over_time(logprobs, prompt, model_name, variant.description)
+                plot_logprobs_over_time(
+                    all_logprobs=logprobs,
+                    prompt=prompt,
+                    base_model_name=model_name,
+                    variant_description=variant.description,
+                    batch_size=16,
+                )
 
     except StopAsyncIteration:
         logger.info("All variants processed")
