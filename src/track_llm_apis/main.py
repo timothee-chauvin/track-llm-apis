@@ -368,6 +368,7 @@ ENDPOINTS_EXTENDED = [
     Endpoint(
         "openrouter", "nousresearch/hermes-2-pro-llama-3-8b", "lambda/bf16", cost=(0.025, 0.04)
     ),
+    Endpoint("openrouter", "meta-llama/llama-3.3-70b-instruct", "crusoe/int8", cost=(0.039, 0.12)),
     Endpoint("openrouter", "mistralai/mistral-nemo", "nebius/fp8", cost=(0.04, 0.12)),
     Endpoint(
         "openrouter", "meta-llama/llama-3.2-11b-vision-instruct", "lambda/bf16", cost=(0.05, 0.05)
@@ -429,6 +430,7 @@ ENDPOINTS_EXTENDED = [
         "openrouter", "deepseek/deepseek-r1-distill-llama-70b", "nebius/fp8", cost=(0.25, 0.75)
     ),
     Endpoint("openrouter", "qwen/qwen2.5-vl-72b-instruct", "nebius/fp8", cost=(0.25, 0.75)),
+    Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "crusoe/fp8", cost=(0.28, 1.15)),
     Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "klusterai", cost=(0.28, 1.15)),
     Endpoint("openrouter", "qwen/qwen-2.5-vl-7b-instruct", "klusterai", cost=(0.3, 0.3)),
     Endpoint("openrouter", "x-ai/grok-3-mini", "xai", cost=(0.3, 0.5)),
@@ -441,7 +443,9 @@ ENDPOINTS_EXTENDED = [
     Endpoint("openrouter", "openai/gpt-4.1-mini", "openai", cost=(0.4, 1.6)),
     Endpoint("openrouter", "deepseek/deepseek-chat", "nebius/fp8", cost=(0.5, 1.5)),
     Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "nebius/fp8", cost=(0.5, 1.5)),
+    Endpoint("openrouter", "openai/gpt-3.5-turbo", "openai", cost=(0.5, 1.5)),
     Endpoint("openrouter", "qwen/qwq-32b", "nebius/fp8", cost=(0.5, 1.5)),
+    Endpoint("openrouter", "deepseek/deepseek-r1-0528", "crusoe/fp8", cost=(0.5, 2.18)),
     Endpoint("openrouter", "deepseek/deepseek-r1-0528", "lambda/fp8", cost=(0.5, 2.18)),
     Endpoint("openrouter", "deepseek/deepseek-r1", "lambda/fp8", cost=(0.54, 2.18)),
     Endpoint("openrouter", "qwen/qwen2.5-vl-72b-instruct", "hyperbolic", cost=(0.6, 0.6)),
@@ -464,6 +468,7 @@ ENDPOINTS_EXTENDED = [
     Endpoint("openrouter", "qwen/qwq-32b", "fireworks", cost=(0.9, 0.9)),
     Endpoint("openrouter", "meta-llama/llama-3.1-405b-instruct", "nebius/fp8", cost=(1.0, 3.0)),
     Endpoint("openrouter", "nousresearch/hermes-3-llama-3.1-405b", "nebius/fp8", cost=(1.0, 3.0)),
+    Endpoint("openrouter", "deepseek/deepseek-chat-v3-0324", "hyperbolic/fp8", cost=(1.25, 1.25)),
     Endpoint("openrouter", "deepseek/deepseek-r1", "nebius/fast", cost=(2.0, 6.0)),
     Endpoint("openrouter", "openai/gpt-4.1", "openai", cost=(2.0, 8.0)),
     Endpoint("openrouter", "x-ai/grok-2-1212", "xai", cost=(2.0, 10.0)),
@@ -481,6 +486,7 @@ ENDPOINTS_EXTENDED = [
     Endpoint("openrouter", "deepseek/deepseek-r1-0528", "fireworks", cost=(3.0, 8.0)),
     Endpoint("openrouter", "x-ai/grok-3", "xai", cost=(3.0, 15.0)),
     Endpoint("openrouter", "x-ai/grok-3-beta", "xai", cost=(3.0, 15.0)),
+    Endpoint("openrouter", "x-ai/grok-4", "xai", cost=(3.0, 15.0)),
     Endpoint("openrouter", "openai/chatgpt-4o-latest", "openai", cost=(5.0, 15.0)),
     Endpoint("openrouter", "openai/gpt-4o-2024-05-13", "azure", cost=(5.0, 15.0)),
     Endpoint("openrouter", "openai/gpt-4o-2024-05-13", "openai", cost=(5.0, 15.0)),
