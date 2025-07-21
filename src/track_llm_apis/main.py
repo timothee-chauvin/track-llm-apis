@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import sqlite3
+from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -760,15 +761,18 @@ async def main_async(num_iterations: int, delay: float, store_results: bool = Fa
                 )
                 i += 1
 
-            costs = {
-                str(response.endpoint): response.cost
-                for response in sorted(responses, key=lambda x: x.cost, reverse=True)
-            }
+            costs_by_endpoint = defaultdict(float)
+            for response in responses:
+                costs_by_endpoint[str(response.endpoint)] += response.cost
+            costs_by_endpoint = dict(
+                sorted(costs_by_endpoint.items(), key=lambda x: x[1], reverse=True)
+            )
+
             logger.info("Costs breakdown:")
-            logger.info(json.dumps(costs, indent=2))
-            total_cost = sum(costs.values())
-            logger.info(f"Total cost: ${total_cost:.2e} ({(total_cost * 100):.2f} cents)")
-            logger.info(f"Total cost per year assuming 1 every hour: ${total_cost * 24 * 365:.2e}")
+            logger.info(json.dumps(costs_by_endpoint, indent=2))
+            total_cost = sum(costs_by_endpoint.values())
+            logger.info(f"Total cost: ${total_cost:.2g} ({(total_cost * 100):.2f} cents)")
+            logger.info(f"Total cost per year assuming 1 every hour: ${total_cost * 24 * 365:.2g}")
             logger.info(
                 f"Total errors: {sum(1 for response in responses if response.error)}/{len(responses)}"
             )
