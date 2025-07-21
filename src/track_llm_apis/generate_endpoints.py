@@ -27,12 +27,6 @@ async def fetch_model_endpoints(session, model_id):
             model_endpoints_without_logprobs = []
 
             for endpoint in endpoints:
-                # skip free models, which are often unavailable
-                if (
-                    endpoint["pricing"]["prompt"] == "0"
-                    and endpoint["pricing"]["completion"] == "0"
-                ):
-                    continue
                 endpoint_data = Endpoint(
                     source="openrouter",
                     name=model_id,
