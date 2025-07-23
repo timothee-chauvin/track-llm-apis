@@ -9,12 +9,18 @@ import numpy as np
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
 
 from track_llm_apis.config import Config
 from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_chat_1m
-from track_llm_apis.util import available_gpu_memory_fraction, slugify, trim_to_length
+from track_llm_apis.util import (
+    available_gpu_memory_fraction,
+    format_mmlu_prompt,
+    slugify,
+    trim_to_length,
+)
 
 logger = Config.logger
 
@@ -123,16 +129,46 @@ def vllm_batch_inference(
     return {
         "text": target_output.outputs[0].text,
         "logprobs": target_output.outputs[0].logprobs,
+        # todo n_input_tokens, n_output_tokens
     }
 
 
-def vllm_time_series_random_traffic(
+def vllm_inference(
+    llm: LLM,
+    prompts: list[str],
+    n_samples: int,
+    max_tokens: int,
+    temperature: float,
+):
+    sampling_params = SamplingParams(
+        n=n_samples,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    outputs = llm.generate(prompts, sampling_params)
+    return {
+        output.prompt: {
+            "input_tokens": len(output.prompt_token_ids),
+            "outputs": [
+                {
+                    "text": c.text,
+                    "output_tokens": len(c["token_ids"]),
+                }
+                for c in output.outputs
+            ],
+        }
+        for output in outputs
+    }
+
+
+def vllm_inference_random_traffic(
     llm: LLM,
     prompt: str,
     other_prompts: list[str],
-    batch_size: int = 16,
-    n_samples: int = 200,
-    max_tokens: int = 1,
+    batch_size: int,
+    n_samples: int,
+    max_tokens: int,
+    temperature: float,
 ):
     """
     Return `n_samples` completions for the first `max_tokens` inference tokens of a target prompt mixed with random traffic.
@@ -160,6 +196,7 @@ def vllm_time_series_random_traffic(
             batch_prompts=batch_prompts,
             target_position=target_position,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
         all_results.append(result)
 
@@ -252,6 +289,9 @@ async def main():
     tiny_change = TinyChange(model, tokenizer, config)
     all_data = {}
 
+    # Load the MMLU prompts
+    mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test")
+
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
     try:
@@ -262,11 +302,15 @@ async def main():
             else:
                 n_samples = 100
             if DEBUG:
-                n_samples //= 50
+                n_samples //= 100
             logger.info(f"Generated variant: ({variant.model_hash})")
             logger.info(json.dumps(variant.description, indent=2))
             variant_name = variant.name()
-            all_data[variant_name] = {}
+            all_data[variant_name] = {
+                "us": {},
+                "mmlu": {},
+                "gao2025": {},
+            }
 
             # Export the model to a temporary directory in huggingface format for use by vLLM
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -281,19 +325,31 @@ async def main():
                     gpu_memory_utilization=0.95 * available_memory_fraction,
                 )
 
+                # MMLU
+                results = vllm_inference(
+                    llm=llm,
+                    prompts=[format_mmlu_prompt(item) for item in mmlu],
+                    n_samples=n_samples,
+                    max_tokens=5,
+                    temperature=0.1,
+                )
+
+                all_data[variant_name]["mmlu"] = results
+
+                # Our prompts
                 for prompt in prompts:
-                    logger.info(f"Sampling for prompt: {prompt}")
-                    all_data[variant_name][prompt] = []
-                    results = vllm_time_series_random_traffic(
+                    all_data[variant_name]["us"][prompt] = []
+                    results = vllm_inference_random_traffic(
                         llm=llm,
                         prompt=prompt,
                         other_prompts=other_prompts,
                         batch_size=16,
                         n_samples=n_samples,
                         max_tokens=max_tokens,
+                        temperature=0.0,
                     )
                     for result in results:
-                        all_data[variant_name][prompt].append(
+                        all_data[variant_name]["us"][prompt].append(
                             {
                                 "text": result["text"],
                                 "logprobs": result["logprobs"],

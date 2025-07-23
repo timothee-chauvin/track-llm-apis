@@ -210,3 +210,9 @@ def available_gpu_memory_fraction():
     """
     free, total = torch.cuda.mem_get_info()
     return free / total
+
+
+def format_mmlu_prompt(mmlu_item: dict) -> str:
+    a, b, c, d = mmlu_item["choices"]
+    choices_str = f"A. {a}\nB. {b}\nC. {c}\nD. {d}"
+    return f"Answer the following multiple choice question. The entire content of your response should be of the following format: ‘ANSWER: $LETTER’ (without quotes) where LETTER is one of A,B,C,D.\n\n{mmlu_item['question']}\n\n{choices_str}"
