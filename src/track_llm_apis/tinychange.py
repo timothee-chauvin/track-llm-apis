@@ -60,6 +60,9 @@ class TinyChangeModel:
     model_hash: str
     model: Any
 
+    def name(self) -> str:
+        return json.dumps(self.description, separators=(",", ":"))
+
 
 class TinyChange:
     # TODO in order or random order
@@ -84,6 +87,8 @@ class TinyChange:
             os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
         self.tasks = []
+        # Start by always returning the unchanged model
+        self.tasks.append(self.get_unchanged())
         if self.config.enable_quantization:
             self.tasks.extend(
                 [self.quantize(method) for method in self.config.quantization_methods]

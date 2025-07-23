@@ -98,7 +98,7 @@ def vllm_batch_inference(
     target_position: int,
     max_tokens: int = 1,
     temperature: float = 0.0,
-    logprobs: int = 20,
+    logprobs_topk: int = 20,
 ) -> dict:
     """
     Perform vLLM inference on a target prompt mixed with simulated traffic within the batch.
@@ -109,57 +109,61 @@ def vllm_batch_inference(
         target_position: Position of the target prompt in the batch
         max_tokens: Maximum tokens to generate
         temperature: Sampling temperature
-        logprobs: Number of logprobs to return per token
+        logprobs_topk: Number of logprobs to return per token
+    Returns:
+        Dictionary of the form {text: str, logprobs: list[dict]} (one logprob dict per output token)
     """
     sampling_params = SamplingParams(
         max_tokens=max_tokens,
         temperature=temperature,
-        logprobs=logprobs,
+        logprobs=logprobs_topk,
     )
     outputs = llm.generate(batch_prompts, sampling_params)
     target_output = outputs[target_position]
-    return target_output.outputs[0]
+    return {
+        "text": target_output.outputs[0].text,
+        "logprobs": target_output.outputs[0].logprobs,
+    }
 
 
 def vllm_time_series_random_traffic(
+    llm: LLM,
     prompt: str,
     other_prompts: list[str],
-    model_path: str,
     batch_size: int = 16,
-    n_inferences: int = 200,
+    n_samples: int = 200,
+    max_tokens: int = 1,
 ):
     """
-    Return logprobs over time for the first inference token of a target prompt mixed with random traffic.
+    Return `n_samples` completions for the first `max_tokens` inference tokens of a target prompt mixed with random traffic.
 
     Args:
+        llm: initialized vLLM model
         prompt: The target prompt to track
-        model_path: Path or name of a vLLM-compatible model
         other_prompts: List of other prompts to mix with the target prompt
         batch_size: Number of prompts to generate in each batch
-        n_inferences: Number of inferences to run
+        n_samples: Number of times to run the inference
+        max_tokens: Number of output tokens to generate
     Returns:
-        List of logprobs over time for the first inference token of the target prompt
+        List of dictionaries of the form {text: str, logprobs: list[dict]}, one for each sample
     """
-    # enforce_eager=True just to run faster without the CUDA graph optimization step
-    available_memory_fraction = available_gpu_memory_fraction()
-    llm = LLM(
-        model=model_path,
-        enforce_eager=True,
-        gpu_memory_utilization=0.95 * available_memory_fraction,
-    )
+    all_results = []
 
-    all_logprobs = []
-
-    for _ in range(n_inferences):
+    for _ in range(n_samples):
         traffic_prompts = random.sample(other_prompts, batch_size - 1)
         target_position = random.randint(0, batch_size - 1)
         batch_prompts = (
             traffic_prompts[:target_position] + [prompt] + traffic_prompts[target_position:]
         )
-        result = vllm_batch_inference(llm, batch_prompts, target_position)
-        all_logprobs.append(result.logprobs[0])
+        result = vllm_batch_inference(
+            llm=llm,
+            batch_prompts=batch_prompts,
+            target_position=target_position,
+            max_tokens=max_tokens,
+        )
+        all_results.append(result)
 
-    return all_logprobs
+    return all_results
 
 
 def plot_logprobs_over_time(
@@ -225,45 +229,82 @@ def plot_logprobs_over_time(
 
 
 async def main():
+    max_tokens = 50
+    DEBUG = True
+
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-    prompt = "x"
+    prompts = Config.prompts + Config.prompts_extended
+    output_dir = Config.sampling_data_dir
+    os.makedirs(output_dir, exist_ok=True)
+
     model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = TinyChangeConfig()
     config.finetuning_dataset = load_lmsys_chat_1m()
     other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]
+    if DEBUG:
+        max_tokens = 5
+        config.enable_finetuning = False
+        config.enable_lora_finetuning = False
+        config.enable_weight_pruning = False
+        config.enable_quantization = False
+        config.random_noise_scale = [0.1]
     tiny_change = TinyChange(model, tokenizer, config)
+    all_data = {}
 
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
     try:
         while True:
             variant = await async_iter.__anext__()
+            if variant.description["type"] == "unchanged":
+                n_samples = 1000
+            else:
+                n_samples = 100
+            if DEBUG:
+                n_samples //= 50
             logger.info(f"Generated variant: ({variant.model_hash})")
             logger.info(json.dumps(variant.description, indent=2))
+            variant_name = variant.name()
+            all_data[variant_name] = {}
 
             # Export the model to a temporary directory in huggingface format for use by vLLM
             with tempfile.TemporaryDirectory() as temp_dir:
                 variant.model.save_pretrained(temp_dir)
                 tokenizer.save_pretrained(temp_dir)
 
-                logprobs = vllm_time_series_random_traffic(
-                    prompt=prompt,
-                    other_prompts=other_prompts,
-                    model_path=temp_dir,
-                    batch_size=16,
-                    n_inferences=200,
+                # enforce_eager=True just to run faster without the CUDA graph optimization step
+                available_memory_fraction = available_gpu_memory_fraction()
+                llm = LLM(
+                    model=temp_dir,
+                    enforce_eager=True,
+                    gpu_memory_utilization=0.95 * available_memory_fraction,
                 )
-                plot_logprobs_over_time(
-                    all_logprobs=logprobs,
-                    prompt=prompt,
-                    base_model_name=model_name,
-                    variant_description=variant.description,
-                    batch_size=16,
-                )
+
+                for prompt in prompts:
+                    logger.info(f"Sampling for prompt: {prompt}")
+                    all_data[variant_name][prompt] = []
+                    results = vllm_time_series_random_traffic(
+                        llm=llm,
+                        prompt=prompt,
+                        other_prompts=other_prompts,
+                        batch_size=16,
+                        n_samples=n_samples,
+                        max_tokens=max_tokens,
+                    )
+                    for result in results:
+                        all_data[variant_name][prompt].append(
+                            {
+                                "text": result["text"],
+                                "logprobs": result["logprobs"],
+                            }
+                        )
 
     except StopAsyncIteration:
         logger.info("All variants processed")
+
+    with open(output_dir / "all_data.json", "w") as f:
+        json.dump(all_data, f, indent=2)
 
 
 if __name__ == "__main__":
