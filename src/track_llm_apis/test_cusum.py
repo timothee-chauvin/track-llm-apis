@@ -3,6 +3,7 @@ import json
 import os
 import random
 import tempfile
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import numpy as np
@@ -12,7 +13,7 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from torch.multiprocessing.reductions import reduce_tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from vllm import LLM, SamplingParams
+from vllm import LLM, CompletionOutput, RequestOutput, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
 
 from track_llm_apis.config import Config
@@ -33,6 +34,57 @@ os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
 random.seed(Config.seed)
 np.random.seed(Config.seed)
+
+
+@dataclass
+class SamplingOutput:
+    text: str
+    output_tokens: int
+    logprobs: list[dict] | None
+
+    @classmethod
+    def from_completion_output(cls, completion_output: CompletionOutput):
+        if completion_output.logprobs is None:
+            logprobs_dict = None
+        else:
+            logprobs_dict = [
+                {k: v.__dict__ for k, v in logprobs.items()}
+                for logprobs in completion_output.logprobs
+            ]
+        return cls(
+            text=completion_output.text,
+            output_tokens=len(completion_output.token_ids),
+            logprobs=logprobs_dict,
+        )
+
+
+@dataclass
+class PromptAndOutputs:
+    prompt: str
+    input_tokens: int
+    outputs: list[SamplingOutput]
+
+    @classmethod
+    def from_request_output(cls, request_output: RequestOutput):
+        return cls(
+            prompt=request_output.prompt,
+            input_tokens=len(request_output.prompt_token_ids),
+            outputs=[
+                SamplingOutput.from_completion_output(output) for output in request_output.outputs
+            ],
+        )
+
+    @classmethod
+    def from_multiple(cls, prompts_and_outputs: list["PromptAndOutputs"]):
+        assert all(p.prompt == prompts_and_outputs[0].prompt for p in prompts_and_outputs)
+        assert all(
+            p.input_tokens == prompts_and_outputs[0].input_tokens for p in prompts_and_outputs
+        )
+        return cls(
+            prompt=prompts_and_outputs[0].prompt,
+            input_tokens=prompts_and_outputs[0].input_tokens,
+            outputs=[output for p in prompts_and_outputs for output in p.outputs],
+        )
 
 
 class WorkerExtension:
@@ -92,13 +144,21 @@ def load_model_to_vllm(llm: LLM | None, model, tokenizer):
 
             # Load into vLLM
             available_memory_fraction = available_gpu_memory_fraction()
-            llm = LLM(
-                model=temp_dir,
-                enforce_eager=True,
-                gpu_memory_utilization=0.95 * available_memory_fraction,
-                worker_extension_cls="__main__.WorkerExtension",
-            )
-            return llm
+            vllm_memory = 0.2 * available_memory_fraction
+            while True:
+                try:
+                    llm = LLM(
+                        model=temp_dir,
+                        enforce_eager=True,
+                        gpu_memory_utilization=vllm_memory,
+                        worker_extension_cls="__main__.WorkerExtension",
+                    )
+                    return llm
+                except RuntimeError:
+                    vllm_memory += 0.1 * available_memory_fraction
+                    if vllm_memory > available_memory_fraction:
+                        raise RuntimeError("Failed to load model into vLLM")
+
     else:
         # Subsequent times: update weights via IPC
         logger.info("Creating IPC handles from model weights...")
@@ -178,41 +238,6 @@ def print_logprobs(model, tokenizer, prompt):
         print(f"\nActually generated token: '{generated_token}' (ID: {generated_token_id})")
 
 
-def vllm_batch_inference(
-    llm: LLM,
-    batch_prompts: list[str],
-    target_position: int,
-    max_tokens: int = 1,
-    temperature: float = 0.0,
-    logprobs_topk: int = 20,
-) -> dict:
-    """
-    Perform vLLM inference on a target prompt mixed with simulated traffic within the batch.
-
-    Args:
-        llm: already initialized vLLM model
-        batch_prompts: List of prompts in the batch
-        target_position: Position of the target prompt in the batch
-        max_tokens: Maximum tokens to generate
-        temperature: Sampling temperature
-        logprobs_topk: Number of logprobs to return per token
-    Returns:
-        Dictionary of the form {text: str, logprobs: list[dict]} (one logprob dict per output token)
-    """
-    sampling_params = SamplingParams(
-        max_tokens=max_tokens,
-        temperature=temperature,
-        logprobs=logprobs_topk,
-    )
-    outputs = llm.generate(batch_prompts, sampling_params)
-    target_output = outputs[target_position]
-    return {
-        "text": target_output.outputs[0].text,
-        "logprobs": target_output.outputs[0].logprobs,
-        # todo n_input_tokens, n_output_tokens
-    }
-
-
 def vllm_inference(
     llm: LLM,
     prompts: list[str],
@@ -226,22 +251,10 @@ def vllm_inference(
         temperature=temperature,
     )
     outputs = llm.generate(prompts, sampling_params)
-    return {
-        output.prompt: {
-            "input_tokens": len(output.prompt_token_ids),
-            "outputs": [
-                {
-                    "text": c.text,
-                    "output_tokens": len(c.token_ids),
-                }
-                for c in output.outputs
-            ],
-        }
-        for output in outputs
-    }
+    return [PromptAndOutputs.from_request_output(output) for output in outputs]
 
 
-def vllm_inference_random_traffic(
+def vllm_inference_random_traffic_one_prompt(
     llm: LLM,
     prompt: str,
     other_prompts: list[str],
@@ -249,7 +262,7 @@ def vllm_inference_random_traffic(
     n_samples: int,
     max_tokens: int,
     temperature: float,
-):
+) -> PromptAndOutputs:
     """
     Return `n_samples` completions for the first `max_tokens` inference tokens of a target prompt mixed with random traffic.
 
@@ -260,9 +273,12 @@ def vllm_inference_random_traffic(
         batch_size: Number of prompts to generate in each batch
         n_samples: Number of times to run the inference
         max_tokens: Number of output tokens to generate
-    Returns:
-        List of dictionaries of the form {text: str, logprobs: list[dict]}, one for each sample
     """
+    sampling_params = SamplingParams(
+        n=1,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
     all_results = []
 
     for _ in range(n_samples):
@@ -271,16 +287,44 @@ def vllm_inference_random_traffic(
         batch_prompts = (
             traffic_prompts[:target_position] + [prompt] + traffic_prompts[target_position:]
         )
-        result = vllm_batch_inference(
+
+        outputs = llm.generate(batch_prompts, sampling_params)
+        all_results.append(PromptAndOutputs.from_request_output(outputs[target_position]))
+    return PromptAndOutputs.from_multiple(all_results)
+
+
+def vllm_inference_random_traffic(
+    llm: LLM,
+    prompts: list[str],
+    other_prompts: list[str],
+    batch_size: int,
+    n_samples: int,
+    max_tokens: int,
+    temperature: float,
+) -> list[PromptAndOutputs]:
+    """
+    Return `n_samples` completions for the first `max_tokens` inference tokens of a list of prompts mixed with random traffic.
+
+    Args:
+        llm: initialized vLLM model
+        prompts: List of prompts to track
+        other_prompts: List of other prompts to mix with the prompts
+        batch_size: Number of prompts to generate in each batch
+        n_samples: Number of times to run the inference
+        max_tokens: Number of output tokens to generate
+    """
+    return [
+        vllm_inference_random_traffic_one_prompt(
             llm=llm,
-            batch_prompts=batch_prompts,
-            target_position=target_position,
+            prompt=prompt,
+            other_prompts=other_prompts,
+            batch_size=batch_size,
+            n_samples=n_samples,
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        all_results.append(result)
-
-    return all_results
+        for prompt in prompts
+    ]
 
 
 def plot_logprobs_over_time(
@@ -391,9 +435,9 @@ async def main():
             logger.info(json.dumps(variant.description, indent=2))
             variant_name = variant.name()
             all_data[variant_name] = {
-                "us": {},
-                "mmlu": {},
-                "gao2025": {},
+                "us": [],
+                "mmlu": [],
+                "gao2025": [],
             }
 
             if llm is not None:
@@ -411,29 +455,21 @@ async def main():
                 temperature=0.1,
             )
 
-            all_data[variant_name]["mmlu"] = results
+            all_data[variant_name]["mmlu"] = [asdict(r) for r in results]
 
             # Our prompts
-            for prompt in prompts:
-                all_data[variant_name]["us"][prompt] = []
-                results = vllm_inference_random_traffic(
-                    llm=llm,
-                    prompt=prompt,
-                    other_prompts=other_prompts,
-                    batch_size=16,
-                    n_samples=n_samples,
-                    max_tokens=max_tokens,
-                    temperature=0.0,
-                )
-                for result in results:
-                    all_data[variant_name]["us"][prompt].append(
-                        {
-                            "text": result["text"],
-                            "logprobs": result["logprobs"],
-                        }
-                    )
+            results = vllm_inference_random_traffic(
+                llm=llm,
+                prompts=prompts,
+                other_prompts=other_prompts,
+                batch_size=16,
+                n_samples=n_samples,
+                max_tokens=max_tokens,
+                temperature=0.0,
+            )
+            all_data[variant_name]["us"] = [asdict(r) for r in results]
 
-            # Free up the memory reserved by vLLM
+            # Free up model weights and KV cache from vLLM memory
             llm.sleep(level=2)
 
     except StopAsyncIteration:
