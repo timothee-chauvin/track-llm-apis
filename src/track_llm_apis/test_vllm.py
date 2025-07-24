@@ -12,6 +12,14 @@ from track_llm_apis.util import available_gpu_memory_fraction
 DEVICE = "cuda"
 
 
+class WorkerExtension:
+    def debug(self):
+        return (
+            repr(self.model_runner.model),
+            repr(dir(self.model_runner.model)),
+        )
+
+
 def random_noise(scale: float, model: torch.nn.Module):
     new_model = copy.deepcopy(model)
     for _, param in new_model.named_parameters():
@@ -37,22 +45,24 @@ def cleanup_vllm(llm):
 
 def load_model_to_vllm(llm: LLM | None, model, tokenizer):
     """Load a model into vLLM using temporary directory."""
-    if llm is not None:
-        cleanup_vllm(llm)
+    if llm is None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save model and tokenizer to temporary directory
+            model.save_pretrained(temp_dir)
+            tokenizer.save_pretrained(temp_dir)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Save model and tokenizer to temporary directory
-        model.save_pretrained(temp_dir)
-        tokenizer.save_pretrained(temp_dir)
-
-        # Load into vLLM
-        available_memory_fraction = available_gpu_memory_fraction()
-        llm = LLM(
-            model=temp_dir,
-            enforce_eager=True,
-            gpu_memory_utilization=0.95 * available_memory_fraction,
-        )
-        return llm
+            # Load into vLLM
+            available_memory_fraction = available_gpu_memory_fraction()
+            llm = LLM(
+                model=temp_dir,
+                enforce_eager=True,
+                gpu_memory_utilization=0.95 * available_memory_fraction,
+                worker_extension_cls="track_llm_apis.test_vllm.WorkerExtension",
+            )
+            return llm
+    else:
+        print(llm.collective_rpc("debug"))
+        pass
 
 
 def run_inference(llm, prompt="Hi"):
