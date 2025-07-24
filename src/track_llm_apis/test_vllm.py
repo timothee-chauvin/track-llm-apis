@@ -19,6 +19,112 @@ class WorkerExtension:
             repr(dir(self.model_runner.model)),
         )
 
+    def debug_code(self, code: str):
+        """
+        Execute code dynamically within the worker context for debugging.
+
+        Args:
+            code: Python source code as string
+
+        Returns:
+            dict with 'output', 'error', 'result', and 'stderr' keys
+        """
+        from contextlib import redirect_stderr, redirect_stdout
+        from io import StringIO
+
+        stdout_capture = StringIO()
+        stderr_capture = StringIO()
+        result = None
+        error = None
+
+        # Make worker context available to the debug code
+        local_vars = {
+            "self": self,
+            "model": self.model_runner.model,
+            "model_runner": self.model_runner,
+        }
+
+        global_vars = {
+            "torch": __import__("torch"),
+            "time": __import__("time"),
+            "copy": __import__("copy"),
+        }
+
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                # Try to evaluate as expression first
+                try:
+                    result = eval(code, global_vars, local_vars)
+                except SyntaxError:
+                    # If it's not an expression, execute as statements
+                    exec(code, global_vars, local_vars)
+                    result = None
+
+        except Exception as e:
+            error = str(e)
+            import traceback
+
+            error += "\n" + traceback.format_exc()
+
+        return {
+            "output": stdout_capture.getvalue(),
+            "error": error,
+            "result": result,
+            "stderr": stderr_capture.getvalue(),
+        }
+
+    def update_weights_from_tensors(self, weight_dict):
+        """
+        Update model weights from a dictionary of GPU tensors.
+        """
+        model = self.model_runner.model
+        params_dict = dict(model.named_parameters())
+        update_results = {}
+
+        for name, new_weight in weight_dict.items():
+            if name in params_dict:
+                param = params_dict[name]
+
+                # Ensure the new weight is on the same device and has the same shape
+                if new_weight.device != param.device:
+                    new_weight = new_weight.to(param.device)
+
+                if new_weight.shape != param.shape:
+                    raise ValueError(
+                        f"Shape mismatch for {name}: expected {param.shape}, got {new_weight.shape}"
+                    )
+
+                # Update the parameter in place
+                with torch.no_grad():
+                    param.data.copy_(new_weight)
+
+                update_results[name] = True
+            else:
+                print(f"Warning: Parameter '{name}' not found in model")
+                update_results[name] = False
+
+        return update_results
+
+    def get_parameter_names(self):
+        """Get all parameter names in the model."""
+        model = self.model_runner.model
+        return list(dict(model.named_parameters()).keys())
+
+    def get_parameter_info(self):
+        """Get information about all model parameters."""
+        model = self.model_runner.model
+        param_info = {}
+
+        for name, param in model.named_parameters():
+            param_info[name] = {
+                "shape": list(param.shape),
+                "device": str(param.device),
+                "dtype": str(param.dtype),
+                "requires_grad": param.requires_grad,
+            }
+
+        return param_info
+
 
 def random_noise(scale: float, model: torch.nn.Module):
     new_model = copy.deepcopy(model)
@@ -57,7 +163,7 @@ def load_model_to_vllm(llm: LLM | None, model, tokenizer):
                 model=temp_dir,
                 enforce_eager=True,
                 gpu_memory_utilization=0.95 * available_memory_fraction,
-                worker_extension_cls="track_llm_apis.test_vllm.WorkerExtension",
+                worker_extension_cls="__main__.WorkerExtension",
             )
             return llm
     else:
