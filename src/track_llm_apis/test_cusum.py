@@ -10,8 +10,10 @@ import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
+from torch.multiprocessing.reductions import reduce_tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
+from vllm.distributed.parallel_state import destroy_model_parallel
 
 from track_llm_apis.config import Config
 from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_chat_1m
@@ -26,9 +28,87 @@ logger = Config.logger
 
 DEVICE = "cuda"
 
+# In order to be able to pass functions as args in LLM.collective_rpc()
+os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
 random.seed(Config.seed)
 np.random.seed(Config.seed)
+
+
+class WorkerExtension:
+    def debug(self):
+        return (
+            repr(self.model_runner.model),
+            repr(dir(self.model_runner.model)),
+        )
+
+    def update_weights_from_ipc_handles(self, ipc_handles):
+        """Update model weights from IPC handles."""
+        weights = []
+        device_id = self.device.index
+
+        for name, handle in ipc_handles.items():
+            func, args = handle
+            list_args = list(args)
+            # Update device ID to current device
+            list_args[6] = device_id
+            tensor = func(*list_args)
+            weights.append((name, tensor))
+
+        # Load the weights into the model
+        self.model_runner.model.load_weights(weights=weights)
+        torch.cuda.synchronize()
+        return f"Updated {len(weights)} weight tensors"
+
+
+def create_ipc_handles(model: torch.nn.Module):
+    """Create IPC handles for all model parameters."""
+    ipc_handles = {}
+    for name, param in model.named_parameters():
+        # Ensure tensor is contiguous and on GPU
+        if not param.is_contiguous():
+            param = param.contiguous()
+        ipc_handles[name] = reduce_tensor(param.detach())
+    return ipc_handles
+
+
+def cleanup_vllm(llm):
+    """Clean up vLLM instance and free GPU memory."""
+    destroy_model_parallel()
+    # https://github.com/vllm-project/vllm/issues/1908#issuecomment-2975218097
+    llm.llm_engine.engine_core.shutdown()
+    del llm
+    torch.cuda.empty_cache()
+
+
+def load_model_to_vllm(llm: LLM | None, model, tokenizer):
+    """Load a model into vLLM using temporary directory or IPC handles."""
+    if llm is None:
+        # First time: create vLLM instance
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save model and tokenizer to temporary directory
+            model.save_pretrained(temp_dir)
+            tokenizer.save_pretrained(temp_dir)
+
+            # Load into vLLM
+            available_memory_fraction = available_gpu_memory_fraction()
+            llm = LLM(
+                model=temp_dir,
+                enforce_eager=True,
+                gpu_memory_utilization=0.95 * available_memory_fraction,
+                worker_extension_cls="__main__.WorkerExtension",
+            )
+            return llm
+    else:
+        # Subsequent times: update weights via IPC
+        logger.info("Creating IPC handles from model weights...")
+        ipc_handles = create_ipc_handles(model)
+
+        logger.info("Updating vLLM weights via IPC...")
+        result = llm.collective_rpc("update_weights_from_ipc_handles", args=(ipc_handles,))
+        logger.info(f"IPC update result: {result}")
+
+        return llm
 
 
 def get_logprobs_transformers(model, tokenizer, prompt):
@@ -152,7 +232,7 @@ def vllm_inference(
             "outputs": [
                 {
                     "text": c.text,
-                    "output_tokens": len(c["token_ids"]),
+                    "output_tokens": len(c.token_ids),
                 }
                 for c in output.outputs
             ],
@@ -286,11 +366,15 @@ async def main():
         config.enable_weight_pruning = False
         config.enable_quantization = False
         config.random_noise_scale = [0.1]
+        prompts = prompts[:5]
     tiny_change = TinyChange(model, tokenizer, config)
     all_data = {}
 
     # Load the MMLU prompts
     mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test")
+
+    # Initialize vLLM instance once
+    llm = None
 
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
@@ -312,55 +396,54 @@ async def main():
                 "gao2025": {},
             }
 
-            # Export the model to a temporary directory in huggingface format for use by vLLM
-            with tempfile.TemporaryDirectory() as temp_dir:
-                variant.model.save_pretrained(temp_dir)
-                tokenizer.save_pretrained(temp_dir)
+            if llm is not None:
+                llm.wake_up()
 
-                # enforce_eager=True just to run faster without the CUDA graph optimization step
-                available_memory_fraction = available_gpu_memory_fraction()
-                llm = LLM(
-                    model=temp_dir,
-                    enforce_eager=True,
-                    gpu_memory_utilization=0.95 * available_memory_fraction,
-                )
+            # Load model into vLLM (first time creates instance, subsequent times update weights)
+            llm = load_model_to_vllm(llm, variant.model, tokenizer)
 
-                # MMLU
-                results = vllm_inference(
+            # MMLU
+            results = vllm_inference(
+                llm=llm,
+                prompts=[format_mmlu_prompt(item) for item in mmlu],
+                n_samples=n_samples,
+                max_tokens=5,
+                temperature=0.1,
+            )
+
+            all_data[variant_name]["mmlu"] = results
+
+            # Our prompts
+            for prompt in prompts:
+                all_data[variant_name]["us"][prompt] = []
+                results = vllm_inference_random_traffic(
                     llm=llm,
-                    prompts=[format_mmlu_prompt(item) for item in mmlu],
+                    prompt=prompt,
+                    other_prompts=other_prompts,
+                    batch_size=16,
                     n_samples=n_samples,
-                    max_tokens=5,
-                    temperature=0.1,
+                    max_tokens=max_tokens,
+                    temperature=0.0,
                 )
-
-                all_data[variant_name]["mmlu"] = results
-
-                # Our prompts
-                for prompt in prompts:
-                    all_data[variant_name]["us"][prompt] = []
-                    results = vllm_inference_random_traffic(
-                        llm=llm,
-                        prompt=prompt,
-                        other_prompts=other_prompts,
-                        batch_size=16,
-                        n_samples=n_samples,
-                        max_tokens=max_tokens,
-                        temperature=0.0,
+                for result in results:
+                    all_data[variant_name]["us"][prompt].append(
+                        {
+                            "text": result["text"],
+                            "logprobs": result["logprobs"],
+                        }
                     )
-                    for result in results:
-                        all_data[variant_name]["us"][prompt].append(
-                            {
-                                "text": result["text"],
-                                "logprobs": result["logprobs"],
-                            }
-                        )
+
+            # Free up the memory reserved by vLLM
+            llm.sleep(level=2)
 
     except StopAsyncIteration:
         logger.info("All variants processed")
 
     with open(output_dir / "all_data.json", "w") as f:
         json.dump(all_data, f, indent=2)
+
+    if llm is not None:
+        cleanup_vllm(llm)
 
 
 if __name__ == "__main__":
