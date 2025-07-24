@@ -1,8 +1,10 @@
 import copy
+import os
 import tempfile
 import time
 
 import torch
+from torch.multiprocessing.reductions import reduce_tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
@@ -10,6 +12,9 @@ from vllm.distributed.parallel_state import destroy_model_parallel
 from track_llm_apis.util import available_gpu_memory_fraction
 
 DEVICE = "cuda"
+
+# In order to be able to pass functions as args in LLM.collective_rpc()
+os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
 
 class WorkerExtension:
@@ -19,111 +24,34 @@ class WorkerExtension:
             repr(dir(self.model_runner.model)),
         )
 
-    def debug_code(self, code: str):
-        """
-        Execute code dynamically within the worker context for debugging.
+    def update_weights_from_ipc_handles(self, ipc_handles):
+        """Update model weights from IPC handles."""
+        weights = []
+        device_id = self.device.index
 
-        Args:
-            code: Python source code as string
+        for name, handle in ipc_handles.items():
+            func, args = handle
+            list_args = list(args)
+            # Update device ID to current device
+            list_args[6] = device_id
+            tensor = func(*list_args)
+            weights.append((name, tensor))
 
-        Returns:
-            dict with 'output', 'error', 'result', and 'stderr' keys
-        """
-        from contextlib import redirect_stderr, redirect_stdout
-        from io import StringIO
+        # Load the weights into the model
+        self.model_runner.model.load_weights(weights=weights)
+        torch.cuda.synchronize()
+        return f"Updated {len(weights)} weight tensors"
 
-        stdout_capture = StringIO()
-        stderr_capture = StringIO()
-        result = None
-        error = None
 
-        # Make worker context available to the debug code
-        local_vars = {
-            "self": self,
-            "model": self.model_runner.model,
-            "model_runner": self.model_runner,
-        }
-
-        global_vars = {
-            "torch": __import__("torch"),
-            "time": __import__("time"),
-            "copy": __import__("copy"),
-        }
-
-        try:
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                # Try to evaluate as expression first
-                try:
-                    result = eval(code, global_vars, local_vars)
-                except SyntaxError:
-                    # If it's not an expression, execute as statements
-                    exec(code, global_vars, local_vars)
-                    result = None
-
-        except Exception as e:
-            error = str(e)
-            import traceback
-
-            error += "\n" + traceback.format_exc()
-
-        return {
-            "output": stdout_capture.getvalue(),
-            "error": error,
-            "result": result,
-            "stderr": stderr_capture.getvalue(),
-        }
-
-    def update_weights_from_tensors(self, weight_dict):
-        """
-        Update model weights from a dictionary of GPU tensors.
-        """
-        model = self.model_runner.model
-        params_dict = dict(model.named_parameters())
-        update_results = {}
-
-        for name, new_weight in weight_dict.items():
-            if name in params_dict:
-                param = params_dict[name]
-
-                # Ensure the new weight is on the same device and has the same shape
-                if new_weight.device != param.device:
-                    new_weight = new_weight.to(param.device)
-
-                if new_weight.shape != param.shape:
-                    raise ValueError(
-                        f"Shape mismatch for {name}: expected {param.shape}, got {new_weight.shape}"
-                    )
-
-                # Update the parameter in place
-                with torch.no_grad():
-                    param.data.copy_(new_weight)
-
-                update_results[name] = True
-            else:
-                print(f"Warning: Parameter '{name}' not found in model")
-                update_results[name] = False
-
-        return update_results
-
-    def get_parameter_names(self):
-        """Get all parameter names in the model."""
-        model = self.model_runner.model
-        return list(dict(model.named_parameters()).keys())
-
-    def get_parameter_info(self):
-        """Get information about all model parameters."""
-        model = self.model_runner.model
-        param_info = {}
-
-        for name, param in model.named_parameters():
-            param_info[name] = {
-                "shape": list(param.shape),
-                "device": str(param.device),
-                "dtype": str(param.dtype),
-                "requires_grad": param.requires_grad,
-            }
-
-        return param_info
+def create_ipc_handles(model: torch.nn.Module):
+    """Create IPC handles for all model parameters."""
+    ipc_handles = {}
+    for name, param in model.named_parameters():
+        # Ensure tensor is contiguous and on GPU
+        if not param.is_contiguous():
+            param = param.contiguous()
+        ipc_handles[name] = reduce_tensor(param.detach())
+    return ipc_handles
 
 
 def random_noise(scale: float, model: torch.nn.Module):
@@ -150,8 +78,9 @@ def cleanup_vllm(llm):
 
 
 def load_model_to_vllm(llm: LLM | None, model, tokenizer):
-    """Load a model into vLLM using temporary directory."""
+    """Load a model into vLLM using temporary directory or IPC handles."""
     if llm is None:
+        # First time: create vLLM instance
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save model and tokenizer to temporary directory
             model.save_pretrained(temp_dir)
@@ -167,8 +96,15 @@ def load_model_to_vllm(llm: LLM | None, model, tokenizer):
             )
             return llm
     else:
-        print(llm.collective_rpc("debug"))
-        pass
+        # Subsequent times: update weights via IPC
+        print("Creating IPC handles from model weights...")
+        ipc_handles = create_ipc_handles(model)
+
+        print("Updating vLLM weights via IPC...")
+        result = llm.collective_rpc("update_weights_from_ipc_handles", args=(ipc_handles,))
+        print(f"IPC update result: {result}")
+
+        return llm
 
 
 def run_inference(llm, prompt="Hi"):
@@ -185,6 +121,7 @@ if __name__ == "__main__":
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
     model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+
     second_model = random_noise(scale=0.5, model=model)
 
     prompt = "Hi"
@@ -198,26 +135,45 @@ if __name__ == "__main__":
     llm = load_model_to_vllm(None, model, tokenizer)
     load_time = time.time() - start_time
     print(f"Original model loaded in {load_time:.2f}s")
+
     result1 = run_inference(llm, prompt)
     print(f"Original model output: '{result1}'")
 
+    # Store timing results
+    initial_load_time = load_time
+    ipc_update_times = []
+
     for i in range(num_switches):
-        print(f"=== Switch {i + 1} ===")
+        print(f"\n=== Switch {i + 1} ===")
 
         print("Loading noisy model into vLLM...")
         start_time = time.time()
         llm = load_model_to_vllm(llm, second_model, tokenizer)
         load_time = time.time() - start_time
+        ipc_update_times.append(load_time)
         print(f"Noisy model loaded in {load_time:.2f}s")
 
         result2 = run_inference(llm, prompt)
         print(f"Noisy model output: '{result2}'")
 
-        print("Loading original model into vLLM...")
+        print("\nLoading original model into vLLM...")
         start_time = time.time()
         llm = load_model_to_vllm(llm, model, tokenizer)
+        load_time = time.time() - start_time
+        ipc_update_times.append(load_time)
         print(f"Original model loaded in {load_time:.2f}s")
+
         result1 = run_inference(llm, prompt)
         print(f"Original model output: '{result1}'")
 
-    print("Benchmark complete!")
+    print("\n=== Benchmark Summary ===")
+    print(f"Initial vLLM load time: {initial_load_time:.2f}s")
+    if ipc_update_times:
+        avg_ipc_time = sum(ipc_update_times) / len(ipc_update_times)
+        print(f"Average IPC update time: {avg_ipc_time:.2f}s")
+        print(f"Speedup: {initial_load_time / avg_ipc_time:.1f}x faster")
+
+    print("\nBenchmark complete!")
+
+    # Clean up
+    cleanup_vllm(llm)
