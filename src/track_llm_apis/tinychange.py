@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import hashlib
 import json
 import logging
 import os
@@ -18,7 +17,7 @@ from torch.nn.utils import prune
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-from track_llm_apis.util import load_lmsys_chat_1m
+from track_llm_apis.util import get_model_hash, load_lmsys_chat_1m
 
 load_dotenv()
 
@@ -312,33 +311,6 @@ class TinyChange:
             model_hash=get_model_hash(model),
             model=model,
         )
-
-
-def get_model_hash(model):
-    """
-    Compute a hash of the model's parameters.
-
-    Args:
-        model: PyTorch model
-
-    Returns:
-        str: Hexadecimal hash string representing the model state
-    """
-    hasher = hashlib.sha256()
-
-    # Parameters
-    for _, param in sorted(model.named_parameters()):
-        # Convert to float32 before converting to bytes to ensure consistent hashing
-        param_data = param.detach().cpu().to(torch.float32).numpy().tobytes()
-        hasher.update(param_data)
-
-    # Buffers
-    for _, buffer in sorted(model.named_buffers()):
-        if buffer is not None:
-            buffer_data = buffer.detach().cpu().to(torch.float32).numpy().tobytes()
-            hasher.update(buffer_data)
-
-    return hasher.hexdigest()
 
 
 async def main():

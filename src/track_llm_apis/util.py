@@ -216,3 +216,30 @@ def format_mmlu_prompt(mmlu_item: dict) -> str:
     a, b, c, d = mmlu_item["choices"]
     choices_str = f"A. {a}\nB. {b}\nC. {c}\nD. {d}"
     return f"Answer the following multiple choice question. The entire content of your response should be of the following format: ‘ANSWER: $LETTER’ (without quotes) where LETTER is one of A,B,C,D.\n\n{mmlu_item['question']}\n\n{choices_str}"
+
+
+def get_model_hash(model):
+    """
+    Compute a hash of the model's parameters.
+
+    Args:
+        model: PyTorch model
+
+    Returns:
+        str: Hexadecimal hash string representing the model state
+    """
+    hasher = hashlib.sha256()
+
+    # Parameters
+    for _, param in sorted(model.named_parameters()):
+        # Convert to float32 before converting to bytes to ensure consistent hashing
+        param_data = param.detach().cpu().to(torch.float32).numpy().tobytes()
+        hasher.update(param_data)
+
+    # Buffers
+    for _, buffer in sorted(model.named_buffers()):
+        if buffer is not None:
+            buffer_data = buffer.detach().cpu().to(torch.float32).numpy().tobytes()
+            hasher.update(buffer_data)
+
+    return hasher.hexdigest()
