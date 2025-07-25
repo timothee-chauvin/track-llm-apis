@@ -286,6 +286,10 @@ class TinyChange:
 
         trainer = SFTTrainer(**sft_trainer_args)
         trainer.train()
+
+        if use_lora:
+            model = trainer.model.merge_and_unload()
+
         return TinyChangeModel(
             description={
                 "type": "finetune",
