@@ -218,6 +218,13 @@ def format_mmlu_prompt(mmlu_item: dict) -> str:
     return f"Answer the following multiple choice question. The entire content of your response should be of the following format: ‘ANSWER: $LETTER’ (without quotes) where LETTER is one of A,B,C,D.\n\n{mmlu_item['question']}\n\n{choices_str}"
 
 
+def format_wikipedia_prompt(wikipedia_item: dict) -> str:
+    """Copied from https://github.com/i-gao/model-equality-testing/blob/fd2ee24d75c9fef87debff8caefa0c04d4a5d374/experiments/prompts.py"""
+    out = "Continue the paragraph. Do not output anything except the continuation to the paragraph. Start the continuation immediately.\n"
+    out += '"' + wikipedia_item["text"][:100] + '..."'
+    return out
+
+
 def get_model_hash(model):
     """
     Compute a hash of the model's parameters.

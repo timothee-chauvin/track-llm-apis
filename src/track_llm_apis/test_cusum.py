@@ -21,6 +21,7 @@ from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_c
 from track_llm_apis.util import (
     available_gpu_memory_fraction,
     format_mmlu_prompt,
+    format_wikipedia_prompt,
     slugify,
     trim_to_length,
 )
@@ -381,15 +382,39 @@ async def main():
     other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]
     if DEBUG:
         config.enable_finetuning = False
+        config.finetuning_samples = [1, 16]
         config.enable_lora_finetuning = False
-        config.enable_weight_pruning = False
+        config.enable_weight_pruning = True
+        config.weight_pruning_random_scale = []
+        config.weight_pruning_magnitude_scale = [0.1]
         config.enable_quantization = False
-        config.random_noise_scale = [0.1]
+        config.enable_random_noise = False
     tiny_change = TinyChange(model, tokenizer, config)
     all_data = {}
 
     # Load the MMLU prompts
     mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test")
+
+    # Load the Gao2025 prompts: 5 prompts per language for a total of 25 prompts
+    # from https://github.com/i-gao/model-equality-testing/blob/fd2ee24d75c9fef87debff8caefa0c04d4a5d374/experiments/constants/wikipedia_prompt_indices_test/25/0.json
+    prompt_indices_seed_0 = {
+        "wikipedia_en": [39, 77, 89],
+        "wikipedia_de": [21, 46, 67, 85, 88, 96],
+        "wikipedia_fr": [47, 51, 76, 83, 95],
+        "wikipedia_ru": [24, 28, 37, 57, 61, 71, 97],
+        "wikipedia_es": [36, 60, 67, 80],
+    }
+    wikipedia = []
+    for language in ["en", "de", "es", "fr", "ru"]:
+        wikipedia_stream = load_dataset(
+            "Cohere/wikipedia-2023-11-embed-multilingual-v3",
+            language,
+            split="train",
+            streaming=True,
+        )
+        first_100 = list(wikipedia_stream.take(100))
+        for i in prompt_indices_seed_0[f"wikipedia_{language}"]:
+            wikipedia.append(first_100[i])
 
     # Initialize vLLM instance once
     llm = None
@@ -404,7 +429,7 @@ async def main():
             else:
                 n_samples = 100
             if DEBUG:
-                n_samples //= 100
+                n_samples = 10
             logger.info(f"Generated variant: ({variant.model_hash})")
             logger.info(json.dumps(variant.description, indent=2))
             variant_name = variant.name()
@@ -419,6 +444,17 @@ async def main():
 
             # Load model into vLLM (first time creates instance, subsequent times update weights)
             llm = load_model_to_vllm(llm, variant.model, tokenizer)
+
+            # Model Equality Testing: Which Model Is This API Serving?
+            results = vllm_inference(
+                llm=llm,
+                prompts=[format_wikipedia_prompt(item) for item in wikipedia],
+                n_samples=n_samples,
+                max_tokens=50,
+                temperature=1,
+            )
+
+            all_data[variant_name]["wikipedia"] = [asdict(r) for r in results]
 
             # MMLU
             results = vllm_inference(
