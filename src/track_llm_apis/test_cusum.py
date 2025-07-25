@@ -254,41 +254,6 @@ def vllm_inference(
     return [PromptAndOutputs.from_request_output(output) for output in outputs]
 
 
-def vllm_inference_random_traffic_one_prompt(
-    llm: LLM,
-    prompt: str,
-    other_prompts: list[str],
-    batch_size: int,
-    n_samples: int,
-    max_tokens: int,
-    temperature: float,
-    logprobs_topk: int,
-) -> PromptAndOutputs:
-    """
-    Return `n_samples` completions for the first `max_tokens` inference tokens of a target prompt mixed with random traffic.
-
-    Args: see vllm_inference_random_traffic
-    """
-    sampling_params = SamplingParams(
-        n=1,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        logprobs=logprobs_topk,
-    )
-    all_results = []
-
-    for _ in range(n_samples):
-        traffic_prompts = random.sample(other_prompts, batch_size - 1)
-        target_position = random.randint(0, batch_size - 1)
-        batch_prompts = (
-            traffic_prompts[:target_position] + [prompt] + traffic_prompts[target_position:]
-        )
-
-        outputs = llm.generate(batch_prompts, sampling_params)
-        all_results.append(PromptAndOutputs.from_request_output(outputs[target_position]))
-    return PromptAndOutputs.from_multiple(all_results)
-
-
 def vllm_inference_random_traffic(
     llm: LLM,
     prompts: list[str],
@@ -312,19 +277,31 @@ def vllm_inference_random_traffic(
         temperature: Sampling temperature
         logprobs_topk: Number of logprobs to return per token position
     """
-    return [
-        vllm_inference_random_traffic_one_prompt(
-            llm=llm,
-            prompt=prompt,
-            other_prompts=other_prompts,
-            batch_size=batch_size,
-            n_samples=n_samples,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            logprobs_topk=logprobs_topk,
-        )
-        for prompt in prompts
-    ]
+    sampling_params = SamplingParams(
+        n=1,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        logprobs=logprobs_topk,
+    )
+    results = {prompt: [] for prompt in prompts}
+    # Generate a new random batch for each sample.
+    for _ in range(n_samples):
+        # choices: with replacement (traffic prompts can be repeated).
+        # sample: without replacement (target positions must be unique).
+        traffic_prompts = random.choices(other_prompts, k=batch_size - len(prompts))
+        # Position in the batch of the first prompt, second prompt, etc.
+        prompt_positions = random.sample(range(batch_size), k=len(prompts))
+        other_positions = [i for i in range(batch_size) if i not in prompt_positions]
+        batch_prompts = [None] * batch_size
+        for i, prompt in enumerate(prompts):
+            batch_prompts[prompt_positions[i]] = prompt
+        for i in range(batch_size - len(prompts)):
+            batch_prompts[other_positions[i]] = traffic_prompts[i]
+        outputs = llm.generate(batch_prompts, sampling_params)
+        for i, prompt in enumerate(prompts):
+            prompt_position = prompt_positions[i]
+            results[prompt].append(PromptAndOutputs.from_request_output(outputs[prompt_position]))
+    return [PromptAndOutputs.from_multiple(results[prompt]) for prompt in prompts]
 
 
 def plot_logprobs_over_time(
@@ -408,7 +385,6 @@ async def main():
         config.enable_weight_pruning = False
         config.enable_quantization = False
         config.random_noise_scale = [0.1]
-        prompts = prompts[:5]
     tiny_change = TinyChange(model, tokenizer, config)
     all_data = {}
 
@@ -460,7 +436,7 @@ async def main():
                 llm=llm,
                 prompts=prompts,
                 other_prompts=other_prompts,
-                batch_size=16,
+                batch_size=64,
                 n_samples=n_samples,
                 max_tokens=1,
                 temperature=0.0,
