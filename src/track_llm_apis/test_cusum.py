@@ -262,22 +262,18 @@ def vllm_inference_random_traffic_one_prompt(
     n_samples: int,
     max_tokens: int,
     temperature: float,
+    logprobs_topk: int,
 ) -> PromptAndOutputs:
     """
     Return `n_samples` completions for the first `max_tokens` inference tokens of a target prompt mixed with random traffic.
 
-    Args:
-        llm: initialized vLLM model
-        prompt: The target prompt to track
-        other_prompts: List of other prompts to mix with the target prompt
-        batch_size: Number of prompts to generate in each batch
-        n_samples: Number of times to run the inference
-        max_tokens: Number of output tokens to generate
+    Args: see vllm_inference_random_traffic
     """
     sampling_params = SamplingParams(
         n=1,
         max_tokens=max_tokens,
         temperature=temperature,
+        logprobs=logprobs_topk,
     )
     all_results = []
 
@@ -301,6 +297,7 @@ def vllm_inference_random_traffic(
     n_samples: int,
     max_tokens: int,
     temperature: float,
+    logprobs_topk: int,
 ) -> list[PromptAndOutputs]:
     """
     Return `n_samples` completions for the first `max_tokens` inference tokens of a list of prompts mixed with random traffic.
@@ -312,6 +309,8 @@ def vllm_inference_random_traffic(
         batch_size: Number of prompts to generate in each batch
         n_samples: Number of times to run the inference
         max_tokens: Number of output tokens to generate
+        temperature: Sampling temperature
+        logprobs_topk: Number of logprobs to return per token position
     """
     return [
         vllm_inference_random_traffic_one_prompt(
@@ -322,6 +321,7 @@ def vllm_inference_random_traffic(
             n_samples=n_samples,
             max_tokens=max_tokens,
             temperature=temperature,
+            logprobs_topk=logprobs_topk,
         )
         for prompt in prompts
     ]
@@ -390,7 +390,6 @@ def plot_logprobs_over_time(
 
 
 async def main():
-    max_tokens = 50
     DEBUG = True
 
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -404,7 +403,6 @@ async def main():
     config.finetuning_dataset = load_lmsys_chat_1m()
     other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]
     if DEBUG:
-        max_tokens = 5
         config.enable_finetuning = False
         config.enable_lora_finetuning = False
         config.enable_weight_pruning = False
@@ -464,8 +462,9 @@ async def main():
                 other_prompts=other_prompts,
                 batch_size=16,
                 n_samples=n_samples,
-                max_tokens=max_tokens,
+                max_tokens=1,
                 temperature=0.0,
+                logprobs_topk=20,
             )
             all_data[variant_name]["us"] = [asdict(r) for r in results]
 
