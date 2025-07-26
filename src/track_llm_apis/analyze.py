@@ -65,6 +65,7 @@ class ResponseData:
 class TokenLogprobs:
     """Logprobs for a single token and prompt. All dates are included."""
 
+    token: str
     # All dates for which we have collected logprobs for this endpoint and prompt
     dates: list[datetime]
     # Dates where the token is missing from the topk
@@ -152,7 +153,8 @@ def get_token_logprobs(
     endpoint_data = [row for row in endpoint_data if row.prompt == prompt]
     all_tokens = set(token for row in endpoint_data for token in row.top_tokens)
     token_logprob_dict = {
-        token: TokenLogprobs(dates=[], dates_missing=[], logprobs=[]) for token in all_tokens
+        token: TokenLogprobs(token=token, dates=[], dates_missing=[], logprobs=[])
+        for token in all_tokens
     }
     for row in endpoint_data:
         for token, logprob in zip(row.top_tokens, row.logprobs):
@@ -168,6 +170,22 @@ def get_token_logprobs(
                 case "none":
                     token_logprob_dict[token].logprobs.append(None)
     return token_logprob_dict
+
+
+def get_top_token_logprobs(
+    endpoint_data: list[ResponseData], prompt: str, missing_policy: Literal["min", "none"]
+) -> tuple[TokenLogprobs]:
+    """
+    Same as get_token_logprobs, but only returns the logprobs for the top token.
+
+    The top token is defined as the one with the highest sum of logprobs, when replacing missing
+    values with the minimum logprob for that date.
+    """
+    token_logprobs = get_token_logprobs(endpoint_data, prompt, missing_policy="min")
+    top_token = max(token_logprobs.items(), key=lambda x: sum(x[1].logprobs))[0]
+    if missing_policy == "none" and len(token_logprobs[top_token].dates_missing) > 0:
+        return get_token_logprobs(endpoint_data, prompt, missing_policy="none")[top_token]
+    return token_logprobs[top_token]
 
 
 def equivalence_classes(after: datetime | None = None):
@@ -196,7 +214,7 @@ def equivalence_classes(after: datetime | None = None):
             print(f"  {logprobs_display}")
 
 
-def get_top_token_logprobs(data, table_name, all_top_tokens: bool = False):
+def get_top_token_logprobs_delete(data, table_name, all_top_tokens: bool = False):
     # TODO this mixes the data from all tokens! Doesn't make any sense! Even the implementation is dumb
     # TODO and this also mixes the data from all prompts
     rows = data[table_name]
@@ -230,23 +248,18 @@ def top_logprob_variability(after: datetime | None = None):
         logger.info(f"# {table_name}")
         prompts = set(row.prompt for row in endpoint_data)
         for prompt in prompts:
-            token_logprobs = get_token_logprobs(endpoint_data, prompt, missing_policy="min")
-            top_token = max(token_logprobs.items(), key=lambda x: sum(x[1].logprobs))[0]
-            warning = False
-            if len(token_logprobs[top_token].dates_missing) > 0:
-                n_times = len(token_logprobs[top_token].dates_missing)
+            top_token_logprobs = get_top_token_logprobs(endpoint_data, prompt, missing_policy="min")
+            if warning := (len(top_token_logprobs.dates_missing) > 0):
                 logger.warning(
-                    f"Warning: token below absent from the topk {n_times}/{len(token_logprobs[top_token].dates)} times"
+                    f"Warning: token below absent from the topk {len(top_token_logprobs.dates_missing)}/{len(top_token_logprobs.dates)} times"
                 )
-                warning = True
-            top_token_logprobs = token_logprobs[top_token].logprobs
-            n = len(top_token_logprobs)
-            min_value = min(top_token_logprobs)
-            max_value = max(top_token_logprobs)
-            std_value = statistics.stdev(top_token_logprobs)
+            n = len(top_token_logprobs.logprobs)
+            min_value = min(top_token_logprobs.logprobs)
+            max_value = max(top_token_logprobs.logprobs)
+            std_value = statistics.stdev(top_token_logprobs.logprobs)
             min_sign = "=" if not warning else "≤"
             std_sign = "=" if not warning else "≥"
-            message = f"n={n:4d}, min{min_sign}{min_value:8.2g}, max={max_value:8.2g}, std{std_sign}{std_value:8.2g}, token={repr(top_token)}, p={repr(prompt)}"
+            message = f"n={n:4d}, min{min_sign}{min_value:8.2g}, max={max_value:8.2g}, std{std_sign}{std_value:8.2g}, token={repr(top_token_logprobs.token)}, p={repr(prompt)}"
             if warning:
                 # print in yellow
                 message = f"\033[93m{message}\033[0m"
@@ -893,6 +906,13 @@ class ProbCUSUM_Detector:
 
         standardized_sum = self.running_sum / (self.std_dev_observation * self.current_t**0.5)
         probability = float(self._calculate_probability(standardized_sum))
+        # print(
+        #     f"t={self.current_t} mean={self.mean_observation:.3f} std={self.std_dev_observation:.3f} new diff={self.observations[-1] - self.mean_observation:.3f} running_sum={self.running_sum:.3f} standardized_sum={standardized_sum:.3f} Probability: {probability:.3e}"
+        # )
+        # if probability < self.threshold_probability:
+        #     print("=" * 100)
+        #     print(f"CHANGEPOINT DETECTED! t={self.current_t} Probability: {probability}")
+        #     print("=" * 100)
         return probability, probability < self.threshold_probability
 
     def _calculate_probability(self, standardized_sum) -> bool:
@@ -1053,4 +1073,8 @@ if __name__ == "__main__":
     # plot_top_token_logprobs_over_time()
     # test_normality_shapiro()
     # create_random_qq_plots()
-    run_cusum(warmup_period=100, threshold_probability=1e-5)
+    # run_cusum(warmup_period=100, threshold_probability=1e-5)
+    # plot_top_token_logprobs_over_time(
+    #     with_cusum=True, prompt="\x06P\x1dz\x13ZTq", tables=["openai#gpt-4.1-nano"]
+    # )
+    plot_top_token_logprobs_over_time(with_cusum=True)
