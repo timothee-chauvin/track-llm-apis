@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pickle
 import random
 import sqlite3
 import tempfile
@@ -9,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
+import fire
 import numpy as np
 import plotly.graph_objects as go
 import torch
@@ -164,7 +166,40 @@ class CompressedOutput:
             )
         )
 
-    def dump(self, output_dir: Path):
+    def dump_pkl(self, output_dir: Path):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pkl_filename_basic = f"{slugify(self.model_name, max_length=200, hash_length=0)}_basic.pkl"
+        pkl_path_basic = output_dir / pkl_filename_basic
+        with open(pkl_path_basic, "wb") as f:
+            pickle.dump(self, f)
+
+        pkl_filename_compressed = (
+            f"{slugify(self.model_name, max_length=200, hash_length=0)}_compressed.pkl"
+        )
+        pkl_path_compressed = output_dir / pkl_filename_compressed
+        to_save = {}
+        hashes_to_indices = {}
+        for mapping in [self.variants, self.prompts, self.texts, self.logprobs]:
+            for i, hash in enumerate(mapping.keys()):
+                hashes_to_indices[hash] = i
+        to_save["rows"] = [
+            (
+                row.source.value,
+                hashes_to_indices[row.variant_ref],
+                hashes_to_indices[row.prompt_ref],
+                hashes_to_indices[row.text_ref],
+                hashes_to_indices[row.logprobs_ref] if row.logprobs_ref is not None else None,
+            )
+            for row in self.rows
+        ]
+        to_save["variants"] = [(i, v) for i, v in enumerate(self.variants.values())]
+        to_save["prompts"] = [(i, p) for i, p in enumerate(self.prompts.values())]
+        to_save["texts"] = [(i, t) for i, t in enumerate(self.texts.values())]
+        to_save["logprobs"] = [(i, lp) for i, lp in enumerate(self.logprobs.values())]
+        with open(pkl_path_compressed, "wb") as f:
+            pickle.dump(to_save, f)
+
+    def dump_db(self, output_dir: Path):
         # Convert all references from hashes to integers
         hashes_to_indices = {}
         for mapping in [self.variants, self.prompts, self.texts, self.logprobs]:
@@ -500,10 +535,10 @@ def plot_logprobs_over_time(
     fig.write_html(prompt_dir / filename)
 
 
-async def main():
-    DEBUG = True
+async def main(model_name: str, device: str = DEVICE):
+    DEVICE = device
+    DEBUG = False
 
-    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
     prompts = Config.prompts + Config.prompts_extended
     output_dir = Config.sampling_data_dir
     os.makedirs(output_dir, exist_ok=True)
@@ -626,11 +661,16 @@ async def main():
     except StopAsyncIteration:
         logger.info("All variants processed")
 
-    compressed_output.dump(output_dir)
+    compressed_output.dump_pkl(output_dir)
+    compressed_output.dump_db(output_dir)
 
     if llm is not None:
         cleanup_vllm(llm)
 
 
+def entrypoint(device: str = DEVICE, model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"):
+    asyncio.run(main(model_name, device))
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    fire.Fire(entrypoint)
