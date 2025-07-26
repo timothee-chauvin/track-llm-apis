@@ -49,7 +49,7 @@ class SamplingOutput:
             logprobs_dict = None
         else:
             logprobs_dict = [
-                {k: v.__dict__ for k, v in logprobs.items()}
+                {k: v.logprob for k, v in logprobs.items()}
                 for logprobs in completion_output.logprobs
             ]
         return cls(
@@ -390,6 +390,7 @@ async def main():
         config.enable_quantization = False
         config.enable_random_noise = False
     tiny_change = TinyChange(model, tokenizer, config)
+    n_variants = tiny_change.n_variants
     all_data = {}
 
     # Load the MMLU prompts
@@ -421,17 +422,19 @@ async def main():
 
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
+    i = 0
     try:
         while True:
             variant = await async_iter.__anext__()
+            i += 1
             if variant.description["type"] == "unchanged":
                 n_samples = 1000
             else:
                 n_samples = 100
             if DEBUG:
                 n_samples = 10
-            logger.info(f"Generated variant: ({variant.model_hash})")
-            logger.info(json.dumps(variant.description, indent=2))
+            logger.info(f"Generated variant {i}/{n_variants}: ({variant.model_hash})")
+            logger.info(json.dumps(variant.description))
             variant_name = variant.name()
             all_data[variant_name] = {
                 "us": [],
