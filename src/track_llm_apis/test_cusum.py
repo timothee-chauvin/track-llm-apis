@@ -100,9 +100,9 @@ class OutputRow:
         rows = []
         for output in request_output.outputs:
             if output.logprobs is None:
-                logprobs_dict = None
+                logprobs_dicts = None
             else:
-                logprobs_dict = [
+                logprobs_dicts = [
                     {int(k): v.logprob for k, v in logprobs.items()} for logprobs in output.logprobs
                 ]
             rows.append(
@@ -111,7 +111,7 @@ class OutputRow:
                     source=source,
                     prompt=prompt,
                     text=(output.text, len(output.token_ids)),
-                    logprobs=logprobs_dict,
+                    logprobs=logprobs_dicts,
                 )
             )
         return rows
@@ -119,10 +119,9 @@ class OutputRow:
 
 @dataclass
 class CompressedOutputRow:
-    variant_ref: str
     source: DataSource
+    variant_ref: str
     prompt_ref: str
-    text: tuple[str, int] | None = None
     text_ref: str | None = None
     logprobs_ref: str | None = None
 
@@ -130,12 +129,11 @@ class CompressedOutputRow:
 class CompressedOutput:
     def __init__(self, model_name: str):
         self.model_name = model_name
-        self.variants = {}
-        self.prompts = {}
-        self.texts = {}
-        self.token_ids = {}
-        self.logprobs = {}
-        self.rows = []
+        self.variants: dict[str, str] = {}
+        self.prompts: dict[str, tuple[str, int]] = {}
+        self.texts: dict[str, tuple[str, int]] = {}
+        self.logprobs: dict[str, list[dict[int, float]]] = {}
+        self.rows: list[CompressedOutputRow] = []
 
     def add_row(self, row: OutputRow):
         variant_hash = fast_hash(row.variant)
@@ -146,41 +144,32 @@ class CompressedOutput:
         if prompt_hash not in self.prompts:
             self.prompts[prompt_hash] = row.prompt
 
-        # Only these responses are repetitive
-        if row.source == DataSource.MMLU:
-            assert row.text is not None
-            text_hash = fast_hash(str(row.text))
-            if text_hash not in self.texts:
-                self.texts[text_hash] = row.text
-            text = None
-        else:
-            text_hash = None
-            text = row.text
+        text_hash = fast_hash(str(row.text))
+        if text_hash not in self.texts:
+            self.texts[text_hash] = row.text
 
         logprobs_hash = None
         if row.logprobs is not None:
             logprobs_hash = fast_hash(json.dumps(row.logprobs))
             if logprobs_hash not in self.logprobs:
                 self.logprobs[logprobs_hash] = row.logprobs
+
         self.rows.append(
             CompressedOutputRow(
-                variant_hash,
-                row.source,
-                prompt_hash,
-                text,
-                text_hash,
-                logprobs_hash,
+                source=row.source,
+                variant_ref=variant_hash,
+                prompt_ref=prompt_hash,
+                text_ref=text_hash,
+                logprobs_ref=logprobs_hash,
             )
         )
 
     def dump(self, output_dir: Path):
         # Convert all references from hashes to integers
         hashes_to_indices = {}
-        values_to_indices = {}
-        for mapping in [self.variants, self.prompts, self.texts, self.token_ids, self.logprobs]:
-            for i, (hash, value) in enumerate(mapping.items()):
+        for mapping in [self.variants, self.prompts, self.texts, self.logprobs]:
+            for i, hash in enumerate(mapping.keys()):
                 hashes_to_indices[hash] = i
-                values_to_indices[value] = i
 
         output_dir.mkdir(parents=True, exist_ok=True)
         db_filename = f"{slugify(self.model_name, max_length=200, hash_length=0)}.db"
@@ -192,60 +181,53 @@ class CompressedOutput:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS rows (
-            variant_ref INTEGER NOT NULL,
             source INTEGER NOT NULL,
-            prompt_ref INTEGER,
-            text TEXT
-            text_ref INTEGER,
-            token_ids_ref INTEGER,
+            variant_ref INTEGER NOT NULL,
+            prompt_ref INTEGER NOT NULL,
+            text_ref INTEGER NOT NULL,
             logprobs_ref INTEGER
             )"""
         )
         cursor.execute(
-            "CREATE TABLE IF NOT EXISTS variants (ref INTEGER PRIMARY KEY, variant TEXT)"
+            "CREATE TABLE IF NOT EXISTS variants (ref INTEGER PRIMARY KEY, variant TEXT NOT NULL)"
         )
-        cursor.execute("CREATE TABLE IF NOT EXISTS prompts (ref INTEGER PRIMARY KEY, prompt TEXT)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS texts (ref INTEGER PRIMARY KEY, text TEXT)")
         cursor.execute(
-            "CREATE TABLE IF NOT EXISTS token_ids (ref INTEGER PRIMARY KEY, token_ids TEXT)"
+            "CREATE TABLE IF NOT EXISTS prompts (ref INTEGER PRIMARY KEY, prompt TEXT NOT NULL, prompt_length INTEGER NOT NULL)"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS texts (ref INTEGER PRIMARY KEY, text TEXT NOT NULL, text_length INTEGER NOT NULL)"
         )
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS logprobs (ref INTEGER PRIMARY KEY, logprobs TEXT)"
         )
         cursor.executemany(
-            "INSERT INTO rows (variant_ref, source, prompt_ref, text, text_ref, token_ids_ref, logprobs_ref) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO rows (source, variant_ref, prompt_ref, text_ref, logprobs_ref) VALUES (?, ?, ?, ?, ?)",
             [
                 (
+                    row.source.value,
                     hashes_to_indices[row.variant_ref],
-                    row.source,
                     hashes_to_indices[row.prompt_ref],
-                    values_to_indices[row.text] if row.text is not None else None,
-                    values_to_indices[row.text_ref] if row.text_ref is not None else None,
-                    values_to_indices[row.token_ids_ref] if row.token_ids_ref is not None else None,
-                    values_to_indices[row.logprobs_ref] if row.logprobs_ref is not None else None,
+                    hashes_to_indices[row.text_ref],
+                    hashes_to_indices[row.logprobs_ref] if row.logprobs_ref is not None else None,
                 )
                 for row in self.rows
             ],
         )
         cursor.executemany(
             "INSERT INTO variants (ref, variant) VALUES (?, ?)",
-            [(values_to_indices[v], v) for v in self.variants.values()],
+            [(i, v) for i, v in enumerate(self.variants.values())],
         )
         cursor.executemany(
-            "INSERT INTO prompts (ref, prompt) VALUES (?, ?)",
-            [(values_to_indices[p], p) for p in self.prompts.values()],
+            "INSERT INTO prompts (ref, prompt, prompt_length) VALUES (?, ?, ?)",
+            [(i, p[0], p[1]) for i, p in enumerate(self.prompts.values())],
         )
         cursor.executemany(
-            "INSERT INTO texts (ref, text) VALUES (?, ?)",
-            [(values_to_indices[t], t) for t in self.texts.values()],
-        )
-        cursor.executemany(
-            "INSERT INTO token_ids (ref, token_ids) VALUES (?, ?)",
-            [(values_to_indices[t], t) for t in self.token_ids.values()],
+            "INSERT INTO texts (ref, text, text_length) VALUES (?, ?, ?)",
+            [(i, t[0], t[1]) for i, t in enumerate(self.texts.values())],
         )
         cursor.executemany(
             "INSERT INTO logprobs (ref, logprobs) VALUES (?, ?)",
-            [(values_to_indices[lp], lp) for lp in self.logprobs.values()],
+            [(i, str(lp)) for i, lp in enumerate(self.logprobs.values())],
         )
         conn.commit()
         conn.close()
