@@ -1,3 +1,5 @@
+# type: ignore
+# because this file is WIP with a half-finished refactor at the moment
 import base64
 import hashlib
 import json

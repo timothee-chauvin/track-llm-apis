@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import plotly.graph_objects as go
@@ -42,16 +42,20 @@ np.random.seed(Config.seed)
 
 
 class WorkerExtension:
+    """
+    Class for vLLM's worker to inherit from.
+    """
+
     def debug(self):
         return (
-            repr(self.model_runner.model),
-            repr(dir(self.model_runner.model)),
+            repr(self.model_runner.model),  # pyright: ignore[reportAttributeAccessIssue]
+            repr(dir(self.model_runner.model)),  # pyright: ignore[reportAttributeAccessIssue]
         )
 
     def update_weights_from_ipc_handles(self, ipc_handles):
         """Update model weights from IPC handles."""
         weights = []
-        device_id = self.device.index
+        device_id = self.device.index  # pyright: ignore[reportAttributeAccessIssue]
 
         for name, handle in ipc_handles.items():
             func, args = handle
@@ -62,7 +66,7 @@ class WorkerExtension:
             weights.append((name, tensor))
 
         # Load the weights into the model
-        self.model_runner.model.load_weights(weights=weights)
+        self.model_runner.model.load_weights(weights=weights)  # pyright: ignore[reportAttributeAccessIssue]
         torch.cuda.synchronize()
         return f"Updated {len(weights)} weight tensors"
 
@@ -87,7 +91,12 @@ class OutputRow:
     def from_request_output(
         cls, request_output: RequestOutput, variant: str, source: DataSource
     ) -> list["OutputRow"]:
-        prompt = (request_output.prompt, len(request_output.prompt_token_ids))
+        prompt_length = (
+            len(request_output.prompt_token_ids)
+            if request_output.prompt_token_ids is not None
+            else 0
+        )
+        prompt = (request_output.prompt or "", prompt_length)
         rows = []
         for output in request_output.outputs:
             if output.logprobs is None:
@@ -113,9 +122,8 @@ class CompressedOutputRow:
     variant_ref: str
     source: DataSource
     prompt_ref: str
-    text: str | None = None
+    text: tuple[str, int] | None = None
     text_ref: str | None = None
-    token_ids_ref: str | None = None
     logprobs_ref: str | None = None
 
 
@@ -263,7 +271,7 @@ def cleanup_vllm(llm):
     torch.cuda.empty_cache()
 
 
-def load_model_to_vllm(llm: LLM | None, model, tokenizer):
+def load_model_to_vllm(llm: LLM | None, model, tokenizer) -> LLM:
     """Load a model into vLLM using temporary directory or IPC handles."""
     if llm is None:
         # First time: create vLLM instance
@@ -432,7 +440,7 @@ def vllm_inference_random_traffic(
         # Position in the batch of the first prompt, second prompt, etc.
         prompt_positions = random.sample(range(batch_size), k=len(prompts))
         other_positions = [i for i in range(batch_size) if i not in prompt_positions]
-        batch_prompts = [None] * batch_size
+        batch_prompts = [""] * batch_size
         for i, prompt in enumerate(prompts):
             batch_prompts[prompt_positions[i]] = prompt
         for i in range(batch_size - len(prompts)):
@@ -475,7 +483,7 @@ def plot_logprobs_over_time(
     for logprob_dict in all_logprobs:
         all_tokens.update(logprob_dict.keys())
 
-    fig = go.Figure()
+    fig = go.Figure()  # pyright: ignore[reportCallIssue]
 
     # For each token, create its time series
     for token_id in sorted(all_tokens):
@@ -490,7 +498,7 @@ def plot_logprobs_over_time(
                 logprob_series.append(None)
 
         fig.add_trace(
-            go.Scatter(
+            go.Scatter(  # pyright: ignore[reportCallIssue]
                 x=list(range(len(all_logprobs))),
                 y=logprob_series,
                 mode="lines+markers",
@@ -522,7 +530,7 @@ async def main():
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = TinyChangeConfig()
     config.finetuning_dataset = load_lmsys_chat_1m()
-    other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]
+    other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]  # pyright: ignore[reportArgumentType,reportCallIssue]
     if DEBUG:
         config.enable_finetuning = False
         config.finetuning_samples = [1, 16]
@@ -556,7 +564,7 @@ async def main():
             split="train",
             streaming=True,
         )
-        first_100 = list(wikipedia_stream.take(100))
+        first_100 = list(wikipedia_stream.take(100))  # pyright: ignore[reportAttributeAccessIssue]
         for i in prompt_indices_seed_0[f"wikipedia_{language}"]:
             wikipedia.append(first_100[i])
 
@@ -603,7 +611,7 @@ async def main():
             # MMLU
             results = vllm_inference(
                 llm=llm,
-                prompts=[format_mmlu_prompt(item) for item in mmlu],
+                prompts=[format_mmlu_prompt(cast(dict, item)) for item in mmlu],
                 n_samples=n_samples,
                 max_tokens=5,
                 temperature=0.1,

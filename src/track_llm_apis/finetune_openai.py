@@ -118,7 +118,7 @@ def job_exists(
 
 def find_file_id(
     existing_files: list[Any], sample_size: int, error_if_not_found: bool = False
-) -> str:
+) -> str | None:
     for f in existing_files:
         if f.filename == file_name(sample_size):
             return f.id
@@ -137,7 +137,7 @@ def generate_files(upload: bool = False):
     indices = np.random.permutation(len(dataset))
     dataset = dataset.select(indices)
     for sample_size in SAMPLE_SIZES:
-        subset = dataset[:sample_size]
+        subset = dataset.select(range(sample_size))
         jsonl_path = generate_jsonl(subset)
         if upload:
             upload_jsonl(jsonl_path)
@@ -148,6 +148,7 @@ def finetune(confirm: bool = False):
     existing_files = client.files.list().data
     for sample_size in SAMPLE_SIZES:
         file_id = find_file_id(existing_files, sample_size, error_if_not_found=True)
+        assert file_id is not None
         for model in MODELS:
             for lr_multiplier in LR_MULTIPLIERS:
                 suffix = f"lr={lr_multiplier:g}_samples={sample_size}_epochs={EPOCHS}_batch_size={BATCH_SIZE}"
@@ -173,7 +174,7 @@ def finetune(confirm: bool = False):
                     training_file=file_id,
                     seed=Config.seed,
                     suffix=suffix,
-                    method={
+                    method={  # pyright: ignore[reportArgumentType]
                         "type": "supervised",
                         "supervised": {
                             "hyperparameters": hyperparameters,
@@ -192,6 +193,7 @@ def list_model_names():
     endpoints = []
     for sample_size in SAMPLE_SIZES:
         file_id = find_file_id(existing_files, sample_size, error_if_not_found=True)
+        assert file_id is not None
         for model in MODELS:
             for lr_multiplier in LR_MULTIPLIERS:
                 suffix = f"lr={lr_multiplier:g}_samples={sample_size}_epochs={EPOCHS}_batch_size={BATCH_SIZE}"

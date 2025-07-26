@@ -20,14 +20,14 @@ os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 class WorkerExtension:
     def debug(self):
         return (
-            repr(self.model_runner.model),
-            repr(dir(self.model_runner.model)),
+            repr(self.model_runner.model),  # pyright: ignore[reportAttributeAccessIssue]
+            repr(dir(self.model_runner.model)),  # pyright: ignore[reportAttributeAccessIssue]
         )
 
     def update_weights_from_ipc_handles(self, ipc_handles):
         """Update model weights from IPC handles."""
         weights = []
-        device_id = self.device.index
+        device_id = self.device.index  # pyright: ignore[reportAttributeAccessIssue]
 
         for name, handle in ipc_handles.items():
             func, args = handle
@@ -38,7 +38,7 @@ class WorkerExtension:
             weights.append((name, tensor))
 
         # Load the weights into the model
-        self.model_runner.model.load_weights(weights=weights)
+        self.model_runner.model.load_weights(weights=weights)  # pyright: ignore[reportAttributeAccessIssue]
         torch.cuda.synchronize()
         return f"Updated {len(weights)} weight tensors"
 

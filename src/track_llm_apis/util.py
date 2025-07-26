@@ -150,6 +150,7 @@ def load_lmsys_chat_1m(
         return all(not m["flagged"] for m in moderation)
 
     dataset = load_dataset("lmsys/lmsys-chat-1m", token=os.getenv("HF_TOKEN"), split="train")
+    assert isinstance(dataset, Dataset)
 
     dataset = (
         dataset.with_format("np")
@@ -166,8 +167,8 @@ def load_lmsys_chat_1m(
         dataset = dataset.filter(
             flagged_filter_fn, input_columns=["openai_moderation"], batched=False
         )
-    assert all(s["conversation"][0]["role"] == "user" for s in dataset)
-    assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)
+    assert all(s["conversation"][0]["role"] == "user" for s in dataset)  # pyright: ignore[reportArgumentType,reportCallIssue]
+    assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)  # pyright: ignore[reportArgumentType,reportCallIssue]
     return dataset
 
 

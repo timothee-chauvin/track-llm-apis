@@ -4,8 +4,9 @@ import json
 import logging
 import os
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import modelopt.torch.quantization as mtq
 import numpy as np
@@ -152,7 +153,7 @@ class TinyChange:
 
     def init_finetuning(self):
         """Validate the finetuning dataset and create a random order of the finetuning samples, and preprocess it for pytorch"""
-        init_ds = self.config.finetuning_dataset
+        init_ds = cast(Dataset, self.config.finetuning_dataset)
         if len(init_ds) < max(self.config.finetuning_samples):
             raise ValueError(
                 f"Not enough finetuning samples ({len(init_ds)}) to finetune with {max(self.config.finetuning_samples)} samples"
@@ -160,10 +161,10 @@ class TinyChange:
         assert "conversation" in init_ds.column_names, (
             "Finetuning dataset must have a 'conversation' column"
         )
-        assert all(s["conversation"][0]["role"] == "user" for s in init_ds), (
+        assert all(s["conversation"][0]["role"] == "user" for s in init_ds), (  # pyright: ignore[reportArgumentType,reportCallIssue]
             "Finetuning dataset must have a 'user' role in the first message of each conversation"
         )
-        assert all(s["conversation"][1]["role"] == "assistant" for s in init_ds), (
+        assert all(s["conversation"][1]["role"] == "assistant" for s in init_ds), (  # pyright: ignore[reportArgumentType,reportCallIssue]
             "Finetuning dataset must have an 'assistant' role in the second message of each conversation"
         )
         indices = np.random.permutation(len(init_ds))
@@ -227,7 +228,7 @@ class TinyChange:
     @staticmethod
     def prune_llm(
         model: torch.nn.Module,
-        pruning_method: type,
+        pruning_method: Callable[..., None],
         amount: int | float,
     ) -> None:
         """
@@ -288,7 +289,7 @@ class TinyChange:
         trainer.train()
 
         if use_lora:
-            model = trainer.model.merge_and_unload()
+            model = trainer.model.merge_and_unload()  # pyright: ignore[reportCallIssue,reportOptionalMemberAccess]
 
         return TinyChangeModel(
             description={
