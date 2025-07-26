@@ -2,8 +2,11 @@ import asyncio
 import json
 import os
 import random
+import sqlite3
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -13,13 +16,14 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from torch.multiprocessing.reductions import reduce_tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from vllm import LLM, CompletionOutput, RequestOutput, SamplingParams
+from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
 
 from track_llm_apis.config import Config
 from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_chat_1m
 from track_llm_apis.util import (
     available_gpu_memory_fraction,
+    fast_hash,
     format_mmlu_prompt,
     format_wikipedia_prompt,
     slugify,
@@ -35,57 +39,6 @@ os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
 random.seed(Config.seed)
 np.random.seed(Config.seed)
-
-
-@dataclass
-class SamplingOutput:
-    text: str
-    output_tokens: int
-    logprobs: list[dict] | None
-
-    @classmethod
-    def from_completion_output(cls, completion_output: CompletionOutput):
-        if completion_output.logprobs is None:
-            logprobs_dict = None
-        else:
-            logprobs_dict = [
-                {k: v.logprob for k, v in logprobs.items()}
-                for logprobs in completion_output.logprobs
-            ]
-        return cls(
-            text=completion_output.text,
-            output_tokens=len(completion_output.token_ids),
-            logprobs=logprobs_dict,
-        )
-
-
-@dataclass
-class PromptAndOutputs:
-    prompt: str
-    input_tokens: int
-    outputs: list[SamplingOutput]
-
-    @classmethod
-    def from_request_output(cls, request_output: RequestOutput):
-        return cls(
-            prompt=request_output.prompt,
-            input_tokens=len(request_output.prompt_token_ids),
-            outputs=[
-                SamplingOutput.from_completion_output(output) for output in request_output.outputs
-            ],
-        )
-
-    @classmethod
-    def from_multiple(cls, prompts_and_outputs: list["PromptAndOutputs"]):
-        assert all(p.prompt == prompts_and_outputs[0].prompt for p in prompts_and_outputs)
-        assert all(
-            p.input_tokens == prompts_and_outputs[0].input_tokens for p in prompts_and_outputs
-        )
-        return cls(
-            prompt=prompts_and_outputs[0].prompt,
-            input_tokens=prompts_and_outputs[0].input_tokens,
-            outputs=[output for p in prompts_and_outputs for output in p.outputs],
-        )
 
 
 class WorkerExtension:
@@ -112,6 +65,182 @@ class WorkerExtension:
         self.model_runner.model.load_weights(weights=weights)
         torch.cuda.synchronize()
         return f"Updated {len(weights)} weight tensors"
+
+
+class DataSource(Enum):
+    US = 0
+    MMLU = 1
+    GAO2025 = 2
+
+
+@dataclass
+class OutputRow:
+    variant: str
+    source: DataSource
+    # (prompt, input_tokens)
+    prompt: tuple[str, int]
+    # (text, output_tokens)
+    text: tuple[str, int]
+    logprobs: list[dict[int, float]] | None = None
+
+    @classmethod
+    def from_request_output(
+        cls, request_output: RequestOutput, variant: str, source: DataSource
+    ) -> list["OutputRow"]:
+        prompt = (request_output.prompt, len(request_output.prompt_token_ids))
+        rows = []
+        for output in request_output.outputs:
+            if output.logprobs is None:
+                logprobs_dict = None
+            else:
+                logprobs_dict = [
+                    {int(k): v.logprob for k, v in logprobs.items()} for logprobs in output.logprobs
+                ]
+            rows.append(
+                cls(
+                    variant=variant,
+                    source=source,
+                    prompt=prompt,
+                    text=(output.text, len(output.token_ids)),
+                    logprobs=logprobs_dict,
+                )
+            )
+        return rows
+
+
+@dataclass
+class CompressedOutputRow:
+    variant_ref: str
+    source: DataSource
+    prompt_ref: str
+    text: str | None = None
+    text_ref: str | None = None
+    token_ids_ref: str | None = None
+    logprobs_ref: str | None = None
+
+
+class CompressedOutput:
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+        self.variants = {}
+        self.prompts = {}
+        self.texts = {}
+        self.token_ids = {}
+        self.logprobs = {}
+        self.rows = []
+
+    def add_row(self, row: OutputRow):
+        variant_hash = fast_hash(row.variant)
+        if variant_hash not in self.variants:
+            self.variants[variant_hash] = row.variant
+
+        prompt_hash = fast_hash(str(row.prompt))
+        if prompt_hash not in self.prompts:
+            self.prompts[prompt_hash] = row.prompt
+
+        # Only these responses are repetitive
+        if row.source == DataSource.MMLU:
+            assert row.text is not None
+            text_hash = fast_hash(str(row.text))
+            if text_hash not in self.texts:
+                self.texts[text_hash] = row.text
+            text = None
+        else:
+            text_hash = None
+            text = row.text
+
+        logprobs_hash = None
+        if row.logprobs is not None:
+            logprobs_hash = fast_hash(json.dumps(row.logprobs))
+            if logprobs_hash not in self.logprobs:
+                self.logprobs[logprobs_hash] = row.logprobs
+        self.rows.append(
+            CompressedOutputRow(
+                variant_hash,
+                row.source,
+                prompt_hash,
+                text,
+                text_hash,
+                logprobs_hash,
+            )
+        )
+
+    def dump(self, output_dir: Path):
+        # Convert all references from hashes to integers
+        hashes_to_indices = {}
+        values_to_indices = {}
+        for mapping in [self.variants, self.prompts, self.texts, self.token_ids, self.logprobs]:
+            for i, (hash, value) in enumerate(mapping.items()):
+                hashes_to_indices[hash] = i
+                values_to_indices[value] = i
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        db_filename = f"{slugify(self.model_name, max_length=200, hash_length=0)}.db"
+        db_path = output_dir / db_filename
+        if db_path.exists():
+            os.remove(db_path)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rows (
+            variant_ref INTEGER NOT NULL,
+            source INTEGER NOT NULL,
+            prompt_ref INTEGER,
+            text TEXT
+            text_ref INTEGER,
+            token_ids_ref INTEGER,
+            logprobs_ref INTEGER
+            )"""
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS variants (ref INTEGER PRIMARY KEY, variant TEXT)"
+        )
+        cursor.execute("CREATE TABLE IF NOT EXISTS prompts (ref INTEGER PRIMARY KEY, prompt TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS texts (ref INTEGER PRIMARY KEY, text TEXT)")
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS token_ids (ref INTEGER PRIMARY KEY, token_ids TEXT)"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS logprobs (ref INTEGER PRIMARY KEY, logprobs TEXT)"
+        )
+        cursor.executemany(
+            "INSERT INTO rows (variant_ref, source, prompt_ref, text, text_ref, token_ids_ref, logprobs_ref) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    hashes_to_indices[row.variant_ref],
+                    row.source,
+                    hashes_to_indices[row.prompt_ref],
+                    values_to_indices[row.text] if row.text is not None else None,
+                    values_to_indices[row.text_ref] if row.text_ref is not None else None,
+                    values_to_indices[row.token_ids_ref] if row.token_ids_ref is not None else None,
+                    values_to_indices[row.logprobs_ref] if row.logprobs_ref is not None else None,
+                )
+                for row in self.rows
+            ],
+        )
+        cursor.executemany(
+            "INSERT INTO variants (ref, variant) VALUES (?, ?)",
+            [(values_to_indices[v], v) for v in self.variants.values()],
+        )
+        cursor.executemany(
+            "INSERT INTO prompts (ref, prompt) VALUES (?, ?)",
+            [(values_to_indices[p], p) for p in self.prompts.values()],
+        )
+        cursor.executemany(
+            "INSERT INTO texts (ref, text) VALUES (?, ?)",
+            [(values_to_indices[t], t) for t in self.texts.values()],
+        )
+        cursor.executemany(
+            "INSERT INTO token_ids (ref, token_ids) VALUES (?, ?)",
+            [(values_to_indices[t], t) for t in self.token_ids.values()],
+        )
+        cursor.executemany(
+            "INSERT INTO logprobs (ref, logprobs) VALUES (?, ?)",
+            [(values_to_indices[lp], lp) for lp in self.logprobs.values()],
+        )
+        conn.commit()
+        conn.close()
 
 
 def create_ipc_handles(model: torch.nn.Module):
@@ -245,14 +374,20 @@ def vllm_inference(
     n_samples: int,
     max_tokens: int,
     temperature: float,
-):
+    variant: str,
+    source: DataSource,
+) -> list[OutputRow]:
     sampling_params = SamplingParams(
         n=n_samples,
         max_tokens=max_tokens,
         temperature=temperature,
     )
     outputs = llm.generate(prompts, sampling_params)
-    return [PromptAndOutputs.from_request_output(output) for output in outputs]
+    return [
+        row
+        for output in outputs
+        for row in OutputRow.from_request_output(output, variant=variant, source=source)
+    ]
 
 
 def vllm_inference_random_traffic(
@@ -264,7 +399,9 @@ def vllm_inference_random_traffic(
     max_tokens: int,
     temperature: float,
     logprobs_topk: int,
-) -> list[PromptAndOutputs]:
+    variant: str,
+    source: DataSource,
+) -> list[OutputRow]:
     """
     Return `n_samples` completions for the first `max_tokens` inference tokens of a list of prompts mixed with random traffic.
 
@@ -278,13 +415,15 @@ def vllm_inference_random_traffic(
         temperature: Sampling temperature
         logprobs_topk: Number of logprobs to return per token position
     """
+    if max_tokens > 1:
+        raise NotImplementedError("max_tokens > 1 not implemented wrt saving (see OutputRow)")
     sampling_params = SamplingParams(
         n=1,
         max_tokens=max_tokens,
         temperature=temperature,
         logprobs=logprobs_topk,
     )
-    results = {prompt: [] for prompt in prompts}
+    results = []
     # Generate a new random batch for each sample.
     for _ in range(n_samples):
         # choices: with replacement (traffic prompts can be repeated).
@@ -301,8 +440,12 @@ def vllm_inference_random_traffic(
         outputs = llm.generate(batch_prompts, sampling_params)
         for i, prompt in enumerate(prompts):
             prompt_position = prompt_positions[i]
-            results[prompt].append(PromptAndOutputs.from_request_output(outputs[prompt_position]))
-    return [PromptAndOutputs.from_multiple(results[prompt]) for prompt in prompts]
+            results.extend(
+                OutputRow.from_request_output(
+                    outputs[prompt_position], variant=variant, source=source
+                )
+            )
+    return results
 
 
 def plot_logprobs_over_time(
@@ -391,7 +534,7 @@ async def main():
         config.enable_random_noise = False
     tiny_change = TinyChange(model, tokenizer, config)
     n_variants = tiny_change.n_variants
-    all_data = {}
+    compressed_output = CompressedOutput(model_name)
 
     # Load the MMLU prompts
     mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test")
@@ -436,11 +579,6 @@ async def main():
             logger.info(f"Generated variant {i}/{n_variants}: ({variant.model_hash})")
             logger.info(json.dumps(variant.description))
             variant_name = variant.name()
-            all_data[variant_name] = {
-                "us": [],
-                "mmlu": [],
-                "gao2025": [],
-            }
 
             if llm is not None:
                 llm.wake_up()
@@ -455,9 +593,12 @@ async def main():
                 n_samples=n_samples,
                 max_tokens=50,
                 temperature=1,
+                variant=variant_name,
+                source=DataSource.GAO2025,
             )
 
-            all_data[variant_name]["wikipedia"] = [asdict(r) for r in results]
+            for row in results:
+                compressed_output.add_row(row)
 
             # MMLU
             results = vllm_inference(
@@ -466,9 +607,12 @@ async def main():
                 n_samples=n_samples,
                 max_tokens=5,
                 temperature=0.1,
+                variant=variant_name,
+                source=DataSource.MMLU,
             )
 
-            all_data[variant_name]["mmlu"] = [asdict(r) for r in results]
+            for row in results:
+                compressed_output.add_row(row)
 
             # Our prompts
             results = vllm_inference_random_traffic(
@@ -480,8 +624,11 @@ async def main():
                 max_tokens=1,
                 temperature=0.0,
                 logprobs_topk=20,
+                variant=variant_name,
+                source=DataSource.US,
             )
-            all_data[variant_name]["us"] = [asdict(r) for r in results]
+            for row in results:
+                compressed_output.add_row(row)
 
             # Free up model weights and KV cache from vLLM memory
             llm.sleep(level=2)
@@ -489,8 +636,7 @@ async def main():
     except StopAsyncIteration:
         logger.info("All variants processed")
 
-    with open(output_dir / "all_data.json", "w") as f:
-        json.dump(all_data, f, indent=2)
+    compressed_output.dump(output_dir)
 
     if llm is not None:
         cleanup_vllm(llm)

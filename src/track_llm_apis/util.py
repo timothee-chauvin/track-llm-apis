@@ -7,6 +7,7 @@ from typing import Any
 
 import aiohttp
 import torch
+import xxhash
 from datasets import Dataset, load_dataset
 from dotenv import load_dotenv
 
@@ -250,3 +251,7 @@ def get_model_hash(model):
             hasher.update(buffer_data)
 
     return hasher.hexdigest()
+
+
+def fast_hash(s: str) -> str:
+    return xxhash.xxh64(s).hexdigest()
