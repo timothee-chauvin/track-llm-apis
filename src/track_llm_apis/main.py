@@ -29,7 +29,7 @@ load_dotenv()
 class Endpoint:
     source: str
     name: str
-    cost: tuple[float, float]
+    cost: tuple[int | float, int | float]
     provider: str | None = None
     max_logprobs: int | None = None
     seed: int | None = None
@@ -961,7 +961,7 @@ async def main_async(num_iterations: int, delay: float, store_results: bool = Fa
             db_manager.close()
 
 
-def main(num_iterations: int = 1, delay: float = 10, store_results: bool = False):
+def main(num_iterations: int = 1, delay: float = 10.0, store_results: bool = False):
     asyncio.run(main_async(num_iterations, delay, store_results=store_results))
 
 
