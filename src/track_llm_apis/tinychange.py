@@ -38,12 +38,12 @@ class TinyChangeConfig:
     enable_quantization: bool = True
 
     seed: int | None = 0
-    random_noise_scale: list[float] = [2 ** (-n) for n in range(0, 16)]
+    random_noise_scale: list[float] = [float(2 ** (-n)) for n in range(0, 16)]
     weight_pruning_magnitude_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
     weight_pruning_random_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
     finetuning_dataset: Dataset | None = None
-    finetuning_lr_scale: list[float] = [10 ** (-n) for n in range(3, 9)]
-    finetuning_samples: list[int] = [2**n for n in range(0, 11)]
+    finetuning_lr_scale: list[float] = [1e-6]
+    finetuning_samples: list[int] = [2**n for n in range(0, 10)]
     finetuning_epochs: int = 1
     finetuning_batch_size: int = 1
     finetuning_max_length: int = 1024
