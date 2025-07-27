@@ -31,6 +31,7 @@ from track_llm_apis.util import (
     slugify,
     trim_to_length,
 )
+from track_llm_apis.wikipedia import get_wikipedia_samples
 
 logger = Config.logger
 
@@ -564,26 +565,7 @@ async def main(model_name: str, device: str = DEVICE):
     # Load the MMLU prompts
     mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test")
 
-    # Load the Gao2025 prompts: 5 prompts per language for a total of 25 prompts
-    # from https://github.com/i-gao/model-equality-testing/blob/fd2ee24d75c9fef87debff8caefa0c04d4a5d374/experiments/constants/wikipedia_prompt_indices_test/25/0.json
-    prompt_indices_seed_0 = {
-        "wikipedia_en": [39, 77, 89],
-        "wikipedia_de": [21, 46, 67, 85, 88, 96],
-        "wikipedia_fr": [47, 51, 76, 83, 95],
-        "wikipedia_ru": [24, 28, 37, 57, 61, 71, 97],
-        "wikipedia_es": [36, 60, 67, 80],
-    }
-    wikipedia = []
-    for language in ["en", "de", "es", "fr", "ru"]:
-        wikipedia_stream = load_dataset(
-            "Cohere/wikipedia-2023-11-embed-multilingual-v3",
-            language,
-            split="train",
-            streaming=True,
-        )
-        first_100 = list(wikipedia_stream.take(100))  # pyright: ignore[reportAttributeAccessIssue]
-        for i in prompt_indices_seed_0[f"wikipedia_{language}"]:
-            wikipedia.append(first_100[i])
+    wikipedia = get_wikipedia_samples(n=25, seed=0)
 
     # Initialize vLLM instance once
     llm = None
