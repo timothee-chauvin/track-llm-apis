@@ -30,6 +30,7 @@ from track_llm_apis.util import (
     format_wikipedia_prompt,
     slugify,
     trim_to_length,
+    used_gpu_memory,
 )
 from track_llm_apis.wikipedia import get_wikipedia_samples
 
@@ -585,6 +586,7 @@ async def main(model_name: str, device: str = DEVICE):
                 n_samples = 10
             logger.info(f"Generated variant {i}/{n_variants}: ({variant.model_hash})")
             logger.info(json.dumps(variant.description))
+            logger.info(used_gpu_memory(cleanup=True, as_str=True))
             variant_name = variant.name()
 
             if llm is not None:

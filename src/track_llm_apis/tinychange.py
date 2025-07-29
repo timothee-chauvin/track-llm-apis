@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import gc
 import json
 import logging
 import os
@@ -144,12 +145,16 @@ class TinyChange:
 
     async def __anext__(self):
         """Generate and return the next modified model."""
+        gc.collect()
         torch.cuda.empty_cache()
         if self._task_index >= len(self.tasks):
             raise StopAsyncIteration
         task = self.tasks[self._task_index]
         self._task_index += 1
-        return await task
+        result = await task
+        gc.collect()
+        torch.cuda.empty_cache()
+        return result
 
     def init_finetuning(self):
         """Validate the finetuning dataset and create a random order of the finetuning samples, and preprocess it for pytorch"""

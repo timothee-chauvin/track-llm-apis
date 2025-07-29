@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import hashlib
 import os
 import random
@@ -212,6 +213,17 @@ def available_gpu_memory_fraction():
     """
     free, total = torch.cuda.mem_get_info()
     return free / total
+
+
+def used_gpu_memory(cleanup: bool = False, as_str: bool = False) -> float | str:
+    if cleanup:
+        gc.collect()
+        torch.cuda.empty_cache()
+    free, total = torch.cuda.mem_get_info()
+    if as_str:
+        return f"Used GPU memory: {(total - free) / 1024**3:.2f} GB / {total / 1024**3:.2f} GB"
+    else:
+        return total - free
 
 
 def format_mmlu_prompt(mmlu_item: dict) -> str:
