@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import gc
 import hashlib
 import os
@@ -268,3 +269,17 @@ def get_model_hash(model):
 
 def fast_hash(s: str) -> str:
     return xxhash.xxh64(s).hexdigest()
+
+
+@contextlib.contextmanager
+def temporary_env(variable_name: str, value: str):
+    """Context manager for temporarily setting an environment variable."""
+    original_value = os.getenv(variable_name)
+    os.environ[variable_name] = value
+    try:
+        yield
+    finally:
+        if original_value is None:
+            os.environ.pop(variable_name, None)
+        else:
+            os.environ[variable_name] = original_value

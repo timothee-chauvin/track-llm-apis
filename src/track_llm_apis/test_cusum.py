@@ -29,14 +29,13 @@ from track_llm_apis.util import (
     format_mmlu_prompt,
     format_wikipedia_prompt,
     slugify,
+    temporary_env,
     trim_to_length,
     used_gpu_memory,
 )
 from track_llm_apis.wikipedia import get_wikipedia_samples
 
 logger = Config.logger
-
-DEVICE = "cuda"
 
 # In order to be able to pass functions as args in LLM.collective_rpc()
 os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
@@ -290,15 +289,19 @@ def cleanup_vllm(llm):
     torch.cuda.empty_cache()
 
 
-def load_model_to_vllm(llm: LLM | None, model, tokenizer) -> LLM:
-    """Load a model into vLLM using temporary directory or IPC handles."""
-    if llm is None:
-        # First time: create vLLM instance
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Save model and tokenizer to temporary directory
-            model.save_pretrained(temp_dir)
-            tokenizer.save_pretrained(temp_dir)
+def init_vllm(model, tokenizer, vllm_device: str) -> LLM:
+    assert vllm_device == "cuda" or (vllm_device.startswith("cuda:") and vllm_device[5:].isdigit())
+    if vllm_device == "cuda":
+        visible_devices = "0"
+    else:
+        visible_devices = vllm_device[5:]
 
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Save model and tokenizer to temporary directory
+        model.save_pretrained(temp_dir)
+        tokenizer.save_pretrained(temp_dir)
+
+        with temporary_env("CUDA_VISIBLE_DEVICES", visible_devices):
             # Load into vLLM
             available_memory_fraction = available_gpu_memory_fraction()
             vllm_memory = 0.2 * available_memory_fraction
@@ -316,24 +319,23 @@ def load_model_to_vllm(llm: LLM | None, model, tokenizer) -> LLM:
                     if vllm_memory > available_memory_fraction:
                         raise RuntimeError("Failed to load model into vLLM")
 
-    else:
-        # Subsequent times: update weights via IPC
-        logger.info("Creating IPC handles from model weights...")
-        ipc_handles = create_ipc_handles(model)
 
-        logger.info("Updating vLLM weights via IPC...")
-        result = llm.collective_rpc("update_weights_from_ipc_handles", args=(ipc_handles,))
-        logger.info(f"IPC update result: {result}")
+def load_model_to_vllm(llm: LLM, model) -> None:
+    """Load a model into a running instance of vLLM in-place, using IPC handles."""
+    logger.info("Creating IPC handles from model weights...")
+    ipc_handles = create_ipc_handles(model)
 
-        return llm
+    logger.info("Updating vLLM weights via IPC...")
+    result = llm.collective_rpc("update_weights_from_ipc_handles", args=(ipc_handles,))
+    logger.info(f"IPC update result: {result}")
 
 
-def get_logprobs_transformers(model, tokenizer, prompt):
+def get_logprobs_transformers(model, tokenizer, prompt, model_device):
     """Get log probabilities for the first generated token using model.generate() from transformers."""
     full_prompt = tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=False
     )
-    inputs = tokenizer(full_prompt, return_tensors="pt").to(DEVICE)
+    inputs = tokenizer(full_prompt, return_tensors="pt").to(model_device)
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -364,11 +366,11 @@ def print_logprobs_summary(logprobs, tokenizer, model_name):
         print(f"Rank {i + 1}: '{token}' (ID: {token_id}) - Log prob: {logprob:g}")
 
 
-def print_logprobs(model, tokenizer, prompt):
+def print_logprobs(model, tokenizer, prompt, model_device):
     full_prompt = tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=False
     )
-    inputs = tokenizer(full_prompt, return_tensors="pt").to(DEVICE)
+    inputs = tokenizer(full_prompt, return_tensors="pt").to(model_device)
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -537,15 +539,35 @@ def plot_logprobs_over_time(
     fig.write_html(prompt_dir / filename)
 
 
-async def main(model_name: str, device: str = DEVICE):
-    DEVICE = device
-    DEBUG = False
+async def main(
+    model_name: str,
+    device: str | None = None,
+    vllm_device: str | None = None,
+    model_device: str | None = None,
+):
+    if device is None and vllm_device is None and model_device is None:
+        device = "cuda"
+        vllm_device = device
+        model_device = device
+    elif device is not None:
+        if vllm_device is not None or model_device is not None:
+            raise ValueError(
+                "If 'device' is provided, 'vllm_device' and 'model_device' must be None"
+            )
+        vllm_device = device
+        model_device = device
+    elif vllm_device is None or model_device is None:
+        raise ValueError("Either provide 'device' alone, or both 'vllm_device' and 'model_device'")
+
+    DEBUG = True
+    # if DEBUG:
+    #     model_name = "microsoft/Phi-3-mini-4k-instruct"
 
     prompts = Config.prompts + Config.prompts_extended
     output_dir = Config.sampling_data_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(model_device)
     if model.dtype.itemsize > 2:
         logger.info(f"Converting model from {model.dtype} to bfloat16")
         model.to(torch.bfloat16)
@@ -554,12 +576,13 @@ async def main(model_name: str, device: str = DEVICE):
     config.finetuning_dataset = load_lmsys_chat_1m()
     other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]  # pyright: ignore[reportArgumentType,reportCallIssue]
     if DEBUG:
-        config.enable_finetuning = False
-        config.finetuning_samples = [1, 16]
-        config.enable_lora_finetuning = False
-        config.enable_weight_pruning = True
-        config.weight_pruning_random_scale = []
-        config.weight_pruning_magnitude_scale = [0.1]
+        # config.enable_finetuning = False
+        # config.finetuning_samples = [1, 16]
+        # config.enable_lora_finetuning = False
+        config.enable_weight_pruning = False
+        # config.finetuning_samples = [1, 16, 32]
+        # config.weight_pruning_random_scale = []
+        # config.weight_pruning_magnitude_scale = [0.1]
         config.enable_quantization = False
         config.enable_random_noise = False
     tiny_change = TinyChange(model, tokenizer, config)
@@ -571,8 +594,8 @@ async def main(model_name: str, device: str = DEVICE):
 
     wikipedia = get_wikipedia_samples(n=25, seed=0)
 
-    # Initialize vLLM instance once
-    llm = None
+    # Initialize vLLM instance
+    llm = init_vllm(model, tokenizer, vllm_device)
 
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
@@ -582,11 +605,11 @@ async def main(model_name: str, device: str = DEVICE):
             variant = await async_iter.__anext__()
             i += 1
             if variant.description["type"] == "unchanged":
-                n_samples = 1000
+                n_samples = 5
             else:
-                n_samples = 100
+                n_samples = 5
             if DEBUG:
-                n_samples = 10
+                n_samples = 5
             logger.info(f"Generated variant {i}/{n_variants}: ({variant.model_hash})")
             logger.info(json.dumps(variant.description))
             logger.info(used_gpu_memory(cleanup=True, as_str=True))
@@ -595,8 +618,7 @@ async def main(model_name: str, device: str = DEVICE):
             if llm is not None:
                 llm.wake_up()
 
-            # Load model into vLLM (first time creates instance, subsequent times update weights)
-            llm = load_model_to_vllm(llm, variant.model, tokenizer)
+            load_model_to_vllm(llm, variant.model)
 
             # Model Equality Testing: Which Model Is This API Serving?
             results = vllm_inference(
@@ -655,8 +677,17 @@ async def main(model_name: str, device: str = DEVICE):
         cleanup_vllm(llm)
 
 
-def entrypoint(device: str = DEVICE, model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"):
-    asyncio.run(main(model_name, device))
+def entrypoint(
+    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    device: str | None = None,
+    vllm_device: str | None = None,
+    model_device: str | None = None,
+):
+    asyncio.run(
+        main(
+            model_name=model_name, device=device, vllm_device=vllm_device, model_device=model_device
+        )
+    )
 
 
 if __name__ == "__main__":
