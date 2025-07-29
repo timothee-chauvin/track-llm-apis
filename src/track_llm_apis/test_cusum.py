@@ -546,6 +546,9 @@ async def main(model_name: str, device: str = DEVICE):
     os.makedirs(output_dir, exist_ok=True)
 
     model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
+    if model.dtype.itemsize > 2:
+        logger.info(f"Converting model from {model.dtype} to bfloat16")
+        model.to(torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = TinyChangeConfig()
     config.finetuning_dataset = load_lmsys_chat_1m()
