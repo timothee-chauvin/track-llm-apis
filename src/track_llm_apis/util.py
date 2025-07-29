@@ -283,3 +283,11 @@ def temporary_env(variable_name: str, value: str):
             os.environ.pop(variable_name, None)
         else:
             os.environ[variable_name] = original_value
+
+
+def copy_model_to(model, device: str):
+    """Copy a model to a new device, without first creating a copy on the original device."""
+    new_model = type(model)(model.config)
+    new_model.to(device)
+    new_model.load_state_dict(model.state_dict())
+    return new_model

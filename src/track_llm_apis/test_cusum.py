@@ -543,23 +543,41 @@ async def main(
     model_name: str,
     device: str | None = None,
     vllm_device: str | None = None,
-    model_device: str | None = None,
+    original_model_device: str | None = None,
+    variants_device: str | None = None,
 ):
-    if device is None and vllm_device is None and model_device is None:
+    DEBUG = True
+    if DEBUG:
+        vllm_device = "cuda:0"
+        original_model_device = "cuda:1"
+        variants_device = "cuda:2"
+    if (
+        device is None
+        and vllm_device is None
+        and original_model_device is None
+        and variants_device is None
+    ):
         device = "cuda"
         vllm_device = device
-        model_device = device
+        original_model_device = device
+        variants_device = device
     elif device is not None:
-        if vllm_device is not None or model_device is not None:
+        if (
+            vllm_device is not None
+            or original_model_device is not None
+            or variants_device is not None
+        ):
             raise ValueError(
-                "If 'device' is provided, 'vllm_device' and 'model_device' must be None"
+                "If 'device' is provided, 'vllm_device', 'original_model_device', and 'variants_device' must be None"
             )
         vllm_device = device
-        model_device = device
-    elif vllm_device is None or model_device is None:
-        raise ValueError("Either provide 'device' alone, or both 'vllm_device' and 'model_device'")
+        original_model_device = device
+        variants_device = device
+    elif vllm_device is None or original_model_device is None or variants_device is None:
+        raise ValueError(
+            "Either provide 'device' alone, or all of 'vllm_device', 'original_model_device', and 'variants_device'"
+        )
 
-    DEBUG = True
     # if DEBUG:
     #     model_name = "microsoft/Phi-3-mini-4k-instruct"
 
@@ -567,12 +585,12 @@ async def main(
     output_dir = Config.sampling_data_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(model_device)
-    if model.dtype.itemsize > 2:
-        logger.info(f"Converting model from {model.dtype} to bfloat16")
-        model.to(torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(original_model_device)
+    # if model.dtype.itemsize > 2:
+    #     logger.info(f"Converting model from {model.dtype} to bfloat16")
+    #     model.to(torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    config = TinyChangeConfig()
+    config = TinyChangeConfig(variants_device=variants_device)
     config.finetuning_dataset = load_lmsys_chat_1m()
     other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]  # pyright: ignore[reportArgumentType,reportCallIssue]
     if DEBUG:
@@ -681,11 +699,16 @@ def entrypoint(
     model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
     device: str | None = None,
     vllm_device: str | None = None,
-    model_device: str | None = None,
+    original_model_device: str | None = None,
+    variants_device: str | None = None,
 ):
     asyncio.run(
         main(
-            model_name=model_name, device=device, vllm_device=vllm_device, model_device=model_device
+            model_name=model_name,
+            device=device,
+            vllm_device=vllm_device,
+            original_model_device=original_model_device,
+            variants_device=variants_device,
         )
     )
 

@@ -1,12 +1,11 @@
 import asyncio
-import copy
 import gc
 import json
 import logging
 import os
 import random
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import modelopt.torch.quantization as mtq
@@ -19,7 +18,7 @@ from torch.nn.utils import prune
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-from track_llm_apis.util import get_model_hash, load_lmsys_chat_1m
+from track_llm_apis.util import copy_model_to, get_model_hash, load_lmsys_chat_1m, temporary_env
 
 load_dotenv()
 
@@ -31,7 +30,10 @@ logging.basicConfig(
 logger = logging.getLogger("tinychange")
 
 
+@dataclass
 class TinyChangeConfig:
+    variants_device: str | None = None
+
     enable_random_noise: bool = True
     enable_weight_pruning: bool = True
     enable_finetuning: bool = True
@@ -39,20 +41,28 @@ class TinyChangeConfig:
     enable_quantization: bool = True
 
     seed: int | None = 0
-    random_noise_scale: list[float] = [float(2 ** (-n)) for n in range(0, 16)]
-    weight_pruning_magnitude_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
-    weight_pruning_random_scale: list[float] = [float(2 ** (-n)) for n in range(0, 11)]
+    random_noise_scale: list[float] = field(
+        default_factory=lambda: [float(2 ** (-n)) for n in range(0, 16)]
+    )
+    weight_pruning_magnitude_scale: list[float] = field(
+        default_factory=lambda: [float(2 ** (-n)) for n in range(0, 11)]
+    )
+    weight_pruning_random_scale: list[float] = field(
+        default_factory=lambda: [float(2 ** (-n)) for n in range(0, 11)]
+    )
     finetuning_dataset: Dataset | None = None
-    finetuning_lr_scale: list[float] = [1e-6]
-    finetuning_samples: list[int] = [2**n for n in range(0, 10)]
+    finetuning_lr_scale: list[float] = field(default_factory=lambda: [1e-6])
+    finetuning_samples: list[int] = field(default_factory=lambda: [2**n for n in range(0, 10)])
     finetuning_epochs: int = 1
     finetuning_batch_size: int = 1
     finetuning_max_length: int = 1024
     lora_r: int = 8
     lora_alpha: int = 8
     lora_dropout: float = 0.0
-    lora_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
-    quantization_methods: list[str] = ["int8"]
+    lora_target_modules: list[str] = field(
+        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj"]
+    )
+    quantization_methods: list[str] = field(default_factory=lambda: ["int8"])
 
 
 @dataclass
@@ -75,6 +85,10 @@ class TinyChange:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.config = config
+        # Default to using the same device as the model for the variants
+        if self.config.variants_device is None:
+            self.config.variants_device = model.device
+
         if self.config.seed is not None:
             torch.manual_seed(self.config.seed)
             torch.cuda.manual_seed(self.config.seed)
@@ -195,7 +209,7 @@ class TinyChange:
 
     async def random_noise(self, scale: float) -> TinyChangeModel:
         """Add random noise following a normal distribution of mean 0 and standard deviation `scale` to each parameter in the model."""
-        model = copy.deepcopy(self.model)
+        model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
         for _, param in model.named_parameters():
             if param.requires_grad:
                 param.data += torch.normal(
@@ -215,7 +229,7 @@ class TinyChange:
         self, scale: float, method: Literal["magnitude", "random"]
     ) -> TinyChangeModel:
         """Prune the model by removing parameters across the weights (not biases) of all MLP layers."""
-        model = copy.deepcopy(self.model)
+        model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
 
         if method == "magnitude":
             self.prune_llm(model, prune.l1_unstructured, scale)
@@ -261,54 +275,56 @@ class TinyChange:
         self, lr: float, n_samples: int, epochs: int, batch_size: int, use_lora: bool = False
     ) -> TinyChangeModel:
         """Finetune the model on a subset of the finetuning dataset."""
-        model = copy.deepcopy(self.model)
+        model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
 
-        subset = self.finetuning_ds.select(range(n_samples))
-        training_args = SFTConfig(
-            save_strategy="no",
-            dataset_text_field="text",
-            max_length=self.config.finetuning_max_length,
-            num_train_epochs=epochs,
-            per_device_train_batch_size=batch_size,
-            learning_rate=lr,
-            lr_scheduler_type="constant",
-            completion_only_loss=True,
-        )
-
-        sft_trainer_args = {
-            "model": model,
-            "args": training_args,
-            "train_dataset": subset,
-        }
-        if use_lora:
-            peft_config = LoraConfig(
-                r=self.config.lora_r,
-                lora_alpha=self.config.lora_alpha,
-                lora_dropout=self.config.lora_dropout,
-                target_modules=self.config.lora_target_modules,
-                task_type="CAUSAL_LM",
+        with temporary_env("CUDA_VISIBLE_DEVICES", self.config.variants_device[5:]):  # pyright: ignore[reportOptionalSubscript]
+            subset = self.finetuning_ds.select(range(n_samples))
+            training_args = SFTConfig(
+                save_strategy="no",
+                dataset_text_field="text",
+                max_length=self.config.finetuning_max_length,
+                num_train_epochs=epochs,
+                per_device_train_batch_size=batch_size,
+                learning_rate=lr,
+                lr_scheduler_type="constant",
+                completion_only_loss=True,
             )
-            sft_trainer_args["peft_config"] = peft_config
 
-        trainer = SFTTrainer(**sft_trainer_args)
-        trainer.train()
+            sft_trainer_args = {
+                "model": model,
+                "args": training_args,
+                "train_dataset": subset,
+                "optimizer_cls_and_kwargs": (torch.optim.SGD, {"lr": lr}),
+            }
+            if use_lora:
+                peft_config = LoraConfig(
+                    r=self.config.lora_r,
+                    lora_alpha=self.config.lora_alpha,
+                    lora_dropout=self.config.lora_dropout,
+                    target_modules=self.config.lora_target_modules,
+                    task_type="CAUSAL_LM",
+                )
+                sft_trainer_args["peft_config"] = peft_config
 
-        if use_lora:
-            model = trainer.model.merge_and_unload()  # pyright: ignore[reportCallIssue,reportOptionalMemberAccess]
+            trainer = SFTTrainer(**sft_trainer_args)
+            trainer.train()
 
-        return TinyChangeModel(
-            description={
-                "type": "finetune",
-                "lr": lr,
-                "n_samples": n_samples,
-                "lora": use_lora,
-            },
-            model_hash=get_model_hash(model),
-            model=model,
-        )
+            if use_lora:
+                model = trainer.model.merge_and_unload()  # pyright: ignore[reportCallIssue,reportOptionalMemberAccess]
+
+            return TinyChangeModel(
+                description={
+                    "type": "finetune",
+                    "lr": lr,
+                    "n_samples": n_samples,
+                    "lora": use_lora,
+                },
+                model_hash=get_model_hash(model),
+                model=model,
+            )
 
     async def quantize(self, method: str) -> TinyChangeModel:
-        model = copy.deepcopy(self.model)
+        model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
         configs = {
             "int8": mtq.INT8_DEFAULT_CFG,
         }
