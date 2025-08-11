@@ -24,6 +24,7 @@ class Config:
     openai_finetuning_dir = data_dir / "openai_finetuning"
     sampling_data_dir = data_dir / "sampling"
     baselines_dir = data_dir / "baselines"
+    datasets_dir = data_dir / "datasets"
     # Prompts to send to the smaller list of endpoints
     prompts = [
         "x ",

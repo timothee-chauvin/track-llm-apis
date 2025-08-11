@@ -6,19 +6,30 @@ import os
 import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
+import lightning as pl
 import modelopt.torch.quantization as mtq
 import numpy as np
 import torch
-from datasets import Dataset
+import torch.nn.functional as F
+from datasets import Dataset, load_from_disk
 from dotenv import load_dotenv
-from peft import LoraConfig
+from peft import LoraConfig, get_peft_model
 from torch.nn.utils import prune
+from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTConfig, SFTTrainer
 
-from track_llm_apis.util import copy_model_to, get_model_hash, load_lmsys_chat_1m, temporary_env
+from track_llm_apis.config import Config
+
+# TODO remove these dependencies
+from track_llm_apis.util import (
+    copy_model_to,
+    get_dataset_hash,
+    get_model_hash,
+    load_lmsys_chat_1m,
+    temporary_env,
+)
 
 load_dotenv()
 
@@ -28,6 +39,119 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("tinychange")
+
+
+class LightningModel(pl.LightningModule):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.save_hyperparameters(ignore=["model"])
+
+    def forward(self, x):
+        return self.model(x)
+
+    def training_step(self, batch):
+        input_ids = batch["input_ids"]
+        attention_mask = batch["attention_mask"]
+        labels = batch["labels"]
+        assistant_tokens_mask = batch["assistant_tokens_mask"]
+        labels[assistant_tokens_mask == 0] = -100
+        logits = self.model(input_ids, attention_mask=attention_mask).logits
+        shift_logits = logits[..., :-1, :]
+        shift_labels = labels[..., 1:]
+        loss = F.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=-100
+        )
+        self.log("train_loss", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
+        return optimizer
+
+
+class FinetuningDataModule(pl.LightningDataModule):
+    def __init__(
+        self,
+        dataset: Dataset,
+        n_samples: int,
+        ft_max_length: int,
+        batch_size: int,
+        tokenizer,
+    ):
+        super().__init__()
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.n_samples = n_samples
+        self.tokenizer = tokenizer
+        self.ft_max_length = ft_max_length
+
+    def prepare_data(self):
+        """Validate the finetuning dataset and create a random order of the finetuning samples, preprocess it for pytorch, save to disk."""
+        logger.info("Preprocessing finetuning dataset...")
+        dataset_hash = get_dataset_hash(self.dataset)
+        disk_path = Config.datasets_dir / dataset_hash
+        if disk_path.exists():
+            logger.info(f"Finetuning dataset already exists at {disk_path}, nothing to do.")
+            return
+        logger.info(f"Finetuning dataset does not exist at {disk_path}, preprocessing...")
+        init_ds = self.dataset
+        # assert isinstance(init_ds, Dataset)
+        if len(init_ds) < self.n_samples:
+            raise ValueError(
+                f"Not enough finetuning samples ({len(init_ds)}) to finetune with {self.n_samples} samples"
+            )
+        assert "conversation" in init_ds.column_names, (
+            "Finetuning dataset must have a 'conversation' column"
+        )
+        indices = np.random.permutation(len(init_ds))
+        ft_ds = init_ds.select(indices)
+        assert all(s["conversation"][0]["role"] == "user" for s in ft_ds), (  # pyright: ignore[reportArgumentType,reportCallIssue]
+            "Finetuning dataset must have a 'user' role in the first message of each conversation"
+        )
+        assert all(s["conversation"][1]["role"] == "assistant" for s in ft_ds), (  # pyright: ignore[reportArgumentType,reportCallIssue]
+            "Finetuning dataset must have an 'assistant' role in the second message of each conversation"
+        )
+
+        # Apply chat template
+        def _preprocess(x):
+            chat_template_result = self.tokenizer.apply_chat_template(
+                x["conversation"],
+                tokenize=True,
+                return_dict=True,
+                return_assistant_tokens_mask=True,
+                padding="longest",
+                max_length=self.ft_max_length,
+            )
+            return {
+                "input_ids": chat_template_result["input_ids"],
+                "attention_mask": chat_template_result["attention_mask"],
+                "labels": chat_template_result["input_ids"],
+                "assistant_tokens_mask": chat_template_result["assistant_masks"],
+            }
+
+        ft_ds = ft_ds.map(_preprocess, batched=True, batch_size=None)
+        # keep only the new columns
+        ft_ds = ft_ds.remove_columns(
+            [
+                col
+                for col in ft_ds.column_names
+                if col not in ["input_ids", "attention_mask", "labels", "assistant_tokens_mask"]
+            ]
+        )
+        ft_ds = ft_ds.with_format("torch")
+        # Save to disk
+        ft_ds.save_to_disk(str(disk_path))
+
+    def setup(self, stage: str):
+        dataset_hash = get_dataset_hash(self.dataset)
+        disk_path = Config.datasets_dir / dataset_hash
+        self.tokenized_dataset = load_from_disk(str(disk_path))
+        assert isinstance(self.tokenized_dataset, Dataset)
+        self.tokenized_dataset = self.tokenized_dataset.select(range(self.n_samples))
+
+    def train_dataloader(self):
+        return DataLoader(self.tokenized_dataset, batch_size=self.batch_size, shuffle=False)  # pyright: ignore[reportArgumentType]
 
 
 @dataclass
@@ -41,28 +165,34 @@ class TinyChangeConfig:
     enable_quantization: bool = True
 
     seed: int | None = 0
-    random_noise_scale: list[float] = field(
+    random_noise_scale: list[float | int] = field(
         default_factory=lambda: [float(2 ** (-n)) for n in range(0, 16)]
     )
-    weight_pruning_magnitude_scale: list[float] = field(
+    weight_pruning_magnitude_scale: list[float | int] = field(
         default_factory=lambda: [float(2 ** (-n)) for n in range(0, 11)]
     )
-    weight_pruning_random_scale: list[float] = field(
+    weight_pruning_random_scale: list[float | int] = field(
         default_factory=lambda: [float(2 ** (-n)) for n in range(0, 11)]
     )
     finetuning_dataset: Dataset | None = None
-    finetuning_lr_scale: list[float] = field(default_factory=lambda: [1e-6])
+    finetuning_lr_scale: list[float | int] = field(default_factory=lambda: [1e-6])
     finetuning_samples: list[int] = field(default_factory=lambda: [2**n for n in range(0, 10)])
     finetuning_epochs: int = 1
     finetuning_batch_size: int = 1
     finetuning_max_length: int = 1024
-    lora_r: int = 8
-    lora_alpha: int = 8
+    lora_r: int = 1
+    lora_alpha: int = 1
     lora_dropout: float = 0.0
     lora_target_modules: list[str] = field(
-        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj"]
+        default_factory=lambda: ["o_proj"]  # , "k_proj", "v_proj", "o_proj"]
     )
     quantization_methods: list[str] = field(default_factory=lambda: ["int8"])
+
+    def __post_init__(self):
+        # Trim the finetuning dataset to the max length
+        max_samples = max(self.finetuning_samples)
+        if self.finetuning_dataset is not None:
+            self.finetuning_dataset = self.finetuning_dataset.select(range(max_samples))
 
 
 @dataclass
@@ -100,6 +230,7 @@ class TinyChange:
             random.seed(self.config.seed)
             np.random.seed(self.config.seed)
             os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+            pl.seed_everything(self.config.seed)
 
         self.tasks = []
         # Start by always returning the unchanged model
@@ -125,8 +256,6 @@ class TinyChange:
                     for scale in self.config.weight_pruning_random_scale
                 ]
             )
-        if self.config.enable_finetuning or self.config.enable_lora_finetuning:
-            self.init_finetuning()
 
         def generate_finetuning_tasks(use_lora: bool):
             return [
@@ -170,35 +299,6 @@ class TinyChange:
         torch.cuda.empty_cache()
         return result
 
-    def init_finetuning(self):
-        """Validate the finetuning dataset and create a random order of the finetuning samples, and preprocess it for pytorch"""
-        init_ds = cast(Dataset, self.config.finetuning_dataset)
-        if len(init_ds) < max(self.config.finetuning_samples):
-            raise ValueError(
-                f"Not enough finetuning samples ({len(init_ds)}) to finetune with {max(self.config.finetuning_samples)} samples"
-            )
-        assert "conversation" in init_ds.column_names, (
-            "Finetuning dataset must have a 'conversation' column"
-        )
-        assert all(s["conversation"][0]["role"] == "user" for s in init_ds), (  # pyright: ignore[reportArgumentType,reportCallIssue]
-            "Finetuning dataset must have a 'user' role in the first message of each conversation"
-        )
-        assert all(s["conversation"][1]["role"] == "assistant" for s in init_ds), (  # pyright: ignore[reportArgumentType,reportCallIssue]
-            "Finetuning dataset must have an 'assistant' role in the second message of each conversation"
-        )
-        indices = np.random.permutation(len(init_ds))
-        ft_ds = init_ds.select(indices)
-        # Apply chat template
-        ft_ds = ft_ds.map(
-            lambda x: {
-                "text": self.tokenizer.apply_chat_template(
-                    x["conversation"], tokenize=False, add_generation_prompt=False
-                )
-            },
-            batched=False,
-        )
-        self.finetuning_ds = ft_ds
-
     async def get_unchanged(self) -> TinyChangeModel:
         """Return the unchanged model as a TinyChangeModel object."""
         return TinyChangeModel(
@@ -226,7 +326,7 @@ class TinyChange:
         )
 
     async def weight_pruning(
-        self, scale: float, method: Literal["magnitude", "random"]
+        self, scale: float | int, method: Literal["magnitude", "random"]
     ) -> TinyChangeModel:
         """Prune the model by removing parameters across the weights (not biases) of all MLP layers."""
         model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
@@ -272,45 +372,43 @@ class TinyChange:
                     prune.remove(module, param_name)
 
     async def finetune(
-        self, lr: float, n_samples: int, epochs: int, batch_size: int, use_lora: bool = False
+        self, lr: float | int, n_samples: int, epochs: int, batch_size: int, use_lora: bool = False
     ) -> TinyChangeModel:
         """Finetune the model on a subset of the finetuning dataset."""
         model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
+        if use_lora:
+            peft_config = LoraConfig(
+                r=self.config.lora_r,
+                lora_alpha=self.config.lora_alpha,
+                lora_dropout=self.config.lora_dropout,
+                target_modules=self.config.lora_target_modules,
+                task_type="CAUSAL_LM",
+            )
+            model = get_peft_model(model, peft_config)
+        pl_model = LightningModel(model)
 
         with temporary_env("CUDA_VISIBLE_DEVICES", self.config.variants_device[5:]):  # pyright: ignore[reportOptionalSubscript]
-            subset = self.finetuning_ds.select(range(n_samples))
-            training_args = SFTConfig(
-                save_strategy="no",
-                dataset_text_field="text",
-                max_length=self.config.finetuning_max_length,
-                num_train_epochs=epochs,
-                per_device_train_batch_size=batch_size,
-                learning_rate=lr,
-                lr_scheduler_type="constant",
-                completion_only_loss=True,
+            assert self.config.finetuning_dataset is not None
+            datamodule = FinetuningDataModule(
+                dataset=self.config.finetuning_dataset,
+                n_samples=n_samples,
+                ft_max_length=self.config.finetuning_max_length,
+                batch_size=batch_size,
+                tokenizer=self.tokenizer,
             )
-
-            sft_trainer_args = {
-                "model": model,
-                "args": training_args,
-                "train_dataset": subset,
-                "optimizer_cls_and_kwargs": (torch.optim.SGD, {"lr": lr}),
-            }
-            if use_lora:
-                peft_config = LoraConfig(
-                    r=self.config.lora_r,
-                    lora_alpha=self.config.lora_alpha,
-                    lora_dropout=self.config.lora_dropout,
-                    target_modules=self.config.lora_target_modules,
-                    task_type="CAUSAL_LM",
-                )
-                sft_trainer_args["peft_config"] = peft_config
-
-            trainer = SFTTrainer(**sft_trainer_args)
-            trainer.train()
+            trainer = pl.Trainer(
+                max_epochs=epochs,
+                accelerator="gpu",
+                devices=1,
+                logger=False,
+                enable_checkpointing=False,
+                enable_progress_bar=True,
+                enable_model_summary=False,
+            )
+            trainer.fit(model=pl_model, datamodule=datamodule)
 
             if use_lora:
-                model = trainer.model.merge_and_unload()  # pyright: ignore[reportCallIssue,reportOptionalMemberAccess]
+                model = model.merge_and_unload()  # pyright: ignore[reportCallIssue]
 
             return TinyChangeModel(
                 description={

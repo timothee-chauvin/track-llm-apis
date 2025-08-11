@@ -1143,6 +1143,41 @@ wheels = [
 ]
 
 [[package]]
+name = "lightning"
+version = "2.5.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec", extra = ["http"] },
+    { name = "lightning-utilities" },
+    { name = "packaging" },
+    { name = "pytorch-lightning" },
+    { name = "pyyaml" },
+    { name = "torch" },
+    { name = "torchmetrics" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/3c/6a930ac7c64fb896adbe560a9141570732d9ca890a11e6d158edd5aece76/lightning-2.5.2.tar.gz", hash = "sha256:9550df613cfb22358ebf77b4a8ad45f3767cd7d26ba2d52b7f036bd3cdd701c4", size = 633391 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/a9/5d39280e55dc5df9e98be074029f6b48f86fe3db4929cb9ada6401234b47/lightning-2.5.2-py3-none-any.whl", hash = "sha256:7e7f23245e214c8ec14d5d8119d3856c25cfe96f9856296fd5df4e29c2ff88a7", size = 821145 },
+]
+
+[[package]]
+name = "lightning-utilities"
+version = "0.15.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "setuptools", version = "79.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/2a/3f347a83b61449ea204505fcbe3885ec17ea406c5ac34687631c0caff01f/lightning_utilities-0.15.0.tar.gz", hash = "sha256:3e934ae9c2a77e2f617a4377750e2564d614c391445368d2116a2efe70143ebc", size = 31023 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/5e/d2ddba803d14c17812f132beb1db8a5e6b60273d764694316e0616451972/lightning_utilities-0.15.0-py3-none-any.whl", hash = "sha256:652fea9ca0523418fc731e081485744c7cafea2054f5fff12eea1b2d04441b06", size = 29427 },
+]
+
+[[package]]
 name = "llguidance"
 version = "0.7.30"
 source = { registry = "https://pypi.org/simple" }
@@ -2634,6 +2669,25 @@ wheels = [
 ]
 
 [[package]]
+name = "pytorch-lightning"
+version = "2.5.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec", extra = ["http"] },
+    { name = "lightning-utilities" },
+    { name = "packaging" },
+    { name = "pyyaml" },
+    { name = "torch" },
+    { name = "torchmetrics" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/01/3e/728fbdc671d07727ad447f9401d98a43570573965beb3cb2060f9a330b4f/pytorch_lightning-2.5.2.tar.gz", hash = "sha256:f817087d611be8d43b777dd4e543d72703e235510936677a13e6c29f7fd790e3", size = 636859 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/42/47c186c8f9e956e559c89e6c764d5d5d0d0af517c04ca0ad39bd0a357d3a/pytorch_lightning-2.5.2-py3-none-any.whl", hash = "sha256:17cfdf89bd98074e389101f097cdf34c486a1f5c6d3fdcefbaf4dea7f97ff0bf", size = 825366 },
+]
+
+[[package]]
 name = "pytz"
 version = "2025.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3456,6 +3510,21 @@ wheels = [
 ]
 
 [[package]]
+name = "torchmetrics"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lightning-utilities" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b0/1d/01fdf2595ac344dcfb2d837e7596c71cd8659e99f0b1fd72a93c76ea2c05/torchmetrics-1.8.0.tar.gz", hash = "sha256:8b4d011963a602109fb8255018c2386391e8c4c7f48a09669fbf7bb7889fda8c", size = 578941 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/cc/f41157b446d555bf1446915960f92928dc5e8393fc09b6de6189aef2d9dd/torchmetrics-1.8.0-py3-none-any.whl", hash = "sha256:009832f0df5be9aca72f51a1e6c6a555a131ba53c1ce46a38348a202250c22df", size = 981886 },
+]
+
+[[package]]
 name = "torchprofile"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -3518,6 +3587,7 @@ dependencies = [
     { name = "beartype" },
     { name = "datasets" },
     { name = "fire" },
+    { name = "lightning" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "nvidia-modelopt" },
@@ -3552,6 +3622,7 @@ requires-dist = [
     { name = "beartype", specifier = ">=0.21.0" },
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "fire", specifier = ">=0.7.0" },
+    { name = "lightning", specifier = ">=2.5.2" },
     { name = "matplotlib", specifier = ">=3.10.3" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "nvidia-modelopt", specifier = ">=0.33.0" },

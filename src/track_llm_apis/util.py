@@ -10,7 +10,7 @@ from typing import Any
 import aiohttp
 import torch
 import xxhash
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from dotenv import load_dotenv
 
 from track_llm_apis.config import Config
@@ -127,16 +127,28 @@ def load_lmsys_chat_1m(
     redacted_filter: bool = True,
     flagged_filter: bool = True,
     first_turn_only: bool = True,
+    use_cache: bool = True,
 ) -> Dataset:
     """
-    Load the LMSYS Chat 1M dataset.
+    Load the LMSYS Chat 1M dataset, returning only the "conversation" column.
 
     Args:
         gpt4_filter: Filter out non-GPT-4 conversations
         redacted_filter: Filter out redacted conversations
         flagged_filter: Filter out conversations with at least one message flagged per the "openai_moderation" column
         first_turn_only: Only keep the first turn of each conversation
+        use_cache: Use the processed dataset if it exists on disk, otherwise create it
     """
+    ds_name = "lmsys/lmsys-chat-1m"
+    logger.info(f"Loading the {ds_name} dataset...")
+    cache_path = Config.datasets_dir / f"{slugify(ds_name, hash_length=0)}"
+    if use_cache:
+        if cache_path.exists():
+            logger.info(f"Already processed dataset found at {cache_path}, loading...")
+            dataset = load_from_disk(str(cache_path))
+            assert isinstance(dataset, Dataset)
+            return dataset
+        logger.info(f"No processed dataset found at {cache_path}, creating...")
 
     def filter_fn(model, redacted):
         if gpt4_filter and not redacted_filter:
@@ -154,6 +166,7 @@ def load_lmsys_chat_1m(
     dataset = load_dataset("lmsys/lmsys-chat-1m", token=os.getenv("HF_TOKEN"), split="train")
     assert isinstance(dataset, Dataset)
 
+    logger.info("Filtering dataset...")
     dataset = (
         dataset.with_format("np")
         .filter(
@@ -171,6 +184,9 @@ def load_lmsys_chat_1m(
         )
     assert all(s["conversation"][0]["role"] == "user" for s in dataset)  # pyright: ignore[reportArgumentType,reportCallIssue]
     assert all(s["conversation"][1]["role"] == "assistant" for s in dataset)  # pyright: ignore[reportArgumentType,reportCallIssue]
+    dataset = dataset.remove_columns([col for col in dataset.column_names if col != "conversation"])
+    if use_cache:
+        dataset.save_to_disk(str(cache_path))
     return dataset
 
 
@@ -250,7 +266,7 @@ def get_model_hash(model):
     Returns:
         str: Hexadecimal hash string representing the model state
     """
-    hasher = hashlib.sha256()
+    hasher = xxhash.xxh64()
 
     # Parameters
     for _, param in sorted(model.named_parameters()):
@@ -264,6 +280,16 @@ def get_model_hash(model):
             buffer_data = buffer.detach().cpu().to(torch.float32).numpy().tobytes()
             hasher.update(buffer_data)
 
+    return hasher.hexdigest()
+
+
+def get_dataset_hash(dataset: Dataset) -> str:
+    """
+    Compute a hash of the dataset.
+    """
+    hasher = xxhash.xxh64()
+    for item in dataset:
+        hasher.update(str(item).encode("utf-8"))
     return hasher.hexdigest()
 
 
