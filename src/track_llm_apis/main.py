@@ -217,7 +217,21 @@ ENDPOINTS_EXTENDED = [
     Endpoint("openrouter", "thudm/glm-4-32b:free", provider="chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "thudm/glm-z1-32b:free", provider="chutes", cost=(0.0, 0.0)),
     Endpoint("openrouter", "tngtech/deepseek-r1t-chimera:free", provider="chutes", cost=(0.0, 0.0)),
+    Endpoint("openrouter", "google/gemma-2-9b-it", provider="chutes", cost=(0.01, 0.0100008)),
     Endpoint("openrouter", "mistralai/mistral-nemo", provider="klusterai", cost=(0.01, 0.011)),
+    Endpoint(
+        "openrouter",
+        "cognitivecomputations/dolphin3.0-r1-mistral-24b",
+        provider="chutes",
+        cost=(0.01, 0.0340768),
+    ),
+    Endpoint(
+        "openrouter", "arliai/qwq-32b-arliai-rpr-v1", provider="chutes", cost=(0.01, 0.0400032)
+    ),
+    Endpoint("openrouter", "mistralai/mistral-nemo", provider="chutes", cost=(0.01, 0.0400032)),
+    Endpoint(
+        "openrouter", "agentica-org/deepcoder-14b-preview", provider="chutes", cost=(0.015, 0.015)
+    ),
     Endpoint(
         "openrouter",
         "meta-llama/llama-3.2-3b-instruct",
@@ -231,9 +245,59 @@ ENDPOINTS_EXTENDED = [
         cost=(0.016, 0.021),
     ),
     Endpoint(
+        "openrouter",
+        "deepseek/deepseek-r1-0528-qwen3-8b",
+        provider="chutes",
+        cost=(0.01703012, 0.0681536),
+    ),
+    Endpoint(
+        "openrouter",
+        "mistralai/mistral-small-3.1-24b-instruct",
+        provider="chutes",
+        cost=(0.017992692, 0.07200576),
+    ),
+    Endpoint("openrouter", "qwen/qwen3-32b", provider="chutes", cost=(0.017992692, 0.07200576)),
+    Endpoint(
+        "openrouter",
+        "mistralai/devstral-small-2505",
+        provider="chutes",
+        cost=(0.01999188, 0.0800064),
+    ),
+    Endpoint(
+        "openrouter",
+        "mistralai/mistral-small-24b-instruct-2501",
+        provider="chutes",
+        cost=(0.01999188, 0.0800064),
+    ),
+    Endpoint(
+        "openrouter",
+        "mistralai/mistral-small-3.2-24b-instruct",
+        provider="chutes",
+        cost=(0.01999188, 0.0800064),
+    ),
+    Endpoint(
+        "openrouter",
+        "qwen/qwen2.5-vl-32b-instruct",
+        provider="chutes/bf16",
+        cost=(0.01999188, 0.0800064),
+    ),
+    Endpoint("openrouter", "qwen/qwen3-30b-a3b", provider="chutes", cost=(0.01999188, 0.0800064)),
+    Endpoint(
+        "openrouter",
+        "shisa-ai/shisa-v2-llama3.3-70b",
+        provider="chutes",
+        cost=(0.01999188, 0.0800064),
+    ),
+    Endpoint(
         "openrouter", "meta-llama/llama-3.1-8b-instruct", provider="nebius/fp8", cost=(0.02, 0.06)
     ),
     Endpoint("openrouter", "meta-llama/llama-guard-3-8b", provider="nebius", cost=(0.02, 0.06)),
+    Endpoint(
+        "openrouter",
+        "moonshotai/kimi-vl-a3b-thinking",
+        provider="chutes",
+        cost=(0.02498985, 0.100008),
+    ),
     Endpoint(
         "openrouter", "meta-llama/llama-3.1-8b-instruct", provider="lambda/bf16", cost=(0.025, 0.04)
     ),
@@ -244,12 +308,39 @@ ENDPOINTS_EXTENDED = [
         cost=(0.025, 0.04),
     ),
     Endpoint(
+        "openrouter", "tencent/hunyuan-a13b-instruct", provider="chutes/bf16", cost=(0.03, 0.03)
+    ),
+    Endpoint(
+        "openrouter",
+        "deepseek/deepseek-r1-distill-llama-70b",
+        provider="chutes",
+        cost=(0.0333198, 0.133344),
+    ),
+    Endpoint(
+        "openrouter",
+        "cognitivecomputations/dolphin3.0-mistral-24b",
+        provider="chutes",
+        cost=(0.037022, 0.14816),
+    ),
+    Endpoint(
         "openrouter",
         "meta-llama/llama-3.3-70b-instruct",
         provider="crusoe/int8",
         cost=(0.039, 0.12),
     ),
     Endpoint("openrouter", "mistralai/mistral-nemo", provider="nebius/fp8", cost=(0.04, 0.12)),
+    Endpoint(
+        "openrouter", "google/gemma-3-12b-it", provider="chutes/bf16", cost=(0.0481286, 0.192608)
+    ),
+    Endpoint(
+        "openrouter", "thedrummer/skyfall-36b-v2", provider="chutes", cost=(0.0481286, 0.192608)
+    ),
+    Endpoint(
+        "openrouter",
+        "qwen/qwen-2.5-coder-32b-instruct",
+        provider="chutes",
+        cost=(0.0499797, 0.200016),
+    ),
     Endpoint(
         "openrouter",
         "meta-llama/llama-3.2-11b-vision-instruct",
@@ -268,24 +359,40 @@ ENDPOINTS_EXTENDED = [
         provider="nebius/fp8",
         cost=(0.05, 0.15),
     ),
-    Endpoint(
-        "openrouter",
-        "meta-llama/llama-3.3-70b-instruct",
-        provider="klusterai/fp8",
-        cost=(0.05, 0.17),
-    ),
+    Endpoint("openrouter", "openai/gpt-oss-20b", provider="nebius/fp4", cost=(0.05, 0.2)),
     Endpoint(
         "openrouter", "qwen/qwen-2.5-coder-32b-instruct", provider="nebius/fp8", cost=(0.06, 0.18)
     ),
     Endpoint(
+        "openrouter", "google/gemma-3-27b-it", provider="chutes/bf16", cost=(0.0666396, 0.266688)
+    ),
+    Endpoint(
+        "openrouter",
+        "qwen/qwen-2.5-72b-instruct",
+        provider="chutes/bf16",
+        cost=(0.0666396, 0.266688),
+    ),
+    Endpoint(
         "openrouter", "qwen/qwen-2.5-coder-32b-instruct", provider="lambda/bf16", cost=(0.07, 0.16)
     ),
+    Endpoint("openrouter", "openai/gpt-oss-120b", provider="chutes", cost=(0.07256312, 0.2903936)),
+    Endpoint(
+        "openrouter", "qwen/qwen3-235b-a22b-2507", provider="chutes", cost=(0.077968332, 0.31202496)
+    ),
     Endpoint("openrouter", "mistralai/devstral-small", provider="nebius/fp8", cost=(0.08, 0.24)),
+    Endpoint(
+        "openrouter", "mistralai/devstral-small-2505", provider="nebius/fp8", cost=(0.08, 0.24)
+    ),
     Endpoint("openrouter", "qwen/qwen3-14b", provider="nebius/fp8", cost=(0.08, 0.24)),
     Endpoint("openrouter", "meta-llama/llama-4-scout", provider="lambda/fp8", cost=(0.08, 0.3)),
     Endpoint("openrouter", "meta-llama/llama-4-scout", provider="klusterai", cost=(0.08, 0.45)),
+    Endpoint(
+        "openrouter",
+        "nousresearch/deephermes-3-mistral-24b-preview",
+        provider="chutes",
+        cost=(0.09329544, 0.3733632),
+    ),
     Endpoint("openrouter", "mistralai/pixtral-12b", provider="hyperbolic/bf16", cost=(0.1, 0.1)),
-    Endpoint("openrouter", "google/gemma-3-27b-it", provider="klusterai", cost=(0.1, 0.18)),
     Endpoint("openrouter", "google/gemma-3-27b-it", provider="nebius/fp8", cost=(0.1, 0.3)),
     Endpoint("openrouter", "microsoft/phi-4", provider="nebius/fp8", cost=(0.1, 0.3)),
     Endpoint("openrouter", "qwen/qwen3-30b-a3b", provider="nebius/fp8", cost=(0.1, 0.3)),
@@ -321,14 +428,40 @@ ENDPOINTS_EXTENDED = [
     ),
     Endpoint("openrouter", "qwen/qwen-2.5-72b-instruct", provider="nebius/fp8", cost=(0.13, 0.4)),
     Endpoint("openrouter", "qwen/qwen3-235b-a22b", provider="klusterai/fp8", cost=(0.13, 2.0)),
+    Endpoint("openrouter", "moonshotai/kimi-k2", provider="chutes/fp8", cost=(0.148088, 0.59264)),
     Endpoint("openrouter", "qwen/qwq-32b", provider="nebius/fp8", cost=(0.15, 0.45)),
+    Endpoint("openrouter", "openai/gpt-oss-120b", provider="crusoe", cost=(0.15, 0.5)),
     Endpoint("openrouter", "openai/gpt-4o-mini", provider="azure", cost=(0.15, 0.6)),
     Endpoint("openrouter", "openai/gpt-4o-mini", provider="openai", cost=(0.15, 0.6)),
     Endpoint("openrouter", "openai/gpt-4o-mini-2024-07-18", provider="openai", cost=(0.15, 0.6)),
+    Endpoint("openrouter", "openai/gpt-oss-120b", provider="nebius/fp4", cost=(0.15, 0.6)),
     Endpoint(
         "openrouter", "meta-llama/llama-4-maverick", provider="klusterai/fp8", cost=(0.15, 0.8)
     ),
+    Endpoint(
+        "openrouter", "deepseek/deepseek-chat", provider="chutes", cost=(0.17992692, 0.7200576)
+    ),
+    Endpoint(
+        "openrouter",
+        "deepseek/deepseek-chat-v3-0324",
+        provider="chutes/fp8",
+        cost=(0.17992692, 0.7200576),
+    ),
+    Endpoint(
+        "openrouter", "deepseek/deepseek-r1-0528", provider="chutes", cost=(0.17992692, 0.7200576)
+    ),
+    Endpoint(
+        "openrouter",
+        "tngtech/deepseek-r1t-chimera",
+        provider="chutes",
+        cost=(0.17992692, 0.7200576),
+    ),
     Endpoint("openrouter", "meta-llama/llama-4-maverick", provider="lambda/fp8", cost=(0.18, 0.6)),
+    Endpoint(
+        "openrouter", "microsoft/mai-ds-r1", provider="chutes/fp8", cost=(0.1999188, 0.800064)
+    ),
+    Endpoint("openrouter", "qwen/qwen3-coder", provider="chutes/fp8", cost=(0.1999188, 0.800064)),
+    Endpoint("openrouter", "z-ai/glm-4.5", provider="chutes/fp8", cost=(0.1999188, 0.800064)),
     Endpoint(
         "openrouter", "meta-llama/llama-3.1-8b-instruct", provider="fireworks", cost=(0.2, 0.2)
     ),
@@ -352,7 +485,9 @@ ENDPOINTS_EXTENDED = [
         cost=(0.2, 0.6),
     ),
     Endpoint("openrouter", "qwen/qwen3-235b-a22b", provider="nebius/fp8", cost=(0.2, 0.6)),
+    Endpoint("openrouter", "qwen/qwen3-235b-a22b-2507", provider="nebius/fp8", cost=(0.2, 0.6)),
     Endpoint("openrouter", "qwen/qwen3-32b", provider="nebius/fast", cost=(0.2, 0.6)),
+    Endpoint("openrouter", "qwen/qwen3-coder", provider="chutes", cost=(0.2, 0.8)),
     Endpoint(
         "openrouter",
         "deepseek/deepseek-r1-distill-llama-70b",
@@ -363,10 +498,10 @@ ENDPOINTS_EXTENDED = [
         "openrouter", "qwen/qwen2.5-vl-72b-instruct", provider="nebius/fp8", cost=(0.25, 0.75)
     ),
     Endpoint(
-        "openrouter", "deepseek/deepseek-chat-v3-0324", provider="crusoe/fp8", cost=(0.28, 1.15)
+        "openrouter", "deepseek/deepseek-chat-v3-0324", provider="deepseek/fp8", cost=(0.27, 1.1)
     ),
     Endpoint(
-        "openrouter", "deepseek/deepseek-chat-v3-0324", provider="klusterai", cost=(0.28, 1.15)
+        "openrouter", "deepseek/deepseek-chat-v3-0324", provider="crusoe/fp8", cost=(0.28, 1.15)
     ),
     Endpoint("openrouter", "qwen/qwen-2.5-vl-7b-instruct", provider="klusterai", cost=(0.3, 0.3)),
     Endpoint("openrouter", "x-ai/grok-3-mini", provider="xai", cost=(0.3, 0.5)),
@@ -398,6 +533,7 @@ ENDPOINTS_EXTENDED = [
         provider="nebius/fp8",
         cost=(0.6, 1.8),
     ),
+    Endpoint("openrouter", "moonshotai/kimi-k2", provider="fireworks/fp8", cost=(0.6, 2.5)),
     Endpoint("openrouter", "x-ai/grok-3-mini", provider="xai", cost=(0.6, 4.0)),
     Endpoint("openrouter", "x-ai/grok-3-mini-beta", provider="xai", cost=(0.6, 4.0)),
     Endpoint(
@@ -434,6 +570,7 @@ ENDPOINTS_EXTENDED = [
     Endpoint(
         "openrouter", "deepseek/deepseek-chat-v3-0324", provider="hyperbolic/fp8", cost=(1.25, 1.25)
     ),
+    Endpoint("openrouter", "qwen/qwen3-coder", provider="hyperbolic/fp8", cost=(2.0, 2.0)),
     Endpoint("openrouter", "deepseek/deepseek-r1", provider="nebius/fast", cost=(2.0, 6.0)),
     Endpoint("openrouter", "openai/gpt-4.1", provider="openai", cost=(2.0, 8.0)),
     Endpoint("openrouter", "x-ai/grok-2-1212", provider="xai", cost=(2.0, 10.0)),
@@ -463,7 +600,7 @@ ENDPOINTS_EXTENDED = [
     Endpoint("openrouter", "x-ai/grok-beta", provider="xai", cost=(5.0, 15.0)),
     Endpoint("openrouter", "x-ai/grok-vision-beta", provider="xai", cost=(5.0, 15.0)),
     Endpoint("openrouter", "x-ai/grok-3", provider="xai/fast", cost=(5.0, 25.0)),
-    Endpoint("openrouter", "x-ai/grok-3-beta", provider="xai", cost=(5.0, 25.0)),
+    Endpoint("openrouter", "x-ai/grok-3-beta", provider="xai/fast", cost=(5.0, 25.0)),
     Endpoint("openrouter", "openai/gpt-4o:extended", provider="openai", cost=(6.0, 18.0)),
     Endpoint("openrouter", "openai/gpt-4-1106-preview", provider="openai", cost=(10.0, 30.0)),
     Endpoint("openrouter", "openai/gpt-4-turbo", provider="openai", cost=(10.0, 30.0)),
