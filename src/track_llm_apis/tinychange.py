@@ -5,7 +5,7 @@ import logging
 import os
 import random
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import lightning as pl
@@ -16,6 +16,8 @@ import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
 from dotenv import load_dotenv
 from peft import LoraConfig, get_peft_model
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch.nn.utils import prune
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -158,45 +160,61 @@ class FinetuningDataModule(pl.LightningDataModule):
         return disk_path
 
 
-@dataclass
-class TinyChangeConfig:
+class TinyChangeConfig(BaseSettings):
     variants_device: str | None = None
-
     enable_random_noise: bool = True
     enable_weight_pruning: bool = True
     enable_finetuning: bool = True
     enable_lora_finetuning: bool = True
     enable_quantization: bool = True
-
     seed: int | None = 0
-    random_noise_scale: list[float | int] = field(
+
+    random_noise_scale: list[float | int] = Field(
         default_factory=lambda: [float(2 ** (-n)) for n in range(0, 16)]
     )
-    weight_pruning_magnitude_scale: list[float | int] = field(
+    weight_pruning_magnitude_scale: list[float | int] = Field(
         default_factory=lambda: [float(2 ** (-n)) for n in range(0, 11)]
     )
-    weight_pruning_random_scale: list[float | int] = field(
+    weight_pruning_random_scale: list[float | int] = Field(
         default_factory=lambda: [float(2 ** (-n)) for n in range(0, 11)]
     )
+
     finetuning_dataset: Dataset | None = None
-    finetuning_lr_scale: list[float | int] = field(default_factory=lambda: [1e-6])
-    finetuning_samples: list[int] = field(default_factory=lambda: [2**n for n in range(0, 10)])
+    finetuning_lr_scale: list[float | int] = Field(default_factory=lambda: [1e-6])
+    finetuning_samples: list[int] = Field(default_factory=lambda: [2**n for n in range(0, 10)])
     finetuning_epochs: int = 1
     finetuning_batch_size: int = 1
     finetuning_max_length: int = 1024
+
     lora_r: int = 1
     lora_alpha: int = 1
     lora_dropout: float = 0.0
-    lora_target_modules: list[str] = field(
+    lora_target_modules: list[str] = Field(
         default_factory=lambda: ["o_proj"]  # , "k_proj", "v_proj", "o_proj"]
     )
-    quantization_methods: list[str] = field(default_factory=lambda: ["int8"])
 
-    def __post_init__(self):
-        # Trim the finetuning dataset to the max length
-        max_samples = max(self.finetuning_samples)
+    quantization_methods: list[str] = Field(default_factory=lambda: ["int8"])
+
+    @model_validator(mode="after")
+    def trim_finetuning_dataset(self):
+        """Trim the finetuning dataset to the max samples"""
         if self.finetuning_dataset is not None:
-            self.finetuning_dataset = self.finetuning_dataset.select(range(max_samples))
+            max_samples = max(self.finetuning_samples)
+            # Use object.__setattr__ to bypass validation and avoid recursion
+            object.__setattr__(
+                self, "finetuning_dataset", self.finetuning_dataset.select(range(max_samples))
+            )
+        return self
+
+    model_config = SettingsConfigDict(
+        arbitrary_types_allowed=True,  # for Dataset
+        validate_assignment=True,
+        env_prefix="TINYCHANGE_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="allow",
+    )
 
 
 @dataclass
