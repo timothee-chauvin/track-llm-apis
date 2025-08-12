@@ -9,13 +9,13 @@ from datasets import Dataset
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from track_llm_apis.config import Config
+from track_llm_apis.config import config
 from track_llm_apis.util import load_lmsys_chat_1m
 
-random.seed(Config.seed)
-np.random.seed(Config.seed)
+random.seed(config.seed)
+np.random.seed(config.seed)
 
-logger = Config.logger
+logger = config.logger
 
 load_dotenv()
 
@@ -35,20 +35,20 @@ DATASET_NAME = "lmsys-chat-1m"
 
 
 def file_name(sample_size: int) -> str:
-    return f"{DATASET_NAME}_{sample_size}_seed={Config.seed}.jsonl"
+    return f"{DATASET_NAME}_{sample_size}_seed={config.seed}.jsonl"
 
 
 def generate_jsonl(dataset: Dataset) -> Path:
     """
-    Generate a JSONL file for OpenAI from `dataset`, save it in Config.openai_finetuning_dir.
+    Generate a JSONL file for OpenAI from `dataset`, save it in config.openai_finetuning_dir.
 
     Return the path to the JSONL file.
     """
-    os.makedirs(Config.openai_finetuning_dir, exist_ok=True)
+    os.makedirs(config.openai_finetuning_dir, exist_ok=True)
     jsonl = ""
     for row in dataset["conversation"]:
         jsonl += json.dumps({"messages": row}) + "\n"
-    path = Config.openai_finetuning_dir / file_name(len(dataset["conversation"]))
+    path = config.openai_finetuning_dir / file_name(len(dataset["conversation"]))
     with open(path, "w") as f:
         f.write(jsonl)
     return path
@@ -172,7 +172,7 @@ def finetune(confirm: bool = False):
                 client.fine_tuning.jobs.create(
                     model=model,
                     training_file=file_id,
-                    seed=Config.seed,
+                    seed=config.seed,
                     suffix=suffix,
                     method={  # pyright: ignore[reportArgumentType]
                         "type": "supervised",

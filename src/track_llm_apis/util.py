@@ -14,11 +14,11 @@ import xxhash
 from datasets import Dataset, load_dataset, load_from_disk
 from dotenv import load_dotenv
 
-from track_llm_apis.config import Config
+from track_llm_apis.config import config
 
 load_dotenv()
 
-logger = Config.logger
+logger = config.logger
 
 
 async def gather_with_concurrency(n, *coros):
@@ -142,7 +142,7 @@ def load_lmsys_chat_1m(
     """
     ds_name = "lmsys/lmsys-chat-1m"
     logger.info(f"Loading the {ds_name} dataset...")
-    cache_path = Config.datasets_dir / f"{slugify(ds_name, hash_length=0)}"
+    cache_path = config.datasets_dir / f"{slugify(ds_name, hash_length=0)}"
     if use_cache:
         if cache_path.exists():
             logger.info(f"Already processed dataset found at {cache_path}, loading...")
@@ -324,10 +324,10 @@ def patch_chat_template(tokenizer):
         return
     else:
         h = fast_hash(chat_template)
-        if h in Config.chat_templates:
-            tokenizer.chat_template = Config.chat_templates[h]["template"]
+        if h in config.chat_templates:
+            tokenizer.chat_template = config.chat_templates[h]["template"]
         else:
             raise ValueError(
-                f"Chat template hash {h} not found in Config.chat_templates. You may need to update the chat_templates.toml file."
+                f"Chat template hash {h} not found in config.chat_templates. You may need to update the chat_templates.toml file."
             )
     return

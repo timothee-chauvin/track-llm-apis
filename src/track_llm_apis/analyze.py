@@ -24,11 +24,11 @@ from scipy import stats
 from scipy.stats import linregress, norm, shapiro
 from tqdm import tqdm
 
-from track_llm_apis.config import Config
+from track_llm_apis.config import config
 from track_llm_apis.util import slugify, trim_to_length
 
-logger = Config.logger
-analysis_config = Config.analysis_config
+logger = config.logger
+analysis_config = config.analysis
 
 model_types = {
     "gpt-4o-mini": "?",
@@ -89,7 +89,7 @@ def get_db_data(
         A dict of table names to lists of ResponseData.
     """
     logger.info("Getting db data...")
-    conn = sqlite3.connect(Config.db_path)
+    conn = sqlite3.connect(config.db_path)
     cursor = conn.cursor()
     try:
         if tables is None:
@@ -138,7 +138,7 @@ def get_db_data(
             )
         return dict(results)
     except sqlite3.Error as e:
-        Config.logger.error(f"An error occurred during database analysis: {e}")
+        config.logger.error(f"An error occurred during database analysis: {e}")
         raise e
     finally:
         conn.close()
@@ -271,7 +271,7 @@ def top_logprob_variability(after: datetime | None = None):
 def plot_prob_std(after: datetime | None = None):
     # TODO wrong (see get_top_token_logprobs)
     data = get_db_data(after=after)
-    os.makedirs(Config.plots_dir, exist_ok=True)
+    os.makedirs(config.plots_dir, exist_ok=True)
 
     table_names = []
     stdevs = []
@@ -353,7 +353,7 @@ def plot_prob_std(after: datetime | None = None):
     )
 
     filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
-    fig_path = Config.plots_dir / f"model_prob_std_histogram{filename_suffix}.html"
+    fig_path = config.plots_dir / f"model_prob_std_histogram{filename_suffix}.html"
     fig.write_html(fig_path)
     print(f"Saved std histogram to {fig_path}")
 
@@ -372,7 +372,7 @@ def boostrap_std_ci(data: list[float], n_samples: int = 1000) -> tuple[float, fl
 def plot_prob_histograms(after: datetime | None = None):
     # TODO wrong (see get_top_token_logprobs)
     data = get_db_data(after=after)
-    histograms_dir = Config.plots_dir / "histograms"
+    histograms_dir = config.plots_dir / "histograms"
     os.makedirs(histograms_dir, exist_ok=True)
 
     for table_name in data.keys():
@@ -424,7 +424,7 @@ def plot_top_token_logprobs_over_time(
         tables: Only plot data for these tables.
     """
     data = get_db_data(after=after, tables=tables)
-    time_series_dir = Config.plots_dir / "time_series"
+    time_series_dir = config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
 
     n_plots = sum(len(set(row.prompt for row in rows)) for rows in data.values())
@@ -597,8 +597,8 @@ def create_random_qq_plots(n_samples: int = 100):
     Convert matplotlib figures to plotly and save as HTML.
     Also creates combined subplot figures with readable plots.
     """
-    random.seed(Config.seed)
-    np.random.seed(Config.seed)
+    random.seed(config.seed)
+    np.random.seed(config.seed)
 
     data = get_db_data()
 
@@ -630,7 +630,7 @@ def create_random_qq_plots(n_samples: int = 100):
     sample_size = min(n_samples, len(valid_tuples))
     sampled_tuples = random.sample(valid_tuples, sample_size)
 
-    qq_plots_dir = Config.plots_dir / "qq_plots"
+    qq_plots_dir = config.plots_dir / "qq_plots"
     os.makedirs(qq_plots_dir, exist_ok=True)
 
     logger.info(f"Creating Q-Q plots for {sample_size} randomly selected tuples...")
@@ -772,7 +772,7 @@ def create_random_qq_plots(n_samples: int = 100):
             )
 
         # Update combined figure layout
-        page_title = f"Combined Q-Q Plots vs Normal Distribution (Page {page + 1}/{num_pages}, seed={Config.seed})"
+        page_title = f"Combined Q-Q Plots vs Normal Distribution (Page {page + 1}/{num_pages}, seed={config.seed})"
         combined_fig.update_layout(
             title=page_title,
             template="plotly_white",
@@ -794,7 +794,7 @@ def create_random_qq_plots(n_samples: int = 100):
 
         # Save combined figure for this page
         combined_fig_path = (
-            qq_plots_dir / f"combined_qq_plots_page_{page + 1}_seed_{Config.seed}.html"
+            qq_plots_dir / f"combined_qq_plots_page_{page + 1}_seed_{config.seed}.html"
         )
         combined_fig.write_html(combined_fig_path)
         logger.info(f"Saved combined Q-Q plot page {page + 1}/{num_pages} to {combined_fig_path}")
@@ -1028,7 +1028,7 @@ class ProbCUSUM_Detector:
         plt.grid(True)
         plt.tight_layout()
         plt.savefig(
-            Config.plots_dir / f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_change_points.png"
+            config.plots_dir / f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_change_points.png"
         )
         plt.close()
 

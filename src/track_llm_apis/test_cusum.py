@@ -12,7 +12,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
-import fire
 import numpy as np
 import plotly.graph_objects as go
 import torch
@@ -23,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
 
-from track_llm_apis.config import Config
+from track_llm_apis.config import DeviceConfig, config
 from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_chat_1m
 from track_llm_apis.util import (
     available_gpu_memory_fraction,
@@ -39,13 +38,17 @@ from track_llm_apis.util import (
 )
 from track_llm_apis.wikipedia import get_wikipedia_samples
 
-logger = Config.logger
+logger = config.logger
 
 # In order to be able to pass functions as args in LLM.collective_rpc()
 os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
-random.seed(Config.seed)
-np.random.seed(Config.seed)
+random.seed(config.seed)
+np.random.seed(config.seed)
+
+# target_memory_gb = 20
+# total_memory_gb = torch.cuda.mem_get_info()[1] / 1024**3
+# torch.cuda.memory.set_per_process_memory_fraction(target_memory_gb / total_memory_gb)
 
 
 class WorkerExtension:
@@ -492,7 +495,7 @@ def plot_logprobs_over_time(
     prompt_slug = slugify(prompt, max_length=50, hash_length=8)
     model_name_slug = slugify(base_model_name, hash_length=0)
     prompt_dir = (
-        Config.plots_dir
+        config.plots_dir
         / "time_series_local"
         / prompt_slug
         / model_name_slug
@@ -543,76 +546,47 @@ def plot_logprobs_over_time(
     fig.write_html(prompt_dir / filename)
 
 
-async def main(
-    model_name: str,
-    device: str | None = None,
-    vllm_device: str | None = None,
-    original_model_device: str | None = None,
-    variants_device: str | None = None,
-):
+async def main():
     DEBUG = True
     if DEBUG:
-        vllm_device = "cuda:0"
-        original_model_device = "cuda:1"
-        variants_device = "cuda:2"
-    if (
-        device is None
-        and vllm_device is None
-        and original_model_device is None
-        and variants_device is None
-    ):
-        device = "cuda"
-        vllm_device = device
-        original_model_device = device
-        variants_device = device
-    elif device is not None:
-        if (
-            vllm_device is not None
-            or original_model_device is not None
-            or variants_device is not None
-        ):
-            raise ValueError(
-                "If 'device' is provided, 'vllm_device', 'original_model_device', and 'variants_device' must be None"
-            )
-        vllm_device = device
-        original_model_device = device
-        variants_device = device
-    elif vllm_device is None or original_model_device is None or variants_device is None:
-        raise ValueError(
-            "Either provide 'device' alone, or all of 'vllm_device', 'original_model_device', and 'variants_device'"
+        config.sampling.device_config = DeviceConfig(
+            vllm_device="cuda:0",
+            original_model_device="cuda:0",
+            variants_device="cuda:1",
         )
+        # config.sampling.model_name = "microsoft/Phi-3-mini-4k-instruct"
 
-    # if DEBUG:
-    #     model_name = "microsoft/Phi-3-mini-4k-instruct"
+    tc_config = TinyChangeConfig(
+        variants_device=config.sampling.device_config.variants_device,
+        finetuning_dataset=load_lmsys_chat_1m(),
+    )
+    if DEBUG:
+        # tc_config.enable_finetuning = False
+        # tc_config.finetuning_samples = [1, 16]
+        # tc_config.enable_lora_finetuning = False
+        tc_config.enable_weight_pruning = False
+        tc_config.finetuning_samples = [1, 16, 32]
+        tc_config.weight_pruning_random_scale = []
+        tc_config.weight_pruning_magnitude_scale = [0.1]
+        tc_config.enable_quantization = False
+        tc_config.enable_random_noise = False
 
-    prompts = Config.prompts + Config.prompts_extended
-    output_dir = Config.sampling_data_dir / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    model_name = config.sampling.model_name
+    prompts = config.prompts + config.prompts_extended
+    output_dir = config.sampling_data_dir / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     os.makedirs(output_dir, exist_ok=True)
 
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(
-        original_model_device
+        config.sampling.device_config.original_model_device
     )
     # if model.dtype.itemsize > 2:
     #     logger.info(f"Converting model from {model.dtype} to bfloat16")
     #     model.to(torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     patch_chat_template(tokenizer)
-    config = TinyChangeConfig(
-        variants_device=variants_device, finetuning_dataset=load_lmsys_chat_1m()
-    )
-    assert isinstance(config.finetuning_dataset, Dataset)
-    other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]  # pyright: ignore[reportArgumentType,reportCallIssue]
-    if DEBUG:
-        # config.enable_finetuning = False
-        # config.finetuning_samples = [1, 16]
-        # config.enable_lora_finetuning = False
-        config.enable_weight_pruning = False
-        # config.finetuning_samples = [1, 16, 32]
-        # config.weight_pruning_random_scale = []
-        # config.weight_pruning_magnitude_scale = [0.1]
-        config.enable_quantization = False
-        config.enable_random_noise = False
-    tiny_change = TinyChange(model, tokenizer, config)
+    assert isinstance(tc_config.finetuning_dataset, Dataset)
+    other_prompts = [item["conversation"][0]["content"] for item in tc_config.finetuning_dataset]  # pyright: ignore[reportArgumentType,reportCallIssue]
+    tiny_change = TinyChange(model, tokenizer, tc_config)
     n_variants = tiny_change.n_variants
     compressed_output = CompressedOutput(model_name)
 
@@ -637,7 +611,7 @@ async def main(
         "n_other_prompts": len(other_prompts),
     }
     # Initialize vLLM instance
-    llm = init_vllm(model, tokenizer, vllm_device)
+    llm = init_vllm(model, tokenizer, config.sampling.device_config.vllm_device)
 
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
@@ -732,23 +706,9 @@ async def main(
         cleanup_vllm(llm)
 
 
-def entrypoint(
-    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    device: str | None = None,
-    vllm_device: str | None = None,
-    original_model_device: str | None = None,
-    variants_device: str | None = None,
-):
-    asyncio.run(
-        main(
-            model_name=model_name,
-            device=device,
-            vllm_device=vllm_device,
-            original_model_device=original_model_device,
-            variants_device=variants_device,
-        )
-    )
+def entrypoint():
+    asyncio.run(main())
 
 
 if __name__ == "__main__":
-    fire.Fire(entrypoint)
+    entrypoint()

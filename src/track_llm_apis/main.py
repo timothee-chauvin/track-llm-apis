@@ -13,14 +13,14 @@ import fire
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-from track_llm_apis.config import Config
+from track_llm_apis.config import config
 from track_llm_apis.util import (
     gather_with_concurrency_streaming,
     retry_with_exponential_backoff,
     trim_to_length,
 )
 
-logger = Config.logger
+logger = config.logger
 
 load_dotenv()
 
@@ -38,10 +38,10 @@ class Endpoint:
         if self.max_logprobs is None:
             if self.source == "openrouter":
                 assert self.provider is not None
-                for provider_prefix in Config.top_logprobs_openrouter.keys():
+                for provider_prefix in config.top_logprobs_openrouter.keys():
                     if self.provider.lower().startswith(provider_prefix.lower()):
-                        return Config.top_logprobs_openrouter[provider_prefix]
-            return Config.top_logprobs[self.source]
+                        return config.top_logprobs_openrouter[provider_prefix]
+            return config.top_logprobs[self.source]
         return self.max_logprobs
 
     def __str__(self) -> str:
@@ -116,7 +116,7 @@ for endpoint in ENDPOINTS:
     )
     if create_seed_version:
         endpoint_with_seed = deepcopy(endpoint)
-        endpoint_with_seed.seed = Config.api_seed
+        endpoint_with_seed.seed = config.api_seed
         ENDPOINTS_WITH_SEED.append(endpoint_with_seed)
 
 
@@ -807,7 +807,7 @@ ENDPOINTS_EXTENDED = [endpoint for endpoint in ENDPOINTS_EXTENDED if endpoint no
 ENDPOINTS_EXTENDED = [
     endpoint
     for endpoint in ENDPOINTS_EXTENDED
-    if endpoint.cost[0] + endpoint.cost[1] <= Config.extended_endpoints_max_cost
+    if endpoint.cost[0] + endpoint.cost[1] <= config.extended_endpoints_max_cost
 ]
 
 
@@ -820,9 +820,9 @@ def compute_cost(usage: dict, endpoint: Endpoint) -> float:
 
 class DatabaseManager:
     def __init__(self):
-        if not Config.db_path.exists():
-            Config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(Config.db_path)
+        if not config.db_path.exists():
+            config.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(config.db_path)
         self.create_tables()
 
     def create_tables(self):
@@ -878,7 +878,7 @@ class OpenAIClient:
             response = await self.client.chat.completions.create(
                 model=endpoint.name,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=Config.max_completion_tokens,
+                max_completion_tokens=config.max_completion_tokens,
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
@@ -915,7 +915,7 @@ class GrokClient:
             response = await self.client.chat.completions.create(
                 model=endpoint.name,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=Config.max_completion_tokens,
+                max_completion_tokens=config.max_completion_tokens,
                 logprobs=True,
                 top_logprobs=endpoint.get_max_logprobs(),
                 temperature=0,
@@ -949,7 +949,7 @@ class OpenRouterClient:
         request_data = {
             "model": endpoint.name,
             "messages": [{"role": "user", "content": prompt}],
-            "max_completion_tokens": Config.max_completion_tokens,
+            "max_completion_tokens": config.max_completion_tokens,
             "logprobs": True,
             "top_logprobs": endpoint.get_max_logprobs(),
             "temperature": 0,
@@ -1004,10 +1004,10 @@ class OpenRouterClient:
     async def query(self, endpoint: Endpoint, prompt: str) -> Response:
         try:
             return await retry_with_exponential_backoff(
-                self._make_request, endpoint, prompt, max_retries=Config.max_retries
+                self._make_request, endpoint, prompt, max_retries=config.max_retries
             )
         except Exception as e:
-            logger.error(f"Error querying {endpoint} after {Config.max_retries} retries: {e}")
+            logger.error(f"Error querying {endpoint} after {config.max_retries} retries: {e}")
             return Response(endpoint, prompt, [], [], 0.0, error=str(e))
 
 
@@ -1054,13 +1054,13 @@ async def main_async(num_iterations: int, delay: float | int, store_results: boo
 
             tasks = [
                 query_endpoint(endpoint, prompt, db_manager)
-                for prompt in Config.prompts
+                for prompt in config.prompts
                 for endpoint in ENDPOINTS
             ]
             tasks.extend(
                 [
                     query_endpoint(endpoint, prompt, db_manager)
-                    for prompt in Config.prompts_extended
+                    for prompt in config.prompts_extended
                     for endpoint in ENDPOINTS + ENDPOINTS_EXTENDED
                 ]
             )

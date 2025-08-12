@@ -6,11 +6,11 @@ import aiohttp
 import fire
 import requests
 
-from track_llm_apis.config import Config
+from track_llm_apis.config import config
 from track_llm_apis.main import Endpoint, OpenRouterClient
 from track_llm_apis.util import gather_with_concurrency_streaming
 
-logger = Config.logger
+logger = config.logger
 
 
 async def fetch_model_endpoints(session, model_id):
@@ -76,7 +76,7 @@ async def test_endpoint_logprobs(endpoint):
 
 
 async def main(add_to_existing: bool = False):
-    Config.max_retries = 5
+    config.max_retries = 5
 
     # Get the model IDs
     logger.info("Fetching model list...")
