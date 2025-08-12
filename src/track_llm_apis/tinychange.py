@@ -247,8 +247,6 @@ class TinyChangeModel:
 
 class TinyChange:
     # TODO in order or random order
-    # TODO device handling, parallel processing on multiple GPUs
-    # TODO reproducibility
     def __init__(self, model, tokenizer, config: TinyChangeConfig):
         self.model = model
         self.model_hash = get_model_hash(model)
@@ -258,7 +256,7 @@ class TinyChange:
         self.config = config
         # Default to using the same device as the model for the variants
         if self.config.variants_device is None:
-            self.config.variants_device = model.device
+            self.config.variants_device = str(model.device)
 
         if self.config.seed is not None:
             torch.manual_seed(self.config.seed)
@@ -275,7 +273,7 @@ class TinyChange:
 
         self.tasks = []
         # Start by always returning the unchanged model
-        self.tasks.append(self.get_unchanged())
+        # self.tasks.append(self.get_unchanged())
         if self.config.enable_quantization:
             self.tasks.extend(
                 [self.quantize(method) for method in self.config.quantization_methods]

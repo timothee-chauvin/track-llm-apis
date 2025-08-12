@@ -549,15 +549,15 @@ def plot_logprobs_over_time(
 async def main():
     DEBUG = False
     if DEBUG:
-        config.sampling.device_config = DeviceConfig(
-            vllm_device="cuda:0",
-            original_model_device="cuda:0",
-            variants_device="cuda:1",
-        )
         config.sampling.original_model_n_samples = 5
         config.sampling.variants_n_samples = 5
         # config.sampling.model_name = "microsoft/Phi-3-mini-4k-instruct"
 
+    config.sampling.device_config = DeviceConfig(
+        vllm_device="cuda:0",
+        original_model_device="cuda:0",
+        variants_device="cuda:1",
+    )
     tc_config = TinyChangeConfig(variants_device=config.sampling.device_config.variants_device)
     if DEBUG:
         # tc_config.enable_finetuning = False

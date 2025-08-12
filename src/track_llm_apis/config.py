@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from track_llm_apis.util import dataset_info, load_lmsys_chat_1m
 
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
