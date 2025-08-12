@@ -54,7 +54,7 @@ def create_ipc_handles(model: torch.nn.Module):
     return ipc_handles
 
 
-def random_noise(scale: float, model: torch.nn.Module):
+def random_noise(scale: float | int, model: torch.nn.Module):
     new_model = copy.deepcopy(model)
     for _, param in new_model.named_parameters():
         if param.requires_grad:

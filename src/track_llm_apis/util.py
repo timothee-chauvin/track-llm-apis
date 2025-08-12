@@ -311,9 +311,28 @@ def temporary_env(variable_name: str, value: str):
             os.environ[variable_name] = original_value
 
 
-def copy_model_to(model, device: str):
+def copy_model_to(model, device: str, dtype: torch.dtype | None = torch.bfloat16):
     """Copy a model to a new device, without first creating a copy on the original device."""
+    logger.info(f"Copying model to {device} with dtype {dtype}...")
     new_model = type(model)(model.config)
-    new_model.to(device)
+    if dtype is not None:
+        new_model.to(device, dtype=dtype)
+    else:
+        new_model.to(device)
     new_model.load_state_dict(model.state_dict())
     return new_model
+
+
+def patch_chat_template(tokenizer):
+    chat_template = tokenizer.chat_template
+    if "{% generation %}" in chat_template:
+        return
+    else:
+        h = fast_hash(chat_template)
+        if h in Config.chat_templates:
+            tokenizer.chat_template = Config.chat_templates[h]["template"]
+        else:
+            raise ValueError(
+                f"Chat template hash {h} not found in Config.chat_templates. You may need to update the chat_templates.toml file."
+            )
+    return

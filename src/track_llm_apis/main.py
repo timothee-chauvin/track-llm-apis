@@ -66,8 +66,8 @@ class Response:
     endpoint: Endpoint
     prompt: str
     tokens: list[str]
-    logprobs: list[float]
-    cost: float
+    logprobs: list[float | int]
+    cost: float | int
     system_fingerprint: str | None = None
     error: str | None = None
 
@@ -1040,7 +1040,7 @@ async def query_endpoint(
     return response
 
 
-async def main_async(num_iterations: int, delay: float, store_results: bool = False):
+async def main_async(num_iterations: int, delay: float | int, store_results: bool = False):
     if store_results:
         db_manager = DatabaseManager()
     else:

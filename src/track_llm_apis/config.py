@@ -1,18 +1,29 @@
 import logging
+import tomllib
 from pathlib import Path
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
 ROOT_DIR = Path(__file__).parent.parent.parent
+SRC_DIR = Path(__file__).parent
 
 
 class AnalysisConfig:
     cusum_warmup_period = 100
     cusum_threshold_probability = 1e-5
     ema_factor = 0.9
+
+
+class ChatTemplates:
+    def __init__(self):
+        with open(SRC_DIR / "chat_templates.toml", "rb") as f:
+            self.chat_templates = tomllib.load(f)
+
+    def dict(self):
+        return self.chat_templates
 
 
 class Config:
@@ -68,3 +79,4 @@ class Config:
     max_retries = 15
     extended_endpoints_max_cost = 30  # sum of input and output costs per Mtok
     analysis_config = AnalysisConfig()
+    chat_templates = ChatTemplates().dict()

@@ -28,7 +28,7 @@ from track_llm_apis.util import (
     get_dataset_hash,
     get_model_hash,
     load_lmsys_chat_1m,
-    temporary_env,
+    slugify,
 )
 
 load_dotenv()
@@ -42,9 +42,10 @@ logger = logging.getLogger("tinychange")
 
 
 class LightningModel(pl.LightningModule):
-    def __init__(self, model):
+    def __init__(self, model, lr: float | int):
         super().__init__()
         self.model = model
+        self.lr = lr
         self.save_hyperparameters(ignore=["model"])
 
     def forward(self, x):
@@ -62,11 +63,10 @@ class LightningModel(pl.LightningModule):
         loss = F.cross_entropy(
             shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=-100
         )
-        self.log("train_loss", loss)
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
+        optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
         return optimizer
 
 
@@ -89,8 +89,7 @@ class FinetuningDataModule(pl.LightningDataModule):
     def prepare_data(self):
         """Validate the finetuning dataset and create a random order of the finetuning samples, preprocess it for pytorch, save to disk."""
         logger.info("Preprocessing finetuning dataset...")
-        dataset_hash = get_dataset_hash(self.dataset)
-        disk_path = Config.datasets_dir / dataset_hash
+        disk_path = self._get_disk_path()
         if disk_path.exists():
             logger.info(f"Finetuning dataset already exists at {disk_path}, nothing to do.")
             return
@@ -144,14 +143,20 @@ class FinetuningDataModule(pl.LightningDataModule):
         ft_ds.save_to_disk(str(disk_path))
 
     def setup(self, stage: str):
-        dataset_hash = get_dataset_hash(self.dataset)
-        disk_path = Config.datasets_dir / dataset_hash
+        disk_path = self._get_disk_path()
         self.tokenized_dataset = load_from_disk(str(disk_path))
         assert isinstance(self.tokenized_dataset, Dataset)
         self.tokenized_dataset = self.tokenized_dataset.select(range(self.n_samples))
 
     def train_dataloader(self):
         return DataLoader(self.tokenized_dataset, batch_size=self.batch_size, shuffle=False)  # pyright: ignore[reportArgumentType]
+
+    def _get_disk_path(self):
+        dataset_hash = get_dataset_hash(self.dataset)
+        tokenizer_slug = slugify(self.tokenizer.name_or_path, hash_length=0)
+        disk_path = Config.datasets_dir / dataset_hash / tokenizer_slug
+        disk_path.parent.mkdir(parents=True, exist_ok=True)
+        return disk_path
 
 
 @dataclass
@@ -385,41 +390,41 @@ class TinyChange:
                 task_type="CAUSAL_LM",
             )
             model = get_peft_model(model, peft_config)
-        pl_model = LightningModel(model)
+        pl_model = LightningModel(model, lr=lr)
 
-        with temporary_env("CUDA_VISIBLE_DEVICES", self.config.variants_device[5:]):  # pyright: ignore[reportOptionalSubscript]
-            assert self.config.finetuning_dataset is not None
-            datamodule = FinetuningDataModule(
-                dataset=self.config.finetuning_dataset,
-                n_samples=n_samples,
-                ft_max_length=self.config.finetuning_max_length,
-                batch_size=batch_size,
-                tokenizer=self.tokenizer,
-            )
-            trainer = pl.Trainer(
-                max_epochs=epochs,
-                accelerator="gpu",
-                devices=1,
-                logger=False,
-                enable_checkpointing=False,
-                enable_progress_bar=True,
-                enable_model_summary=False,
-            )
-            trainer.fit(model=pl_model, datamodule=datamodule)
+        assert self.config.finetuning_dataset is not None
 
-            if use_lora:
-                model = model.merge_and_unload()  # pyright: ignore[reportCallIssue]
+        datamodule = FinetuningDataModule(
+            dataset=self.config.finetuning_dataset,
+            n_samples=n_samples,
+            ft_max_length=self.config.finetuning_max_length,
+            batch_size=batch_size,
+            tokenizer=self.tokenizer,
+        )
+        trainer = pl.Trainer(
+            max_epochs=epochs,
+            accelerator="cuda",
+            devices=[int(self.config.variants_device[5:])],  # pyright: ignore[reportOptionalSubscript]
+            logger=False,
+            enable_checkpointing=False,
+            enable_progress_bar=True,
+            enable_model_summary=False,
+        )
+        trainer.fit(model=pl_model, datamodule=datamodule)
 
-            return TinyChangeModel(
-                description={
-                    "type": "finetune",
-                    "lr": lr,
-                    "n_samples": n_samples,
-                    "lora": use_lora,
-                },
-                model_hash=get_model_hash(model),
-                model=model,
-            )
+        if use_lora:
+            model = model.merge_and_unload()  # pyright: ignore[reportCallIssue]
+
+        return TinyChangeModel(
+            description={
+                "type": "finetune",
+                "lr": lr,
+                "n_samples": n_samples,
+                "lora": use_lora,
+            },
+            model_hash=get_model_hash(model),
+            model=model,
+        )
 
     async def quantize(self, method: str) -> TinyChangeModel:
         model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]

@@ -15,7 +15,7 @@ import numpy as np
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from torch.multiprocessing.reductions import reduce_tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, RequestOutput, SamplingParams
@@ -28,6 +28,7 @@ from track_llm_apis.util import (
     fast_hash,
     format_mmlu_prompt,
     format_wikipedia_prompt,
+    patch_chat_template,
     slugify,
     temporary_env,
     trim_to_length,
@@ -402,7 +403,7 @@ def vllm_inference(
     prompts: list[str],
     n_samples: int,
     max_tokens: int,
-    temperature: float,
+    temperature: float | int,
     variant: str,
     source: DataSource,
 ) -> list[OutputRow]:
@@ -426,7 +427,7 @@ def vllm_inference_random_traffic(
     batch_size: int,
     n_samples: int,
     max_tokens: int,
-    temperature: float,
+    temperature: float | int,
     logprobs_topk: int,
     variant: str,
     source: DataSource,
@@ -585,13 +586,18 @@ async def main(
     output_dir = Config.sampling_data_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(original_model_device)
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(
+        original_model_device
+    )
     # if model.dtype.itemsize > 2:
     #     logger.info(f"Converting model from {model.dtype} to bfloat16")
     #     model.to(torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    config = TinyChangeConfig(variants_device=variants_device)
-    config.finetuning_dataset = load_lmsys_chat_1m()
+    patch_chat_template(tokenizer)
+    config = TinyChangeConfig(
+        variants_device=variants_device, finetuning_dataset=load_lmsys_chat_1m()
+    )
+    assert isinstance(config.finetuning_dataset, Dataset)
     other_prompts = [item["conversation"][0]["content"] for item in config.finetuning_dataset]  # pyright: ignore[reportArgumentType,reportCallIssue]
     if DEBUG:
         # config.enable_finetuning = False
@@ -684,6 +690,8 @@ async def main(
 
             # Free up model weights and KV cache from vLLM memory
             llm.sleep(level=2)
+            del variant.model
+            del model
 
     except StopAsyncIteration:
         logger.info("All variants processed")
