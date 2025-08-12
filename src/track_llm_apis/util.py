@@ -346,5 +346,5 @@ def dataset_info(dataset: Dataset | None) -> dict[str, str | int]:
         "length": len(dataset),
         "hash": get_dataset_hash(dataset),
         "first": trim_to_length(dataset[0]["conversation"][0]["content"], 100),
-        "last": trim_to_length(dataset[-1]["conversation"][-1]["content"], 100),
+        "last": trim_to_length(dataset[-1]["conversation"][0]["content"], 100),
     }

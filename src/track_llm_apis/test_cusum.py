@@ -613,6 +613,7 @@ async def main():
         "n_total_variants": n_variants,
         "processed_variants": [],
     }
+    logger.info(f"Initial metadata:\n{json.dumps(metadata, indent=2)}")
     # Initialize vLLM instance
     llm = init_vllm(model, tokenizer, config.sampling.device_config.vllm_device)
 
