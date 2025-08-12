@@ -46,7 +46,6 @@ class LightningModel(pl.LightningModule):
         super().__init__()
         self.model = model
         self.lr = lr
-        self.save_hyperparameters(ignore=["model"])
 
     def forward(self, x):
         return self.model(x)
@@ -216,6 +215,7 @@ class TinyChange:
     # TODO reproducibility
     def __init__(self, model, tokenizer, config: TinyChangeConfig):
         self.model = model
+        self.model_hash = get_model_hash(model)
         self.tokenizer = tokenizer
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -302,6 +302,9 @@ class TinyChange:
         result = await task
         gc.collect()
         torch.cuda.empty_cache()
+        assert get_model_hash(self.model) == self.model_hash, (
+            f"Original model hash changed from {self.model_hash} to {get_model_hash(self.model)}!!"
+        )
         return result
 
     async def get_unchanged(self) -> TinyChangeModel:
@@ -412,8 +415,16 @@ class TinyChange:
         )
         trainer.fit(model=pl_model, datamodule=datamodule)
 
+        trained_model = pl_model.model
+
         if use_lora:
-            model = model.merge_and_unload()  # pyright: ignore[reportCallIssue]
+            trained_model = trained_model.merge_and_unload()  # pyright: ignore[reportCallIssue]
+
+        # Recreate model with original tensor storage format
+        recreated_model = copy_model_to(
+            trained_model, self.config.variants_device, dtype=trained_model.dtype
+        )
+        del trained_model
 
         return TinyChangeModel(
             description={
@@ -422,8 +433,8 @@ class TinyChange:
                 "n_samples": n_samples,
                 "lora": use_lora,
             },
-            model_hash=get_model_hash(model),
-            model=model,
+            model_hash=get_model_hash(recreated_model),
+            model=recreated_model,
         )
 
     async def quantize(self, method: str) -> TinyChangeModel:
