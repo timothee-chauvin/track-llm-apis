@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import gc
 import hashlib
 import os
@@ -312,15 +313,9 @@ def temporary_env(variable_name: str, value: str):
 
 
 def copy_model_to(model, device: str, dtype: torch.dtype | None = torch.bfloat16):
-    """Copy a model to a new device, without first creating a copy on the original device."""
+    """Copy a model to a new device."""
     logger.info(f"Copying model to {device} with dtype {dtype}...")
-    new_model = type(model)(model.config)
-    if dtype is not None:
-        new_model.to(device, dtype=dtype)
-    else:
-        new_model.to(device)
-    new_model.load_state_dict(model.state_dict())
-    return new_model
+    return copy.deepcopy(model).to(device, dtype=dtype)
 
 
 def patch_chat_template(tokenizer):
