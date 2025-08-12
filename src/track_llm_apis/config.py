@@ -1,5 +1,7 @@
 import logging
+import subprocess
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Self
 
@@ -106,7 +108,7 @@ class Config(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="allow",
+        extra="ignore",
     )
 
     # Paths
@@ -164,6 +166,16 @@ class Config(BaseSettings):
     def chat_templates(self) -> dict[str, Any]:
         with open(SRC_DIR / "chat_templates.toml", "rb") as f:
             return tomllib.load(f)
+
+    @computed_field
+    @property
+    def date(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    @computed_field
+    @property
+    def last_commit_hash(self) -> str:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
 
 
 config = Config()

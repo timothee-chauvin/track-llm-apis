@@ -52,7 +52,7 @@ class TinyChangeConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="allow",
+        extra="ignore",
     )
 
     datasets_dir: Path = Field(default_factory=lambda: ROOT_DIR / "data" / "datasets")

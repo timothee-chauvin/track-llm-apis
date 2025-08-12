@@ -4,10 +4,8 @@ import os
 import pickle
 import random
 import sqlite3
-import subprocess
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
@@ -573,7 +571,7 @@ async def main():
 
     model_name = config.sampling.model_name
     prompts = config.prompts + config.prompts_extended
-    output_dir = config.sampling_data_dir / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = config.sampling_data_dir / config.date
     os.makedirs(output_dir, exist_ok=True)
 
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(
@@ -595,20 +593,16 @@ async def main():
 
     wikipedia = get_wikipedia_samples(n=25, seed=0)
 
-    last_commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
     metadata = {
-        "date": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-        "last_commit_hash": last_commit_hash,
-        "model_name": model_name,
+        "config": config.model_dump(
+            mode="json", exclude={"logger", "api", "analysis", "chat_templates"}
+        ),
         "dtype": str(model.dtype),
         "model_hash": get_model_hash(model),
         "chat_template_hash": fast_hash(tokenizer.chat_template),
-        "n_variants": 0,
-        "variants": [],
-        "n_mmlu_prompts": len(mmlu),
-        "n_wikipedia_prompts": len(wikipedia),
-        "n_us_prompts": len(prompts),
-        "n_other_prompts": len(other_prompts),
+        "n_processed_variants": 0,
+        "n_total_variants": n_variants,
+        "processed_variants": [],
     }
     # Initialize vLLM instance
     llm = init_vllm(model, tokenizer, config.sampling.device_config.vllm_device)
@@ -679,7 +673,7 @@ async def main():
             )
             for row in results:
                 compressed_output.add_row(row)
-            metadata["variants"].append(
+            metadata["processed_variants"].append(
                 {
                     variant_name: {
                         "description": variant.description,
@@ -688,7 +682,7 @@ async def main():
                     }
                 }
             )
-            metadata["n_variants"] = len(metadata["variants"])
+            metadata["n_processed_variants"] = len(metadata["processed_variants"])
 
             # Free up model weights and KV cache from vLLM memory
             llm.sleep(level=2)
