@@ -547,6 +547,7 @@ def plot_logprobs_over_time(
 
 
 async def main():
+    start_time = time.time()
     DEBUG = False
     if DEBUG:
         config.sampling.original_model_n_samples = 5
@@ -618,12 +619,16 @@ async def main():
     # Synchronous iteration for testing
     async_iter = tiny_change.__aiter__()
     i = 0
+    total_gen_time = 0.0
+    total_inference_time = 0.0
     try:
         while True:
             gen_start = time.time()
             variant = await async_iter.__anext__()
             gen_time = time.time() - gen_start
             gen_time_str = str(timedelta(seconds=gen_time))
+            total_gen_time += gen_time
+            total_gen_time_str = str(timedelta(seconds=total_gen_time))
             i += 1
             if variant.description["type"] == "unchanged":
                 n_samples = config.sampling.original_model_n_samples
@@ -684,9 +689,20 @@ async def main():
             )
             inference_time = time.time() - inference_start
             inference_time_str = str(timedelta(seconds=inference_time))
+            total_inference_time += inference_time
+            total_inference_time_str = str(timedelta(seconds=total_inference_time))
             logger.info(f"Inference time: {inference_time_str}")
             for row in results:
                 compressed_output.add_row(row)
+
+            # Free up model weights and KV cache from vLLM memory
+            llm.sleep(level=2)
+            del variant.model
+            del variant
+
+            total_time = time.time() - start_time
+            total_time_str = str(timedelta(seconds=total_time))
+
             metadata["processed_variants"].append(
                 {
                     variant_name: {
@@ -700,11 +716,13 @@ async def main():
                 }
             )
             metadata["n_processed_variants"] = len(metadata["processed_variants"])
+            metadata["total_gen_time"] = total_gen_time
+            metadata["total_gen_time_str"] = total_gen_time_str
+            metadata["total_inference_time"] = total_inference_time
+            metadata["total_inference_time_str"] = total_inference_time_str
+            metadata["total_time"] = total_time
+            metadata["total_time_str"] = total_time_str
 
-            # Free up model weights and KV cache from vLLM memory
-            llm.sleep(level=2)
-            del variant.model
-            del variant
             with open(output_dir / "metadata.json", "w") as f:
                 json.dump(metadata, f, indent=2)
 
