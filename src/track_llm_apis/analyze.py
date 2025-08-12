@@ -60,7 +60,7 @@ class ResponseData:
     date: datetime
     prompt: str
     top_tokens: list[str]
-    logprobs: list[float]
+    logprobs: list[float | int]
 
 
 @dataclass
@@ -72,7 +72,7 @@ class TokenLogprobs:
     dates: list[datetime]
     # Dates where the token is missing from the topk
     dates_missing: list[datetime]
-    logprobs: list[float | None]
+    logprobs: list[float | int | None]
 
 
 def get_db_data(

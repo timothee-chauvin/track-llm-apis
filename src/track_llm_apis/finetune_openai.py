@@ -71,7 +71,7 @@ def job_exists(
     existing_jobs: list[Any],
     model: str,
     file_id: str,
-    lr_multiplier: float,
+    lr_multiplier: float | int,
     batch_size: int,
     n_epochs: int,
 ) -> tuple[bool, str | None, str | None]:
