@@ -4,8 +4,10 @@ import os
 import pickle
 import random
 import sqlite3
+import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
@@ -28,6 +30,7 @@ from track_llm_apis.util import (
     fast_hash,
     format_mmlu_prompt,
     format_wikipedia_prompt,
+    get_model_hash,
     patch_chat_template,
     slugify,
     temporary_env,
@@ -583,7 +586,7 @@ async def main(
     #     model_name = "microsoft/Phi-3-mini-4k-instruct"
 
     prompts = Config.prompts + Config.prompts_extended
-    output_dir = Config.sampling_data_dir
+    output_dir = Config.sampling_data_dir / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     os.makedirs(output_dir, exist_ok=True)
 
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(
@@ -618,6 +621,21 @@ async def main(
 
     wikipedia = get_wikipedia_samples(n=25, seed=0)
 
+    last_commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
+    metadata = {
+        "date": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+        "last_commit_hash": last_commit_hash,
+        "model_name": model_name,
+        "dtype": str(model.dtype),
+        "model_hash": get_model_hash(model),
+        "chat_template_hash": fast_hash(tokenizer.chat_template),
+        "n_variants": 0,
+        "variants": [],
+        "n_mmlu_prompts": len(mmlu),
+        "n_wikipedia_prompts": len(wikipedia),
+        "n_us_prompts": len(prompts),
+        "n_other_prompts": len(other_prompts),
+    }
     # Initialize vLLM instance
     llm = init_vllm(model, tokenizer, vllm_device)
 
@@ -687,17 +705,28 @@ async def main(
             )
             for row in results:
                 compressed_output.add_row(row)
+            metadata["variants"].append(
+                {
+                    variant_name: {
+                        "description": variant.description,
+                        "model_hash": variant.model_hash,
+                        "n_samples": n_samples,
+                    }
+                }
+            )
+            metadata["n_variants"] = len(metadata["variants"])
 
             # Free up model weights and KV cache from vLLM memory
             llm.sleep(level=2)
             del variant.model
-            del model
+            del variant
+            with open(output_dir / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+            compressed_output.dump_pkl(output_dir)
+            compressed_output.dump_db(output_dir)
 
     except StopAsyncIteration:
         logger.info("All variants processed")
-
-    compressed_output.dump_pkl(output_dir)
-    compressed_output.dump_db(output_dir)
 
     if llm is not None:
         cleanup_vllm(llm)
