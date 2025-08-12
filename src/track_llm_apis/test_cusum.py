@@ -698,8 +698,6 @@ async def main():
 
             # Free up model weights and KV cache from vLLM memory
             llm.sleep(level=2)
-            del variant.model
-            del variant
 
             total_time = time.time() - start_time
             total_time_str = str(timedelta(seconds=total_time))
@@ -729,6 +727,8 @@ async def main():
 
             compressed_output.dump_pkl(output_dir)
             compressed_output.dump_db(output_dir)
+            del variant.model
+            del variant
 
     except StopAsyncIteration:
         logger.info("All variants processed")
