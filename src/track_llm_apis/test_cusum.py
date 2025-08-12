@@ -5,7 +5,9 @@ import pickle
 import random
 import sqlite3
 import tempfile
+import time
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
@@ -552,6 +554,8 @@ async def main():
             original_model_device="cuda:0",
             variants_device="cuda:1",
         )
+        config.sampling.original_model_n_samples = 5
+        config.sampling.variants_n_samples = 5
         # config.sampling.model_name = "microsoft/Phi-3-mini-4k-instruct"
 
     tc_config = TinyChangeConfig(
@@ -597,6 +601,9 @@ async def main():
         "config": config.model_dump(
             mode="json", exclude={"logger", "api", "analysis", "chat_templates"}
         ),
+        "tinychange_config": tc_config.model_dump(
+            mode="json", exclude={"logger", "finetuning_dataset"}
+        ),
         "dtype": str(model.dtype),
         "model_hash": get_model_hash(model),
         "chat_template_hash": fast_hash(tokenizer.chat_template),
@@ -612,19 +619,22 @@ async def main():
     i = 0
     try:
         while True:
+            gen_start = time.time()
             variant = await async_iter.__anext__()
+            gen_time = time.time() - gen_start
+            gen_time_str = str(timedelta(seconds=gen_time))
             i += 1
             if variant.description["type"] == "unchanged":
-                n_samples = 5
+                n_samples = config.sampling.original_model_n_samples
             else:
-                n_samples = 5
-            if DEBUG:
-                n_samples = 5
+                n_samples = config.sampling.variants_n_samples
             logger.info(f"Generated variant {i}/{n_variants}: ({variant.model_hash})")
             logger.info(json.dumps(variant.description))
+            logger.info(f"Generation time: {gen_time_str}")
             logger.info(used_gpu_memory(cleanup=True, as_str=True))
             variant_name = variant.name()
 
+            inference_start = time.time()
             if llm is not None:
                 llm.wake_up()
 
@@ -671,6 +681,9 @@ async def main():
                 variant=variant_name,
                 source=DataSource.US,
             )
+            inference_time = time.time() - inference_start
+            inference_time_str = str(timedelta(seconds=inference_time))
+            logger.info(f"Inference time: {inference_time_str}")
             for row in results:
                 compressed_output.add_row(row)
             metadata["processed_variants"].append(
@@ -678,7 +691,10 @@ async def main():
                     variant_name: {
                         "description": variant.description,
                         "model_hash": variant.model_hash,
-                        "n_samples": n_samples,
+                        "generation_time": gen_time,
+                        "generation_time_str": gen_time_str,
+                        "inference_time": inference_time,
+                        "inference_time_str": inference_time_str,
                     }
                 }
             )

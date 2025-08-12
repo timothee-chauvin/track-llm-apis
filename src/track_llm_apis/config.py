@@ -68,6 +68,9 @@ class DeviceConfig(BaseModel):
 class SamplingConfig(BaseModel):
     model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
     device_config: DeviceConfig = Field(default_factory=DeviceConfig)
+    # How many times to sample the original model vs variants
+    original_model_n_samples: int = 10_000
+    variants_n_samples: int = 1_000
 
 
 class APIConfig(BaseModel):

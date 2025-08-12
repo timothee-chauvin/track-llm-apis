@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
 from dotenv import load_dotenv
 from peft import LoraConfig, get_peft_model
-from pydantic import Field, model_validator
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from torch.nn.utils import prune
 from torch.utils.data import DataLoader
@@ -30,6 +30,7 @@ from track_llm_apis.util import (
     get_model_hash,
     load_lmsys_chat_1m,
     slugify,
+    trim_to_length,
 )
 
 load_dotenv()
@@ -101,6 +102,35 @@ class TinyChangeConfig(BaseSettings):
                 self, "finetuning_dataset", self.finetuning_dataset.select(range(max_samples))
             )
         return self
+
+    @computed_field
+    @property
+    def finetuning_dataset_info(self) -> dict[str, Any]:
+        if self.finetuning_dataset is None:
+            return {
+                "length": 0,
+                "hash": "",
+                "first": None,
+                "last": None,
+            }
+        else:
+            return {
+                "length": len(self.finetuning_dataset),
+                "hash": get_dataset_hash(self.finetuning_dataset),
+                "first": trim_to_length(
+                    self.finetuning_dataset[0]["conversation"][0]["content"], 100
+                ),
+                "last": trim_to_length(
+                    self.finetuning_dataset[-1]["conversation"][-1]["content"], 100
+                ),
+            }
+
+    @computed_field
+    @property
+    def finetuning_dataset_hash(self) -> str:
+        if self.finetuning_dataset is None:
+            return ""
+        return get_dataset_hash(self.finetuning_dataset)
 
 
 class LightningModel(pl.LightningModule):
