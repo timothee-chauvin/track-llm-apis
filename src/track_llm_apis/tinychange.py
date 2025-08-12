@@ -83,11 +83,11 @@ class TinyChangeConfig(BaseSettings):
     finetuning_batch_size: int = 1
     finetuning_max_length: int = 1024
 
-    lora_r: int = 1
-    lora_alpha: int = 1
+    lora_r: int = 8
+    lora_alpha: int = 8
     lora_dropout: float = 0.0
     lora_target_modules: list[str] = Field(
-        default_factory=lambda: ["o_proj"]  # , "k_proj", "v_proj", "o_proj"]
+        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj"]
     )
 
     quantization_methods: list[str] = Field(default_factory=lambda: ["int8"])

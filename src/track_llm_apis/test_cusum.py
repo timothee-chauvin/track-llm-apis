@@ -708,7 +708,6 @@ async def main():
             with open(output_dir / "metadata.json", "w") as f:
                 json.dump(metadata, f, indent=2)
 
-            logger.info(json.dumps(metadata, indent=2))
             compressed_output.dump_pkl(output_dir)
             compressed_output.dump_db(output_dir)
 
