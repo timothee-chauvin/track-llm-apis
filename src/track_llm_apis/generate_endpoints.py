@@ -3,6 +3,7 @@ import json
 from decimal import Decimal
 
 import aiohttp
+import fire
 import requests
 
 from track_llm_apis.config import Config
@@ -74,7 +75,7 @@ async def test_endpoint_logprobs(endpoint):
         return endpoint, False, str(e)
 
 
-async def main():
+async def main(add_to_existing: bool = False):
     Config.max_retries = 5
 
     # Get the model IDs
@@ -148,7 +149,7 @@ async def main():
         successful_endpoints, key=lambda x: (x.cost[0], x.cost[1], x.name, x.provider)
     ):
         print(
-            f'    Endpoint("openrouter", "{endpoint.name}", "{endpoint.provider}", cost=({endpoint.cost[0]}, {endpoint.cost[1]})),'
+            f'    Endpoint("openrouter", "{endpoint.name}", provider="{endpoint.provider}", cost=({endpoint.cost[0]}, {endpoint.cost[1]})),'
         )
 
     print("\n" + "#" * 100)
@@ -248,7 +249,39 @@ async def main():
         f"Endpoints claiming to support logprobs and did: {len(successful_endpoints)} / {total_endpoints} ({len(successful_endpoints) / total_endpoints * 100:.2f}%)"
     )
 
+    if add_to_existing:
+        from track_llm_apis.main import ENDPOINTS_EXTENDED
+
+        all_endpoints = successful_endpoints
+        for e in ENDPOINTS_EXTENDED:
+            if e.name in ["x-ai/grok-3-beta", "openai/gpt-4-1106-preview"]:
+                print()
+            if e.source != "openrouter":
+                continue
+            # Don't add already existing endpoints, taking into account that the price may have changed
+            if any(
+                e.name == existing_e.name and e.provider == existing_e.provider
+                for existing_e in all_endpoints
+            ):
+                continue
+            all_endpoints.append(e)
+
+        print("\n" + "#" * 100)
+        print("SUCCESSFUL OR EXISTING ENDPOINTS:")
+        for endpoint in sorted(
+            all_endpoints, key=lambda x: (x.cost[0], x.cost[1], x.name, x.provider)
+        ):
+            print(
+                f'    Endpoint("openrouter", "{endpoint.name}", provider="{endpoint.provider}", cost=({endpoint.cost[0]}, {endpoint.cost[1]})),'
+            )
+        print(f"Total successful or existing endpoints: {len(all_endpoints)}")
+
+
+def entrypoint(add_to_existing: bool = False):
+    add_to_existing = True
+    asyncio.run(main(add_to_existing=add_to_existing))
+
 
 # Run the async main function
 if __name__ == "__main__":
-    asyncio.run(main())
+    fire.Fire(entrypoint)
