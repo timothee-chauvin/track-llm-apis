@@ -547,7 +547,7 @@ def plot_logprobs_over_time(
 
 
 async def main():
-    DEBUG = True
+    DEBUG = False
     if DEBUG:
         config.sampling.device_config = DeviceConfig(
             vllm_device="cuda:0",
