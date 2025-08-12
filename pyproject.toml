@@ -19,7 +19,7 @@ dependencies = [
     "plotly>=6.1.0",
     "python-dotenv>=1.1.0",
     "requests>=2.32.3",
-    "scipy<=1.15.3", # due to a bug https://github.com/statsmodels/statsmodels/issues/9584
+    "scipy<=1.15.3",           # due to a bug https://github.com/statsmodels/statsmodels/issues/9584
     "statsmodels>=0.14.4",
     "torch>=2.7.1",
     "tqdm>=4.67.1",
@@ -49,9 +49,3 @@ extend-select = [
     "UP", # pyupgrade
     "I",  # isort
 ]
-
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-useLibraryCodeForTypes = true
-typeCheckingMode = "basic"
