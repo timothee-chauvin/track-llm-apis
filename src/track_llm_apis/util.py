@@ -3,9 +3,11 @@ import contextlib
 import copy
 import gc
 import hashlib
+import logging
 import os
 import random
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -14,11 +16,9 @@ import xxhash
 from datasets import Dataset, load_dataset, load_from_disk
 from dotenv import load_dotenv
 
-from track_llm_apis.config import config
-
 load_dotenv()
 
-logger = config.logger
+logger = logging.getLogger("track-llm-apis")
 
 
 async def gather_with_concurrency(n, *coros):
@@ -129,6 +129,7 @@ def load_lmsys_chat_1m(
     flagged_filter: bool = True,
     first_turn_only: bool = True,
     use_cache: bool = True,
+    datasets_dir: Path | None = None,
 ) -> Dataset:
     """
     Load the LMSYS Chat 1M dataset, returning only the "conversation" column.
@@ -142,8 +143,8 @@ def load_lmsys_chat_1m(
     """
     ds_name = "lmsys/lmsys-chat-1m"
     logger.info(f"Loading the {ds_name} dataset...")
-    cache_path = config.datasets_dir / f"{slugify(ds_name, hash_length=0)}"
     if use_cache:
+        cache_path = datasets_dir / f"{slugify(ds_name, hash_length=0)}"
         if cache_path.exists():
             logger.info(f"Already processed dataset found at {cache_path}, loading...")
             dataset = load_from_disk(str(cache_path))
@@ -318,16 +319,32 @@ def copy_model_to(model, device: str, dtype: torch.dtype | None = torch.bfloat16
     return copy.deepcopy(model).to(device, dtype=dtype)
 
 
-def patch_chat_template(tokenizer):
+def patch_chat_template(tokenizer, chat_templates: dict[str, Any]):
     chat_template = tokenizer.chat_template
     if "{% generation %}" in chat_template:
         return
     else:
         h = fast_hash(chat_template)
-        if h in config.chat_templates:
-            tokenizer.chat_template = config.chat_templates[h]["template"]
+        if h in chat_templates:
+            tokenizer.chat_template = chat_templates[h]["template"]
         else:
             raise ValueError(
                 f"Chat template hash {h} not found in config.chat_templates. You may need to update the chat_templates.toml file."
             )
     return
+
+
+def dataset_info(dataset: Dataset | None) -> dict[str, str | int]:
+    if dataset is None:
+        return {
+            "length": 0,
+            "hash": "",
+            "first": "",
+            "last": "",
+        }
+    return {
+        "length": len(dataset),
+        "hash": get_dataset_hash(dataset),
+        "first": trim_to_length(dataset[0]["conversation"][0]["content"], 100),
+        "last": trim_to_length(dataset[-1]["conversation"][-1]["content"], 100),
+    }

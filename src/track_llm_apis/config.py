@@ -5,8 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Self
 
+from datasets import Dataset
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from track_llm_apis.util import dataset_info, load_lmsys_chat_1m
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -15,6 +18,12 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
 ROOT_DIR = Path(__file__).parent.parent.parent
 SRC_DIR = Path(__file__).parent
+DATA_DIR = ROOT_DIR / "data"
+DATASETS_DIR = DATA_DIR / "datasets"
+
+
+def _load_default_dataset() -> Dataset:
+    return load_lmsys_chat_1m(use_cache=True, datasets_dir=DATASETS_DIR)
 
 
 class AnalysisConfig(BaseModel):
@@ -65,12 +74,48 @@ class DeviceConfig(BaseModel):
         return self
 
 
+class Gao2025Config(BaseModel):
+    n_wikipedia_samples: int = 25
+    wikipedia_seed: int = 0
+    max_tokens: int = 50
+    temperature: float = 1.0
+
+
+class MMLUConfig(BaseModel):
+    subset_name: str = "abstract_algebra"
+    max_tokens: int = 5
+    temperature: float = 0.1
+
+
+class LogprobConfig(BaseModel):
+    model_config = SettingsConfigDict(
+        arbitrary_types_allowed=True,  # for Dataset
+    )
+    other_prompts_dataset: Dataset = Field(default_factory=_load_default_dataset, exclude=True)
+    batch_size: int = 64
+    topk: int = 20
+    temperature: float = 0.0
+
+    @property
+    def other_prompts(self) -> list[str]:
+        return [item["conversation"][0]["content"] for item in self.other_prompts_dataset]
+
+    @computed_field
+    @property
+    def other_prompts_dataset_info(self) -> dict[str, str | int]:
+        return dataset_info(self.other_prompts_dataset)
+
+
 class SamplingConfig(BaseModel):
     model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
     device_config: DeviceConfig = Field(default_factory=DeviceConfig)
     # How many times to sample the original model vs variants
     original_model_n_samples: int = 10_000
     variants_n_samples: int = 1_000
+
+    gao2025: Gao2025Config = Field(default_factory=Gao2025Config)
+    mmlu: MMLUConfig = Field(default_factory=MMLUConfig)
+    logprob: LogprobConfig = Field(default_factory=LogprobConfig)
 
 
 class APIConfig(BaseModel):
@@ -118,13 +163,11 @@ class Config(BaseSettings):
     root_dir: Path = Field(default_factory=lambda: ROOT_DIR)
     db_path: Path = Field(default_factory=lambda: ROOT_DIR / "db" / "llm_logprobs.db")
     plots_dir: Path = Field(default_factory=lambda: ROOT_DIR / "plots")
-    data_dir: Path = Field(default_factory=lambda: ROOT_DIR / "data")
-    openai_finetuning_dir: Path = Field(
-        default_factory=lambda: ROOT_DIR / "data" / "openai_finetuning"
-    )
-    sampling_data_dir: Path = Field(default_factory=lambda: ROOT_DIR / "data" / "sampling")
-    baselines_dir: Path = Field(default_factory=lambda: ROOT_DIR / "data" / "baselines")
-    datasets_dir: Path = Field(default_factory=lambda: ROOT_DIR / "data" / "datasets")
+    data_dir: Path = Field(default_factory=lambda: DATA_DIR)
+    openai_finetuning_dir: Path = Field(default_factory=lambda: DATA_DIR / "openai_finetuning")
+    sampling_data_dir: Path = Field(default_factory=lambda: DATA_DIR / "sampling")
+    baselines_dir: Path = Field(default_factory=lambda: DATA_DIR / "baselines")
+    datasets_dir: Path = Field(default_factory=lambda: DATASETS_DIR)
 
     # Prompts to send to the smaller list of endpoints
     prompts: list[str] = Field(
@@ -164,7 +207,6 @@ class Config(BaseSettings):
     def logger(self) -> logging.Logger:
         return logger
 
-    @computed_field
     @property
     def chat_templates(self) -> dict[str, Any]:
         with open(SRC_DIR / "chat_templates.toml", "rb") as f:

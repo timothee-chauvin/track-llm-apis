@@ -23,7 +23,7 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
 
 from track_llm_apis.config import DeviceConfig, config
-from track_llm_apis.tinychange import TinyChange, TinyChangeConfig, load_lmsys_chat_1m
+from track_llm_apis.tinychange import TinyChange, TinyChangeConfig
 from track_llm_apis.util import (
     available_gpu_memory_fraction,
     fast_hash,
@@ -558,10 +558,7 @@ async def main():
         config.sampling.variants_n_samples = 5
         # config.sampling.model_name = "microsoft/Phi-3-mini-4k-instruct"
 
-    tc_config = TinyChangeConfig(
-        variants_device=config.sampling.device_config.variants_device,
-        finetuning_dataset=load_lmsys_chat_1m(),
-    )
+    tc_config = TinyChangeConfig(variants_device=config.sampling.device_config.variants_device)
     if DEBUG:
         # tc_config.enable_finetuning = False
         # tc_config.finetuning_samples = [1, 16]
@@ -585,25 +582,29 @@ async def main():
     #     logger.info(f"Converting model from {model.dtype} to bfloat16")
     #     model.to(torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    patch_chat_template(tokenizer)
+    patch_chat_template(tokenizer, config.chat_templates)
     assert isinstance(tc_config.finetuning_dataset, Dataset)
-    other_prompts = [item["conversation"][0]["content"] for item in tc_config.finetuning_dataset]  # pyright: ignore[reportArgumentType,reportCallIssue]
     tiny_change = TinyChange(model, tokenizer, tc_config)
     n_variants = tiny_change.n_variants
     compressed_output = CompressedOutput(model_name)
 
-    # Load the MMLU prompts
-    mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test")
+    gao2025_config = config.sampling.gao2025
+    mmlu_config = config.sampling.mmlu
+    logprob_config = config.sampling.logprob
 
-    wikipedia = get_wikipedia_samples(n=25, seed=0)
+    # Load the MMLU prompts
+    mmlu = load_dataset("cais/mmlu", mmlu_config.subset_name, split="test")
+
+    wikipedia = get_wikipedia_samples(
+        n=gao2025_config.n_wikipedia_samples, seed=gao2025_config.wikipedia_seed
+    )
 
     metadata = {
         "config": config.model_dump(
-            mode="json", exclude={"logger", "api", "analysis", "chat_templates"}
+            mode="json",
+            exclude={"api", "analysis"},
         ),
-        "tinychange_config": tc_config.model_dump(
-            mode="json", exclude={"logger", "finetuning_dataset"}
-        ),
+        "tinychange_config": tc_config.model_dump(mode="json"),
         "dtype": str(model.dtype),
         "model_hash": get_model_hash(model),
         "chat_template_hash": fast_hash(tokenizer.chat_template),
@@ -645,8 +646,8 @@ async def main():
                 llm=llm,
                 prompts=[format_wikipedia_prompt(item) for item in wikipedia],
                 n_samples=n_samples,
-                max_tokens=50,
-                temperature=1,
+                max_tokens=gao2025_config.max_tokens,
+                temperature=gao2025_config.temperature,
                 variant=variant_name,
                 source=DataSource.GAO2025,
             )
@@ -659,8 +660,8 @@ async def main():
                 llm=llm,
                 prompts=[format_mmlu_prompt(cast(dict, item)) for item in mmlu],
                 n_samples=n_samples,
-                max_tokens=5,
-                temperature=0.1,
+                max_tokens=mmlu_config.max_tokens,
+                temperature=mmlu_config.temperature,
                 variant=variant_name,
                 source=DataSource.MMLU,
             )
@@ -672,12 +673,12 @@ async def main():
             results = vllm_inference_random_traffic(
                 llm=llm,
                 prompts=prompts,
-                other_prompts=other_prompts,
-                batch_size=64,
+                other_prompts=logprob_config.other_prompts,
+                batch_size=logprob_config.batch_size,
                 n_samples=n_samples,
-                max_tokens=1,
-                temperature=0.0,
-                logprobs_topk=20,
+                max_tokens=config.max_completion_tokens,
+                temperature=logprob_config.temperature,
+                logprobs_topk=logprob_config.topk,
                 variant=variant_name,
                 source=DataSource.US,
             )
@@ -706,6 +707,8 @@ async def main():
             del variant
             with open(output_dir / "metadata.json", "w") as f:
                 json.dump(metadata, f, indent=2)
+
+            logger.info(json.dumps(metadata, indent=2))
             compressed_output.dump_pkl(output_dir)
             compressed_output.dump_db(output_dir)
 

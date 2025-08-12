@@ -26,11 +26,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # TODO remove these dependencies
 from track_llm_apis.util import (
     copy_model_to,
+    dataset_info,
     get_dataset_hash,
     get_model_hash,
     load_lmsys_chat_1m,
     slugify,
-    trim_to_length,
 )
 
 load_dotenv()
@@ -76,7 +76,7 @@ class TinyChangeConfig(BaseSettings):
         default_factory=lambda: [float(2 ** (-n)) for n in range(0, 11)]
     )
 
-    finetuning_dataset: Dataset | None = None
+    finetuning_dataset: Dataset | None = Field(default=None, exclude=True)
     finetuning_lr_scale: list[float | int] = Field(default_factory=lambda: [1e-6])
     finetuning_samples: list[int] = Field(default_factory=lambda: [2**n for n in range(0, 10)])
     finetuning_epochs: int = 1
@@ -93,6 +93,15 @@ class TinyChangeConfig(BaseSettings):
     quantization_methods: list[str] = Field(default_factory=lambda: ["int8"])
 
     @model_validator(mode="after")
+    def set_default_dataset(self):
+        if self.enable_finetuning or self.enable_lora_finetuning:
+            if self.finetuning_dataset is None:
+                self.finetuning_dataset = load_lmsys_chat_1m(
+                    use_cache=True, datasets_dir=self.datasets_dir
+                )
+            return self
+
+    @model_validator(mode="after")
     def trim_finetuning_dataset(self):
         """Trim the finetuning dataset to the max samples"""
         if self.finetuning_dataset is not None:
@@ -101,36 +110,12 @@ class TinyChangeConfig(BaseSettings):
             object.__setattr__(
                 self, "finetuning_dataset", self.finetuning_dataset.select(range(max_samples))
             )
-        return self
+            return self
 
     @computed_field
     @property
-    def finetuning_dataset_info(self) -> dict[str, Any]:
-        if self.finetuning_dataset is None:
-            return {
-                "length": 0,
-                "hash": "",
-                "first": None,
-                "last": None,
-            }
-        else:
-            return {
-                "length": len(self.finetuning_dataset),
-                "hash": get_dataset_hash(self.finetuning_dataset),
-                "first": trim_to_length(
-                    self.finetuning_dataset[0]["conversation"][0]["content"], 100
-                ),
-                "last": trim_to_length(
-                    self.finetuning_dataset[-1]["conversation"][-1]["content"], 100
-                ),
-            }
-
-    @computed_field
-    @property
-    def finetuning_dataset_hash(self) -> str:
-        if self.finetuning_dataset is None:
-            return ""
-        return get_dataset_hash(self.finetuning_dataset)
+    def finetuning_dataset_info(self) -> dict[str, str | int]:
+        return dataset_info(self.finetuning_dataset)
 
 
 class LightningModel(pl.LightningModule):
@@ -510,10 +495,6 @@ async def main():
     model = AutoModelForCausalLM.from_pretrained(model_name).to(DEVICE)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = TinyChangeConfig()
-    if config.enable_finetuning or config.enable_lora_finetuning:
-        config.finetuning_dataset = load_lmsys_chat_1m(
-            gpt4_filter=True, redacted_filter=True, flagged_filter=True, first_turn_only=True
-        )
     tiny_change = TinyChange(model, tokenizer, config)
 
     logger.info(f"dtype: {model.dtype}")

@@ -130,7 +130,12 @@ def find_file_id(
 def generate_files(upload: bool = False):
     if DATASET_NAME == "lmsys-chat-1m":
         dataset = load_lmsys_chat_1m(
-            gpt4_filter=True, redacted_filter=True, flagged_filter=True, first_turn_only=True
+            gpt4_filter=True,
+            redacted_filter=True,
+            flagged_filter=True,
+            first_turn_only=True,
+            use_cache=True,
+            datasets_dir=config.datasets_dir,
         )
     else:
         raise NotImplementedError(f"Dataset {DATASET_NAME} not implemented")
