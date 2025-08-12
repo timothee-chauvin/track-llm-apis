@@ -38,10 +38,10 @@ class Endpoint:
         if self.max_logprobs is None:
             if self.source == "openrouter":
                 assert self.provider is not None
-                for provider_prefix in config.top_logprobs_openrouter.keys():
+                for provider_prefix in config.api.top_logprobs_openrouter.keys():
                     if self.provider.lower().startswith(provider_prefix.lower()):
-                        return config.top_logprobs_openrouter[provider_prefix]
-            return config.top_logprobs[self.source]
+                        return config.api.top_logprobs_openrouter[provider_prefix]
+            return config.api.top_logprobs[self.source]
         return self.max_logprobs
 
     def __str__(self) -> str:
@@ -116,7 +116,7 @@ for endpoint in ENDPOINTS:
     )
     if create_seed_version:
         endpoint_with_seed = deepcopy(endpoint)
-        endpoint_with_seed.seed = config.api_seed
+        endpoint_with_seed.seed = config.api.api_seed
         ENDPOINTS_WITH_SEED.append(endpoint_with_seed)
 
 
@@ -807,7 +807,7 @@ ENDPOINTS_EXTENDED = [endpoint for endpoint in ENDPOINTS_EXTENDED if endpoint no
 ENDPOINTS_EXTENDED = [
     endpoint
     for endpoint in ENDPOINTS_EXTENDED
-    if endpoint.cost[0] + endpoint.cost[1] <= config.extended_endpoints_max_cost
+    if endpoint.cost[0] + endpoint.cost[1] <= config.api.extended_endpoints_max_cost
 ]
 
 
@@ -1004,10 +1004,10 @@ class OpenRouterClient:
     async def query(self, endpoint: Endpoint, prompt: str) -> Response:
         try:
             return await retry_with_exponential_backoff(
-                self._make_request, endpoint, prompt, max_retries=config.max_retries
+                self._make_request, endpoint, prompt, max_retries=config.api.max_retries
             )
         except Exception as e:
-            logger.error(f"Error querying {endpoint} after {config.max_retries} retries: {e}")
+            logger.error(f"Error querying {endpoint} after {config.api.max_retries} retries: {e}")
             return Response(endpoint, prompt, [], [], 0.0, error=str(e))
 
 

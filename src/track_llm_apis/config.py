@@ -68,6 +68,36 @@ class SamplingConfig(BaseModel):
     device_config: DeviceConfig = Field(default_factory=DeviceConfig)
 
 
+class APIConfig(BaseModel):
+    top_logprobs: dict[str, int] = Field(
+        default_factory=lambda: {
+            "openai": 20,
+            "grok": 8,
+            "openrouter": 20,
+        }
+    )
+    top_logprobs_openrouter: dict[str, int] = Field(
+        default_factory=lambda: {
+            # Default is 20, but these providers have a lower limit.
+            "fireworks": 5,
+            "azure": 5,
+            "xai": 8,
+        }
+    )
+    api_seed: int = Field(default=1, description="Grok API refuses a seed of 0, must be positive")
+    max_retries: int = 15
+    extended_endpoints_max_cost: float = Field(
+        default=30.0, description="Sum of input and output costs per Mtok"
+    )
+
+    @field_validator("api_seed")
+    @classmethod
+    def validate_api_seed(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("api_seed must be positive (Grok API requirement)")
+        return v
+
+
 class Config(BaseSettings):
     model_config = SettingsConfigDict(
         arbitrary_types_allowed=False,
@@ -118,39 +148,12 @@ class Config(BaseSettings):
     # Prompts to send to both the smaller and the extended lists of endpoints
     prompts_extended: list[str] = Field(default_factory=lambda: ["x"])
 
-    # API Configuration
     max_completion_tokens: int = 1
-    top_logprobs: dict[str, int] = Field(
-        default_factory=lambda: {
-            "openai": 20,
-            "grok": 8,
-            "openrouter": 20,
-        }
-    )
-    top_logprobs_openrouter: dict[str, int] = Field(
-        default_factory=lambda: {
-            # Default is 20, but these providers have a lower limit.
-            "fireworks": 5,
-            "azure": 5,
-            "xai": 8,
-        }
-    )
     seed: int = 0
-    api_seed: int = Field(default=1, description="Grok API refuses a seed of 0, must be positive")
-    max_retries: int = 15
-    extended_endpoints_max_cost: float = Field(
-        default=30.0, description="Sum of input and output costs per Mtok"
-    )
 
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
-
-    @field_validator("api_seed")
-    @classmethod
-    def validate_api_seed(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("api_seed must be positive (Grok API requirement)")
-        return v
+    api: APIConfig = Field(default_factory=APIConfig)
 
     @property
     def logger(self) -> logging.Logger:
