@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import numpy as np
 import plotly.graph_objects as go
@@ -132,16 +132,20 @@ class CompressedOutputRow:
     source: DataSource
     variant_ref: str
     prompt_ref: str
-    text_ref: str | None = None
+    text_ref: str
     logprobs_ref: str | None = None
 
 
 class CompressedOutput:
     def __init__(self, model_name: str):
         self.model_name = model_name
+        # Dictionary of variant hashes: hash of the name to name
         self.variants: dict[str, str] = {}
+        # Dictionary of prompt hashes: hash of the prompt to (prompt, input_tokens)
         self.prompts: dict[str, tuple[str, int]] = {}
+        # Dictionary of text hashes: hash of the text to (text, output_tokens)
         self.texts: dict[str, tuple[str, int]] = {}
+        # Dictionary of logprobs: hash of the json-serialized logprobs object (list[dict[int, float]]) to the logprobs object
         self.logprobs: dict[str, list[dict[int, float]]] = {}
         self.rows: list[CompressedOutputRow] = []
 
@@ -176,11 +180,19 @@ class CompressedOutput:
 
     def dump_pkl(self, output_dir: Path):
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Basic: store the entire CompressedOutput object
         pkl_filename_basic = f"{slugify(self.model_name, max_length=200, hash_length=0)}_basic.pkl"
         pkl_path_basic = output_dir / pkl_filename_basic
         with open(pkl_path_basic, "wb") as f:
             pickle.dump(self, f)
 
+        # Compressed: convert all the hashes to indices to save space. Store as a dictionary with keys:
+        # - "rows": list of (source, variant_index, prompt_index, text_index, logprobs_index)
+        # - "variants": list of (index, variant)
+        # - "prompts": list of (index, (prompt, input_tokens))
+        # - "texts": list of (index, (text, output_tokens))
+        # - "logprobs": list of (index, logprobs)
         pkl_filename_compressed = (
             f"{slugify(self.model_name, max_length=200, hash_length=0)}_compressed.pkl"
         )
@@ -206,6 +218,11 @@ class CompressedOutput:
         to_save["logprobs"] = [(i, lp) for i, lp in enumerate(self.logprobs.values())]
         with open(pkl_path_compressed, "wb") as f:
             pickle.dump(to_save, f)
+
+    @staticmethod
+    def from_pkl_basic(pkl_path: Path) -> Self:
+        with open(pkl_path, "rb") as f:
+            return pickle.load(f)
 
     def dump_db(self, output_dir: Path):
         # Convert all references from hashes to integers
