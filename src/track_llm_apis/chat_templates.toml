@@ -101,27 +101,49 @@ template = """
     {%- else -%}
         {%- set role = message['role'] -%}
     {%- endif -%}
-    {{ '<start_of_turn>' + role + '
+    {%- if role == "model" -%}
+        {{ '<start_of_turn>' + role + '
 ' + (first_user_prefix if loop.first else "") }}
-    {%- if message['content'] is string -%}
-        {{ message['content'] | trim }}
-    {%- elif message['content'] is iterable -%}
-        {%- for item in message['content'] -%}
-            {%- if item['type'] == 'image' -%}
-                {{ '<start_of_image>' }}
-            {%- elif item['type'] == 'text' -%}
-                {{ item['text'] | trim }}
-            {%- endif -%}
-        {%- endfor -%}
+        {%- generation -%}
+        {%- if message['content'] is string -%}
+            {{ message['content'] | trim }}
+        {%- elif message['content'] is iterable -%}
+            {%- for item in message['content'] -%}
+                {%- if item['type'] == 'image' -%}
+                    {{ '<start_of_image>' }}
+                {%- elif item['type'] == 'text' -%}
+                    {{ item['text'] | trim }}
+                {%- endif -%}
+            {%- endfor -%}
+        {%- else -%}
+            {{ raise_exception("Invalid content type") }}
+        {%- endif -%}
+        {{ '<end_of_turn>' }}
+        {%- endgeneration -%}
+        {{- '\\n' -}}
     {%- else -%}
-        {{ raise_exception("Invalid content type") }}
-    {%- endif -%}
-    {{ '<end_of_turn>
+        {{ '<start_of_turn>' + role + '
+' + (first_user_prefix if loop.first else "") }}
+        {%- if message['content'] is string -%}
+            {{ message['content'] | trim }}
+        {%- elif message['content'] is iterable -%}
+            {%- for item in message['content'] -%}
+                {%- if item['type'] == 'image' -%}
+                    {{ '<start_of_image>' }}
+                {%- elif item['type'] == 'text' -%}
+                    {{ item['text'] | trim }}
+                {%- endif -%}
+            {%- endfor -%}
+        {%- else -%}
+            {{ raise_exception("Invalid content type") }}
+        {%- endif -%}
+        {{ '<end_of_turn>
 ' }}
+    {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
-    {{'<start_of_turn>model
-'}}
+    {% generation %}{{'<start_of_turn>model
+'}}{% endgeneration %}
 {%- endif -%}
 
 """
