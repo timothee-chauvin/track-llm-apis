@@ -3,7 +3,6 @@ import json
 import os
 import pickle
 import random
-import sqlite3
 import tempfile
 import time
 from dataclasses import dataclass
@@ -223,74 +222,6 @@ class CompressedOutput:
     def from_pkl_basic(pkl_path: Path) -> Self:
         with open(pkl_path, "rb") as f:
             return pickle.load(f)
-
-    def dump_db(self, output_dir: Path):
-        # Convert all references from hashes to integers
-        hashes_to_indices = {}
-        for mapping in [self.variants, self.prompts, self.texts, self.logprobs]:
-            for i, hash in enumerate(mapping.keys()):
-                hashes_to_indices[hash] = i
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-        db_filename = f"{slugify(self.model_name, max_length=200, hash_length=0)}.db"
-        db_path = output_dir / db_filename
-        if db_path.exists():
-            os.remove(db_path)
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS rows (
-            source INTEGER NOT NULL,
-            variant_ref INTEGER NOT NULL,
-            prompt_ref INTEGER NOT NULL,
-            text_ref INTEGER NOT NULL,
-            logprobs_ref INTEGER
-            )"""
-        )
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS variants (ref INTEGER PRIMARY KEY, variant TEXT NOT NULL)"
-        )
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS prompts (ref INTEGER PRIMARY KEY, prompt TEXT NOT NULL, prompt_length INTEGER NOT NULL)"
-        )
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS texts (ref INTEGER PRIMARY KEY, text TEXT NOT NULL, text_length INTEGER NOT NULL)"
-        )
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS logprobs (ref INTEGER PRIMARY KEY, logprobs TEXT)"
-        )
-        cursor.executemany(
-            "INSERT INTO rows (source, variant_ref, prompt_ref, text_ref, logprobs_ref) VALUES (?, ?, ?, ?, ?)",
-            [
-                (
-                    row.source.value,
-                    hashes_to_indices[row.variant_ref],
-                    hashes_to_indices[row.prompt_ref],
-                    hashes_to_indices[row.text_ref],
-                    hashes_to_indices[row.logprobs_ref] if row.logprobs_ref is not None else None,
-                )
-                for row in self.rows
-            ],
-        )
-        cursor.executemany(
-            "INSERT INTO variants (ref, variant) VALUES (?, ?)",
-            [(i, v) for i, v in enumerate(self.variants.values())],
-        )
-        cursor.executemany(
-            "INSERT INTO prompts (ref, prompt, prompt_length) VALUES (?, ?, ?)",
-            [(i, p[0], p[1]) for i, p in enumerate(self.prompts.values())],
-        )
-        cursor.executemany(
-            "INSERT INTO texts (ref, text, text_length) VALUES (?, ?, ?)",
-            [(i, t[0], t[1]) for i, t in enumerate(self.texts.values())],
-        )
-        cursor.executemany(
-            "INSERT INTO logprobs (ref, logprobs) VALUES (?, ?)",
-            [(i, str(lp)) for i, lp in enumerate(self.logprobs.values())],
-        )
-        conn.commit()
-        conn.close()
 
 
 def create_ipc_handles(model: torch.nn.Module):
@@ -743,7 +674,6 @@ async def main():
                 json.dump(metadata, f, indent=2)
 
             compressed_output.dump_pkl(output_dir)
-            compressed_output.dump_db(output_dir)
             del variant.model
             del variant
 
