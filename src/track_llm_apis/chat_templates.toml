@@ -1,6 +1,6 @@
 ["7962cb19317e326b"]
 models = ["Qwen/Qwen2.5-0.5B-Instruct"]
-# from https://github.com/huggingface/transformers/issues/34172#issuecomment-2854332166
+# adapted from https://github.com/huggingface/transformers/issues/34172#issuecomment-2854332166
 template = """
 {%- if tools %}
     {{- '<|im_start|>system\\n' }}
@@ -26,7 +26,7 @@ template = """
     {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
         {{- '<|im_start|>' + message.role + '\\n' + message.content + '<|im_end|>' + '\\n' }}
     {%- elif (message.role == "assistant" and not message.tool_calls) %}
-    {% generation %}    {{- '<|im_start|>' + message.role + '\\n' + message.content + '<|im_end|>' + '\\n' }}    {% endgeneration %}
+    {{- '<|im_start|>' + message.role + '\\n' }} {%- generation %} {{- message.content + '<|im_end|>' }} {%- endgeneration %} {{- '\\n' }}
     {%- elif message.role == "assistant" %}
         {% generation %}{{- '<|im_start|>' + message.role }}
         {%- if message.content %}
@@ -56,7 +56,7 @@ template = """
     {%- endif %}
 {%- endfor %}
 {%- if add_generation_prompt %}
-    {% generation %}{{- '<|im_start|>assistant\\n' }}{% endgeneration %}
+    {{- '<|im_start|>assistant\\n' }}
 {%- endif %}
 """
 
