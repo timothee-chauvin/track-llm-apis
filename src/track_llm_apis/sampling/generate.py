@@ -531,7 +531,7 @@ async def main():
         # tc_config.finetuning_samples = [1, 16]
         # tc_config.enable_lora_finetuning = False
         tc_config.enable_weight_pruning = False
-        tc_config.finetuning_samples = [1, 16, 32]
+        tc_config.finetuning_samples = [1]
         tc_config.weight_pruning_random_scale = []
         tc_config.weight_pruning_magnitude_scale = [0.1]
         tc_config.enable_quantization = False
