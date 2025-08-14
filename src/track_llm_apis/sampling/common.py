@@ -1,6 +1,5 @@
 import gzip
 import json
-import pickle
 from enum import Enum
 from pathlib import Path
 from typing import Any, Self
@@ -123,23 +122,6 @@ class CompressedOutput(BaseModel):
             compressed_row_kwargs[ref.compressed_row_attr] = elem_idx
 
         self.rows.append(CompressedOutputRow(**compressed_row_kwargs))
-
-    def dump_pkl(self, output_dir: Path):
-        output_dir.mkdir(parents=True, exist_ok=True)
-        pkl_filename = f"{slugify(self.model_name, max_length=200, hash_length=0)}.pkl.gz"
-        pkl_path = output_dir / pkl_filename
-        with gzip.open(pkl_path, "wb") as f:
-            pickle.dump(self, f)
-
-    @staticmethod
-    def from_pkl(pkl_dir: Path) -> Self:
-        # Find the only .pkl.gz file in the directory
-        pkl_paths = list(pkl_dir.glob("*.pkl.gz"))
-        if len(pkl_paths) != 1:
-            raise ValueError(f"Expected 1 .pkl.gz file in {pkl_dir}, got {len(pkl_paths)}")
-        pkl_path = pkl_paths[0]
-        with gzip.open(pkl_path, "rb") as f:
-            return pickle.load(f)
 
     def dump_json(self, output_dir: Path):
         output_dir.mkdir(parents=True, exist_ok=True)
