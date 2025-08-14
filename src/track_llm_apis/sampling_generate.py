@@ -1,11 +1,11 @@
 import asyncio
+import gzip
 import json
 import os
 import pickle
 import random
 import tempfile
 import time
-from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from pathlib import Path
@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from datasets import Dataset, load_dataset
+from pydantic import BaseModel, Field
 from torch.multiprocessing.reductions import reduce_tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, RequestOutput, SamplingParams
@@ -86,8 +87,7 @@ class DataSource(Enum):
     GAO2025 = 2
 
 
-@dataclass
-class OutputRow:
+class OutputRow(BaseModel):
     variant: str
     source: DataSource
     # (prompt, input_tokens)
@@ -126,102 +126,120 @@ class OutputRow:
         return rows
 
 
-@dataclass
-class CompressedOutputRow:
-    source: DataSource
-    variant_ref: str
-    prompt_ref: str
-    text_ref: str
-    logprobs_ref: str | None = None
+class CompressedOutputRow(BaseModel):
+    source: int
+    variant_idx: int
+    prompt_idx: int
+    text_idx: int
+    logprobs_idx: int | None = None
+
+    def to_json(self) -> tuple[int, int, int, int, int | None]:
+        return (self.source, self.variant_idx, self.prompt_idx, self.text_idx, self.logprobs_idx)
+
+    @classmethod
+    def from_json(cls, json_tuple: tuple[int, int, int, int, int | None]) -> Self:
+        return cls(**dict(zip(cls.__annotations__, json_tuple)))
 
 
-class CompressedOutput:
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-        # Dictionary of variant hashes: hash of the name to name
-        self.variants: dict[str, str] = {}
-        # Dictionary of prompt hashes: hash of the prompt to (prompt, input_tokens)
-        self.prompts: dict[str, tuple[str, int]] = {}
-        # Dictionary of text hashes: hash of the text to (text, output_tokens)
-        self.texts: dict[str, tuple[str, int]] = {}
-        # Dictionary of logprobs: hash of the json-serialized logprobs object (list[dict[int, float]]) to the logprobs object
-        self.logprobs: dict[str, list[dict[int, float]]] = {}
-        self.rows: list[CompressedOutputRow] = []
+class Reference(BaseModel):
+    row_attr: str
+    elems: list[Any] = Field(default_factory=list)
+    hash_to_idx: dict[str, int] = Field(default_factory=dict)
+
+    _ROW_ATTR_TO_COMPRESSED_ROW_ATTR = {
+        "variant": "variant_idx",
+        "prompt": "prompt_idx",
+        "text": "text_idx",
+        "logprobs": "logprobs_idx",
+    }
+
+    @property
+    def compressed_row_attr(self) -> str:
+        return self._ROW_ATTR_TO_COMPRESSED_ROW_ATTR[self.row_attr]
+
+
+class CompressedOutput(BaseModel):
+    model_name: str
+    rows: list[CompressedOutputRow] = Field(default_factory=list)
+    references: list[Reference] = Field(
+        default_factory=lambda: [
+            Reference(row_attr="variant"),
+            Reference(row_attr="prompt"),
+            Reference(row_attr="text"),
+            Reference(row_attr="logprobs"),
+        ]
+    )
 
     def add_row(self, row: OutputRow):
-        variant_hash = fast_hash(row.variant)
-        if variant_hash not in self.variants:
-            self.variants[variant_hash] = row.variant
+        compressed_row_kwargs = {"source": row.source.value}
+        for ref in self.references:
+            elem = row.__getattribute__(ref.row_attr)
+            if elem is None:
+                assert ref.row_attr == "logprobs"  # only logprobs can be None
+                compressed_row_kwargs[ref.compressed_row_attr] = None
+                continue
 
-        prompt_hash = fast_hash(str(row.prompt))
-        if prompt_hash not in self.prompts:
-            self.prompts[prompt_hash] = row.prompt
+            if isinstance(elem, str):
+                elem_hash = fast_hash(elem)
+            else:
+                elem_hash = fast_hash(json.dumps(elem))
+            elem_hash = fast_hash(str(elem))
+            elem_idx = ref.hash_to_idx.get(elem_hash, None)
+            if elem_idx is None:
+                # This element isn't stored yet
+                elem_idx = len(ref.elems)
+                ref.elems.append(elem)
+                ref.hash_to_idx[elem_hash] = elem_idx
+            compressed_row_kwargs[ref.compressed_row_attr] = elem_idx
 
-        text_hash = fast_hash(str(row.text))
-        if text_hash not in self.texts:
-            self.texts[text_hash] = row.text
-
-        logprobs_hash = None
-        if row.logprobs is not None:
-            logprobs_hash = fast_hash(json.dumps(row.logprobs))
-            if logprobs_hash not in self.logprobs:
-                self.logprobs[logprobs_hash] = row.logprobs
-
-        self.rows.append(
-            CompressedOutputRow(
-                source=row.source,
-                variant_ref=variant_hash,
-                prompt_ref=prompt_hash,
-                text_ref=text_hash,
-                logprobs_ref=logprobs_hash,
-            )
-        )
+        self.rows.append(CompressedOutputRow(**compressed_row_kwargs))
 
     def dump_pkl(self, output_dir: Path):
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Basic: store the entire CompressedOutput object
-        pkl_filename_basic = f"{slugify(self.model_name, max_length=200, hash_length=0)}_basic.pkl"
-        pkl_path_basic = output_dir / pkl_filename_basic
-        with open(pkl_path_basic, "wb") as f:
+        pkl_filename = f"{slugify(self.model_name, max_length=200, hash_length=0)}.pkl.gz"
+        pkl_path = output_dir / pkl_filename
+        with gzip.open(pkl_path, "wb") as f:
             pickle.dump(self, f)
 
-        # Compressed: convert all the hashes to indices to save space. Store as a dictionary with keys:
-        # - "rows": list of (source, variant_index, prompt_index, text_index, logprobs_index)
-        # - "variants": list of (index, variant)
-        # - "prompts": list of (index, (prompt, input_tokens))
-        # - "texts": list of (index, (text, output_tokens))
-        # - "logprobs": list of (index, logprobs)
-        pkl_filename_compressed = (
-            f"{slugify(self.model_name, max_length=200, hash_length=0)}_compressed.pkl"
-        )
-        pkl_path_compressed = output_dir / pkl_filename_compressed
-        to_save = {}
-        hashes_to_indices = {}
-        for mapping in [self.variants, self.prompts, self.texts, self.logprobs]:
-            for i, hash in enumerate(mapping.keys()):
-                hashes_to_indices[hash] = i
-        to_save["rows"] = [
-            (
-                row.source.value,
-                hashes_to_indices[row.variant_ref],
-                hashes_to_indices[row.prompt_ref],
-                hashes_to_indices[row.text_ref],
-                hashes_to_indices[row.logprobs_ref] if row.logprobs_ref is not None else None,
-            )
-            for row in self.rows
-        ]
-        to_save["variants"] = [(i, v) for i, v in enumerate(self.variants.values())]
-        to_save["prompts"] = [(i, p) for i, p in enumerate(self.prompts.values())]
-        to_save["texts"] = [(i, t) for i, t in enumerate(self.texts.values())]
-        to_save["logprobs"] = [(i, lp) for i, lp in enumerate(self.logprobs.values())]
-        with open(pkl_path_compressed, "wb") as f:
-            pickle.dump(to_save, f)
-
     @staticmethod
-    def from_pkl_basic(pkl_path: Path) -> Self:
-        with open(pkl_path, "rb") as f:
+    def from_pkl(pkl_dir: Path) -> Self:
+        # Find the only .pkl.gz file in the directory
+        pkl_paths = list(pkl_dir.glob("*.pkl.gz"))
+        if len(pkl_paths) != 1:
+            raise ValueError(f"Expected 1 .pkl.gz file in {pkl_dir}, got {len(pkl_paths)}")
+        pkl_path = pkl_paths[0]
+        with gzip.open(pkl_path, "rb") as f:
             return pickle.load(f)
+
+    def dump_json(self, output_dir: Path):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        json_filename = f"{slugify(self.model_name, max_length=200, hash_length=0)}.json.gz"
+        json_path = output_dir / json_filename
+        json_dict = {
+            "model_name": self.model_name,
+            "rows": [row.to_json() for row in self.rows],
+            "references": {ref.row_attr: ref.elems for ref in self.references},
+        }
+        with gzip.open(json_path, "wt") as f:
+            json.dump(json_dict, f, separators=(",", ":"), ensure_ascii=False)
+
+    @classmethod
+    def from_json(cls, json_dir: Path) -> Self:
+        # Find the only .json.gz file in the directory
+        json_paths = list(json_dir.glob("*.json.gz"))
+        if len(json_paths) != 1:
+            raise ValueError(f"Expected 1 .json.gz file in {json_dir}, got {len(json_paths)}")
+        json_path = json_paths[0]
+        with gzip.open(json_path, "rt") as f:
+            json_dict = json.load(f)
+        return cls(
+            model_name=json_dict["model_name"],
+            rows=[CompressedOutputRow.from_json(row) for row in json_dict["rows"]],
+            references=[
+                Reference(row_attr=name, elems=elems)
+                for name, elems in json_dict["references"].items()
+            ],
+        )
 
 
 def create_ipc_handles(model: torch.nn.Module):
@@ -535,7 +553,7 @@ async def main():
     assert isinstance(tc_config.finetuning_dataset, Dataset)
     tiny_change = TinyChange(model, tokenizer, tc_config)
     n_variants = tiny_change.n_variants
-    compressed_output = CompressedOutput(model_name)
+    compressed_output = CompressedOutput(model_name=model_name)
 
     gao2025_config = config.sampling.gao2025
     mmlu_config = config.sampling.mmlu
@@ -674,6 +692,7 @@ async def main():
                 json.dump(metadata, f, indent=2)
 
             compressed_output.dump_pkl(output_dir)
+            compressed_output.dump_json(output_dir)
             del variant.model
             del variant
 
