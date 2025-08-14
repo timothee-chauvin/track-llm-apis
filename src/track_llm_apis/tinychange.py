@@ -50,10 +50,9 @@ class TinyChangeConfig(BaseSettings):
         arbitrary_types_allowed=True,  # for Dataset
         validate_assignment=True,
         env_prefix="TINYCHANGE_",
-        env_file=".env",
+        env_file=".env.config",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",
     )
 
     datasets_dir: Path = Field(default_factory=lambda: ROOT_DIR / "data" / "datasets")

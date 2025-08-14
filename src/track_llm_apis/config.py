@@ -152,13 +152,12 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(
         arbitrary_types_allowed=False,
         validate_assignment=True,
-        env_prefix="TRACKLLM",
+        env_prefix="TRACKLLM_",
         # e.g. specify the model name: TRACKLLM_SAMPLING__MODEL_NAME=...
         env_nested_delimiter="__",
-        env_file=".env",
+        env_file=".env.config",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",
     )
 
     # Paths
