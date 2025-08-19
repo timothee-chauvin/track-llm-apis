@@ -241,10 +241,16 @@ class TinyChangeModel:
     model: Any
 
     def name(self) -> str:
-        return json.dumps(self.description, separators=(",", ":"))
+        return self.description_to_str(self.description)
+
+    @staticmethod
+    def description_to_str(description: dict[str, Any]) -> str:
+        return json.dumps(description, separators=(",", ":"))
 
 
 class TinyChange:
+    UNCHANGED_DESCRIPTION = {"type": "unchanged"}
+
     # TODO in order or random order
     def __init__(self, model, tokenizer, config: TinyChangeConfig):
         self.model = model
@@ -321,6 +327,10 @@ class TinyChange:
         """The number of modified models to generate."""
         return len(self.tasks)
 
+    @staticmethod
+    def unchanged_str() -> str:
+        return TinyChangeModel.description_to_str(TinyChange.UNCHANGED_DESCRIPTION)
+
     def __aiter__(self):
         return self
 
@@ -343,7 +353,7 @@ class TinyChange:
     async def get_unchanged(self) -> TinyChangeModel:
         """Return the unchanged model as a TinyChangeModel object."""
         return TinyChangeModel(
-            description={"type": "unchanged"},
+            description=self.UNCHANGED_DESCRIPTION,
             model_hash=get_model_hash(self.model),
             model=self.model,
         )

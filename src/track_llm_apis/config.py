@@ -75,7 +75,8 @@ class DeviceConfig(BaseModel):
 
 
 class Gao2025Config(BaseModel):
-    n_wikipedia_samples: int = 25
+    n_wikipedia_prompts: int = 25
+    n_wikipedia_samples_per_prompt: int = 10
     wikipedia_seed: int = 0
     max_tokens: int = 50
     temperature: float = 1.0

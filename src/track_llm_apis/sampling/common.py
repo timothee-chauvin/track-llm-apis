@@ -1,5 +1,6 @@
 import gzip
 import json
+from collections import defaultdict
 from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
@@ -153,3 +154,51 @@ class CompressedOutput(BaseModel):
                 for name, elems in json_dict["references"].items()
             ],
         )
+
+
+class UncompressedOutput(BaseModel):
+    model_name: str
+    rows: list[OutputRow] = Field(default_factory=list)
+
+    @staticmethod
+    def from_compressed_output(
+        compressed_output: CompressedOutput, keep_datasource: DataSource | None
+    ) -> Self:
+        rows = []
+        _indices = {
+            "variant": 0,
+            "prompt": 1,
+            "text": 2,
+            "logprobs": 3,
+        }
+        for row in compressed_output.rows:
+            if keep_datasource is not None and row.source != keep_datasource.value:
+                continue
+            variant = compressed_output.references[_indices["variant"]].elems[row.variant_idx]
+            prompt = compressed_output.references[_indices["prompt"]].elems[row.prompt_idx]
+            text = compressed_output.references[_indices["text"]].elems[row.text_idx]
+            if row.logprobs_idx is None:
+                logprobs = None
+            else:
+                logprobs = compressed_output.references[_indices["logprobs"]].elems[
+                    row.logprobs_idx
+                ]
+            rows.append(
+                OutputRow(
+                    variant=variant, source=row.source, prompt=prompt, text=text, logprobs=logprobs
+                )
+            )
+        return UncompressedOutput(model_name=compressed_output.model_name, rows=rows)
+
+    def rows_by_variant(self) -> dict[str, list[OutputRow]]:
+        rows_by_variant = defaultdict(list)
+        for row in self.rows:
+            rows_by_variant[row.variant].append(row)
+        return rows_by_variant
+
+    @staticmethod
+    def rows_by_prompt(rows: list[OutputRow]) -> dict[str, list[OutputRow]]:
+        rows_by_prompt = defaultdict(list)
+        for row in rows:
+            rows_by_prompt[row.prompt[0]].append(row)
+        return rows_by_prompt

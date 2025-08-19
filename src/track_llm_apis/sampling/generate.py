@@ -264,7 +264,7 @@ async def main():
     mmlu = load_dataset("cais/mmlu", mmlu_config.subset_name, split="test")
 
     wikipedia = get_wikipedia_samples(
-        n=gao2025_config.n_wikipedia_samples, seed=gao2025_config.wikipedia_seed
+        n=gao2025_config.n_wikipedia_prompts, seed=gao2025_config.wikipedia_seed
     )
 
     metadata = {
@@ -298,7 +298,7 @@ async def main():
             total_gen_time += gen_time
             total_gen_time_str = str(timedelta(seconds=total_gen_time))
             i += 1
-            if variant.description["type"] == "unchanged":
+            if variant.description == TinyChange.UNCHANGED_DESCRIPTION:
                 n_samples = config.sampling.original_model_n_samples
             else:
                 n_samples = config.sampling.variants_n_samples

@@ -4,8 +4,17 @@ from typing import Any
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
+from transformers import AutoTokenizer
 
 from track_llm_apis.config import config
+from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sample_test
+from track_llm_apis.sampling.common import (
+    CompressedOutput,
+    DataSource,
+    OutputRow,
+    UncompressedOutput,
+)
+from track_llm_apis.tinychange import TinyChange
 from track_llm_apis.util import slugify, trim_to_length
 
 
@@ -136,3 +145,103 @@ def plot_logprobs_over_time(
     )
 
     fig.write_html(prompt_dir / filename)
+
+
+def prompt_rows_dict_to_completion_sample(
+    prompt_rows_dict: dict[str, list[OutputRow]], tokenizer: AutoTokenizer
+) -> CompletionSample:
+    n_prompts = len(prompt_rows_dict)
+    prompts_list = []
+    completions_list = []
+    for i, prompt in enumerate(prompt_rows_dict.keys()):
+        rows = prompt_rows_dict[prompt]
+        for row in rows:
+            prompts_list.append(i)
+            completions_list.append(row.text[0])
+    prompts = torch.tensor(prompts_list)
+    completions = tokenizer(
+        completions_list,
+        padding=True,
+        truncation=True,
+        max_length=config.sampling.gao2025.max_tokens,
+        return_tensors="pt",
+    )["input_ids"]
+    return CompletionSample(prompts=prompts, completions=completions, m=n_prompts)
+
+
+def tokens_to_reach_power_logprobs(data: UncompressedOutput, power: float, alpha: float):
+    raise NotImplementedError()
+
+
+def tokens_to_reach_power_mmlu(data: UncompressedOutput, power: float, alpha: float):
+    raise NotImplementedError()
+
+
+def tokens_to_reach_power_gao2025(
+    data: UncompressedOutput, tokenizer: AutoTokenizer, power: float, alpha: float
+):
+    # TODO: for now, just prints for each variant the average p-value and the power.
+    rows_by_variant = data.rows_by_variant()
+    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
+    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
+    for variant in rows_by_variant.keys():
+        if variant == TinyChange.unchanged_str():
+            continue
+        pvalue_sum = 0
+        stat_sum = 0
+        variant_rows = rows_by_variant[variant]
+        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
+        assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
+        samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
+        n_samples = min(
+            [len(rows) for rows in rows_by_prompt.values()]
+            + [len(rows) for rows in unchanged_rows_by_prompt.values()]
+        )
+        n_tests = n_samples // samples_per_prompt
+        pvalues = []
+        for i in range(n_tests):
+            start = i * samples_per_prompt
+            end = (i + 1) * samples_per_prompt
+            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
+            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
+            sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
+            sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
+            pvalue, stats = run_two_sample_test(sample1, sample2, b=1000)
+            print(f"Variant: {variant} ({i + 1}/{n_tests}), P-value: {pvalue}, Statistic: {stats}")
+            pvalues.append(pvalue)
+            pvalue_sum += pvalue
+        pvalue_avg = pvalue_sum / n_tests
+        stat_avg = stat_sum / n_tests
+        power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
+        print(
+            f"Variant: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
+        )
+
+
+def tokens_to_reach_power(data: CompressedOutput, source: DataSource, power: float, alpha: float):
+    uncompressed_output = UncompressedOutput.from_compressed_output(data, keep_datasource=source)
+    tokenizer = AutoTokenizer.from_pretrained(data.model_name)
+    match source:
+        case DataSource.US:
+            return tokens_to_reach_power_logprobs(uncompressed_output, power, alpha)
+        case DataSource.MMLU:
+            return tokens_to_reach_power_mmlu(uncompressed_output, power, alpha)
+        case DataSource.GAO2025:
+            return tokens_to_reach_power_gao2025(uncompressed_output, tokenizer, power, alpha)
+
+
+if __name__ == "__main__":
+    output_dirs = [
+        config.sampling_data_dir / "keep" / "2025-08-14_12-35-09",
+    ]
+
+    for output_dir in output_dirs:
+        compressed_output = CompressedOutput.from_json(output_dir)
+        print(compressed_output.model_name)
+        print(f"number of rows: {len(compressed_output.rows)}")
+        for ref in compressed_output.references:
+            print(f"{ref.row_attr}: {len(ref.elems)}")
+        for alpha in [0.05, 0.005]:
+            tokens_to_reach_power(
+                data=compressed_output, source=DataSource.GAO2025, power=0.8, alpha=alpha
+            )

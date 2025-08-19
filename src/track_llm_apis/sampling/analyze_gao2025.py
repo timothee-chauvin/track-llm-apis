@@ -2,6 +2,7 @@
 Code copied or adapted from https://github.com/i-gao/model-equality-testing
 """
 
+from collections.abc import Callable
 from functools import cache
 
 import numpy as np
@@ -177,11 +178,33 @@ def two_sample_permutation_pvalue(
     return get_pvalue
 
 
+def run_two_sample_test(
+    sample: CompletionSample,
+    other_sample: CompletionSample,
+    b=1000,
+) -> tuple[float, float]:
+    """
+    Tests whether the samples are drawn from the same distribution
+    Args:
+        sample: CompletionSample
+        other_sample: CompletionSample
+        b: int
+            Number of bootstrap samples
+    Returns:
+        pvalue: float
+        statistic: float
+    """
+    get_pvalue = two_sample_permutation_pvalue(sample, other_sample, b=b)
+    statistic = mmd_hamming(sample, other_sample)
+    pvalue = get_pvalue(statistic)
+    return (pvalue, statistic)
+
+
 ### from tests.py
 def _mmd(
     X: np.ndarray,
     Y: np.ndarray,
-    get_kernel: callable,
+    get_kernel: Callable,
     normalize=True,
 ) -> float:
     """
