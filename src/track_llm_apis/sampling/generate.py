@@ -220,7 +220,6 @@ async def main():
     if DEBUG:
         config.sampling.original_model_n_samples = 5
         config.sampling.variants_n_samples = 5
-        # config.sampling.model_name = "microsoft/Phi-3-mini-4k-instruct"
 
     config.sampling.device_config = DeviceConfig(
         vllm_device="cuda:0",

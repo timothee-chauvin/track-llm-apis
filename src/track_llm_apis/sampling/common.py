@@ -1,5 +1,6 @@
 import gzip
 import json
+from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
 from typing import Any, Self
@@ -66,8 +67,8 @@ class CompressedOutputRow(BaseModel):
         return (self.source, self.variant_idx, self.prompt_idx, self.text_idx, self.logprobs_idx)
 
     @classmethod
-    def from_json(cls, json_tuple: tuple[int, int, int, int, int | None]) -> Self:
-        return cls(**dict(zip(cls.__annotations__, json_tuple)))
+    def from_json(cls, json_data: Sequence[int | None]) -> Self:
+        return cls(**dict(zip(cls.__annotations__, json_data)))
 
 
 class Reference(BaseModel):
