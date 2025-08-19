@@ -4,10 +4,11 @@ from typing import Any
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from track_llm_apis.config import config
-from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sample_test
+from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sample_test_torch
 from track_llm_apis.sampling.common import (
     CompressedOutput,
     DataSource,
@@ -150,7 +151,6 @@ def plot_logprobs_over_time(
 def prompt_rows_dict_to_completion_sample(
     prompt_rows_dict: dict[str, list[OutputRow]], tokenizer: AutoTokenizer
 ) -> CompletionSample:
-    n_prompts = len(prompt_rows_dict)
     prompts_list = []
     completions_list = []
     for i, prompt in enumerate(prompt_rows_dict.keys()):
@@ -158,15 +158,15 @@ def prompt_rows_dict_to_completion_sample(
         for row in rows:
             prompts_list.append(i)
             completions_list.append(row.text[0])
-    prompts = torch.tensor(prompts_list)
+    prompts = torch.tensor(prompts_list).to(device=config.analysis.device, dtype=torch.int32)
     completions = tokenizer(
         completions_list,
         padding=True,
         truncation=True,
         max_length=config.sampling.gao2025.max_tokens,
         return_tensors="pt",
-    )["input_ids"]
-    return CompletionSample(prompts=prompts, completions=completions, m=n_prompts)
+    )["input_ids"].to(device=config.analysis.device, dtype=torch.int32)
+    return CompletionSample(prompts=prompts, completions=completions)
 
 
 def tokens_to_reach_power_logprobs(data: UncompressedOutput, power: float, alpha: float):
@@ -199,17 +199,17 @@ def tokens_to_reach_power_gao2025(
         )
         n_tests = n_samples // samples_per_prompt
         pvalues = []
-        for i in range(n_tests):
+        for i in tqdm(range(n_tests), desc=f"Testing {variant}"):
             start = i * samples_per_prompt
             end = (i + 1) * samples_per_prompt
             rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
             unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
             sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
             sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
-            pvalue, stats = run_two_sample_test(sample1, sample2, b=1000)
-            print(f"Variant: {variant} ({i + 1}/{n_tests}), P-value: {pvalue}, Statistic: {stats}")
+            pvalue, stats = run_two_sample_test_torch(sample1, sample2, b=1000)
             pvalues.append(pvalue)
             pvalue_sum += pvalue
+            stat_sum += stats
         pvalue_avg = pvalue_sum / n_tests
         stat_avg = stat_sum / n_tests
         power = sum(pvalue < alpha for pvalue in pvalues) / n_tests

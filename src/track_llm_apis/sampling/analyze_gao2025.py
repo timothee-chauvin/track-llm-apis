@@ -3,11 +3,12 @@ Code copied or adapted from https://github.com/i-gao/model-equality-testing
 """
 
 from collections.abc import Callable
-from functools import cache
 
 import numpy as np
 import torch
 from tqdm import tqdm
+
+from track_llm_apis.config import config
 
 
 class CompletionSample:
@@ -15,7 +16,6 @@ class CompletionSample:
         self,
         prompts: np.ndarray | torch.Tensor,
         completions: np.ndarray | torch.Tensor,
-        m: int,
     ):
         """
         Represents a sample from a DistributionFromDataset object.
@@ -23,10 +23,7 @@ class CompletionSample:
             prompts: a (N,) tensor or array of prompt indices
             completions: a (N, L) tensor or array of completions, where L is the maximum completion length
                 i.e. this is pre-padded. prompts[i] should correspond to the prompt for completions[i]
-            m: total number of prompts; used to enforce that the prompt indices are in [0, m)
         """
-        self.m = m
-
         if isinstance(prompts, np.ndarray):
             prompts = torch.from_numpy(prompts)
         if isinstance(completions, np.ndarray):
@@ -39,69 +36,12 @@ class CompletionSample:
 
         self.L = self.completion_sample.shape[-1]
         self.N = len(self.prompt_sample)
-        self.ns = torch.tensor(
-            [(self.prompt_sample == i).sum().item() for i in range(m)]
-        )  # effective number of completions for each prompt
         assert self.completion_sample.ndim == 2
         assert self.prompt_sample.ndim == 1
-
-    @property
-    def shape(self):
-        return (self.m, self.ns.tolist(), self.L)
-
-    @property
-    @cache
-    def sample(self):
-        """(m, n, L) tensor or len-m list of (ni, L) tensors"""
-        return self._prompt_completion_to_sample(self.prompt_sample, self.completion_sample)
-
-    @property
-    @cache
-    def sequences(self):
-        return torch.cat([self.prompt_sample.unsqueeze(1), self.completion_sample], dim=1)
-
-    def __str__(self):
-        return f"CompletionSample with n={self.ns}"
+        self.sequences = torch.cat([self.prompt_sample.unsqueeze(1), self.completion_sample], dim=1)
 
     def __repr__(self):
         return str(self.sequences)
-
-    @cache
-    def _prompt_completion_to_sample(self, prompt_sample, completion_sample):
-        """
-        Converts view 1 to view 2
-        """
-        assert len(prompt_sample) == len(completion_sample) == self.N
-        max_n = max(self.ns)
-        if all([ni == max_n for ni in self.ns]):
-            sample = torch.zeros(self.m, max_n, self.shape[-1], dtype=int)
-        else:
-            sample = [torch.zeros(ni, self.shape[-1], dtype=int) for ni in self.ns]
-        count_up = torch.zeros(self.m, dtype=int)
-        for i, (prompt, completion) in enumerate(zip(prompt_sample, completion_sample)):
-            sample[prompt][count_up[prompt].item()] = completion
-            count_up[prompt] += 1
-        return sample
-
-    def _sample_to_prompt_completion(self, sample):
-        """
-        Converts view 2 to view 1
-        """
-        assert ndim(sample) == 3
-        assert len(sample) == self.m
-        if isinstance(sample, torch.Tensor):
-            indices = []
-            for i, tensor in enumerate(sample):
-                indices.extend([i] * len(tensor))
-            indices = torch.tensor(indices)
-            completion_sample = sample.view(-1, sample.shape[-1])
-        else:
-            indices = []
-            for i, tensor in enumerate(sample):
-                indices.extend([i] * len(tensor))
-            indices = torch.tensor(indices)
-            completion_sample = torch.cat(sample)
-        return indices, completion_sample
 
 
 class EmpiricalPvalueCalculator:
@@ -124,6 +64,23 @@ class EmpiricalPvalueCalculator:
 
         # compare to self.stats and average across the batch dimension (b)
         return np.mean((self.stats >= obs_stat), axis=0).item()
+
+
+class EmpiricalPvalueCalculatorTorch:
+    """
+    Given an empirical sample of test statitics, provides a callable that returns the p-value of an observed test statistic.
+    """
+
+    def __init__(self, observed_stats: torch.Tensor):
+        """
+        Args:
+            observed_stats: a torch tensor of shape (b,)
+                where b is the number of bootstrap samples
+        """
+        self.stats = observed_stats
+
+    def __call__(self, obs_stat: float | torch.Tensor) -> float:
+        return torch.mean((self.stats >= obs_stat), dim=0, dtype=torch.float32).item()
 
 
 def two_sample_permutation_pvalue(
@@ -150,17 +107,16 @@ def two_sample_permutation_pvalue(
         ],
         dim=0,
     )
-    for _ in tqdm(range(b), desc="Permutation bootstrap"):
-        ix = torch.randperm(len(all_samples))
+    perm_indices = torch.stack([torch.randperm(len(all_samples)) for _ in range(b)])
+    for i in tqdm(range(b), desc="Permutation bootstrap"):
+        ix = perm_indices[i]
         permuted_sample1 = CompletionSample(
             prompts=all_samples[ix][: sample1.N, 0],
             completions=all_samples[ix][: sample1.N, 1:],
-            m=sample1.m,
         )
         permuted_sample2 = CompletionSample(
             prompts=all_samples[ix][sample1.N :, 0],
             completions=all_samples[ix][sample1.N :, 1:],
-            m=sample1.m,
         )
 
         stat = mmd_hamming(permuted_sample1, permuted_sample2)
@@ -173,6 +129,50 @@ def two_sample_permutation_pvalue(
         stats = np.expand_dims(stats, 2)
 
     get_pvalue = EmpiricalPvalueCalculator(stats)
+    if return_stats:
+        return get_pvalue, stats
+    return get_pvalue
+
+
+def two_sample_permutation_pvalue_torch(
+    sample1: CompletionSample,
+    sample2: CompletionSample,
+    b=1000,
+    return_stats=False,
+) -> EmpiricalPvalueCalculatorTorch | tuple[EmpiricalPvalueCalculatorTorch, torch.Tensor]:
+    device = config.analysis.device
+    assert sample1.sequences.device.type == device, f"move sample1 to {device=} before calling"
+    assert sample2.sequences.device.type == device, f"move sample2 to {device=} before calling"
+    all_samples = torch.cat(
+        [
+            sample1.sequences,
+            sample2.sequences,
+        ],
+        dim=0,
+    )
+    N_total, L = all_samples.shape
+    N1 = sample1.N
+    N2 = sample2.N
+    # generate on CPU then move to device, to use the same PRNG as the non-torch version
+    # in order to compare results in tests
+    perm_indices = torch.stack([torch.randperm(N_total, device="cpu") for _ in range(b)])
+    perm_indices = perm_indices.to(device)
+    assert perm_indices.shape == (b, N_total)
+
+    # 2. Gather all permuted samples in a single batch
+    permuted_samples = all_samples[perm_indices]
+    assert permuted_samples.shape == (b, N_total, L)
+
+    # 3. Split into permuted samples 1 and 2 for all batches
+    # Shape: (b, N1, L+1) and (b, N2, L+1)
+    permuted_sample1_batch = permuted_samples[:, :N1, :]
+    permuted_sample2_batch = permuted_samples[:, N1:, :]
+    assert permuted_sample1_batch.shape == (b, N1, L)
+    assert permuted_sample2_batch.shape == (b, N2, L)
+
+    stats = mmd_hamming_torch(permuted_sample1_batch, permuted_sample2_batch)
+
+    get_pvalue = EmpiricalPvalueCalculatorTorch(stats)
     if return_stats:
         return get_pvalue, stats
     return get_pvalue
@@ -196,6 +196,19 @@ def run_two_sample_test(
     """
     get_pvalue = two_sample_permutation_pvalue(sample, other_sample, b=b)
     statistic = mmd_hamming(sample, other_sample)
+    pvalue = get_pvalue(statistic)
+    return (pvalue, statistic)
+
+
+def run_two_sample_test_torch(
+    sample: CompletionSample,
+    other_sample: CompletionSample,
+    b=1000,
+) -> tuple[float, float]:
+    get_pvalue = two_sample_permutation_pvalue_torch(sample, other_sample, b=b)
+    statistic = mmd_hamming_torch(
+        sample.sequences.unsqueeze(0), other_sample.sequences.unsqueeze(0)
+    ).item()
     pvalue = get_pvalue(statistic)
     return (pvalue, statistic)
 
@@ -266,6 +279,7 @@ def _mmd(
 def mmd_hamming(
     sample1: CompletionSample,
     sample2: CompletionSample,
+    normalize: bool = True,
 ) -> float:
     """
     MMD test statistic using K(x, y) = sum_i^L 1[x_i == y_i],
@@ -311,7 +325,99 @@ def mmd_hamming(
         X=sample1.sequences.numpy(),
         Y=sample2.sequences.numpy(),
         get_kernel=get_hamming_kernel,
+        normalize=normalize,
     )
+
+
+def mmd_hamming_torch(X: torch.Tensor, Y: torch.Tensor, normalize: bool = True) -> torch.Tensor:
+    """
+    Computes MMD with Hamming kernel sequentially to save memory.
+    Args:
+        X: (b, n, L+1) tensor of b batches of n sequences.
+        Y: (b, m, L+1) tensor of b batches of m sequences.
+        normalize: whether to normalize the kernel.
+    Returns:
+        A (b,) tensor containing the MMD statistic for each batch.
+    """
+    b, n, L_plus_1 = X.shape
+    _, m, _ = Y.shape
+    L = L_plus_1 - 1
+    device = X.device
+
+    # Extract prompts and completions
+    prompts_x, completions_x = X[:, :, 0], X[:, :, 1:]
+    prompts_y, completions_y = Y[:, :, 0], Y[:, :, 1:]
+
+    # --- Normalization setup (Memory efficient) ---
+    # The diagonal of a hamming kernel k(x,x) is just the sequence length L.
+    # We can compute normalization factors without building the full matrices.
+    if normalize:
+        diag_x_sqrt = (
+            torch.full((b, n), L, dtype=torch.float32, device=device).sqrt_().clamp_(min=1e-8)
+        )
+        diag_y_sqrt = (
+            torch.full((b, m), L, dtype=torch.float32, device=device).sqrt_().clamp_(min=1e-8)
+        )
+
+    # --- Term 1: K_XX ---
+    K_XX = torch.sum(completions_x.unsqueeze(2) == completions_x.unsqueeze(1), dim=-1).float()
+    mask_XX = prompts_x.unsqueeze(2) != prompts_x.unsqueeze(1)
+    K_XX.masked_fill_(mask_XX, 0)
+
+    if normalize:
+        # Shape of outer product: (b, n, n)
+        norm_factor = torch.bmm(diag_x_sqrt.unsqueeze(2), diag_x_sqrt.unsqueeze(1))
+        K_XX /= norm_factor
+
+    eye_xx = torch.eye(n, device=device).unsqueeze(0)
+    K_XX.masked_fill_(eye_xx.bool(), 0)
+
+    n_XX = n * n - mask_XX.sum(dim=(1, 2)) - n
+    term1 = K_XX.sum(dim=(1, 2)) / n_XX.clamp(min=1)
+
+    # Free memory
+    del K_XX, mask_XX, eye_xx
+    if normalize:
+        del norm_factor
+
+    # --- Term 3: K_YY (doing YY before XY is equivalent) ---
+    K_YY = torch.sum(completions_y.unsqueeze(2) == completions_y.unsqueeze(1), dim=-1).float()
+    mask_YY = prompts_y.unsqueeze(2) != prompts_y.unsqueeze(1)
+    K_YY.masked_fill_(mask_YY, 0)
+
+    if normalize:
+        norm_factor = torch.bmm(diag_y_sqrt.unsqueeze(2), diag_y_sqrt.unsqueeze(1))
+        K_YY /= norm_factor
+
+    eye_yy = torch.eye(m, device=device).unsqueeze(0)
+    K_YY.masked_fill_(eye_yy.bool(), 0)
+
+    n_YY = m * m - mask_YY.sum(dim=(1, 2)) - m
+    term3 = K_YY.sum(dim=(1, 2)) / n_YY.clamp(min=1)
+
+    # Free memory
+    del K_YY, mask_YY, eye_yy
+    if normalize:
+        del norm_factor
+
+    # --- Term 2: K_XY ---
+    K_XY = torch.sum(completions_x.unsqueeze(2) == completions_y.unsqueeze(1), dim=-1).float()
+    mask_XY = prompts_x.unsqueeze(2) != prompts_y.unsqueeze(1)
+    K_XY.masked_fill_(mask_XY, 0)
+
+    if normalize:
+        norm_factor = torch.bmm(diag_x_sqrt.unsqueeze(2), diag_y_sqrt.unsqueeze(1))
+        K_XY /= norm_factor
+
+    n_XY = n * m - mask_XY.sum(dim=(1, 2))
+    term2 = 2 * K_XY.sum(dim=(1, 2)) / n_XY.clamp(min=1)
+
+    # Free memory
+    del K_XY, mask_XY
+    if normalize:
+        del norm_factor
+
+    return term1 - term2 + term3
 
 
 ### from utils.py

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Self
 
+import torch
 from datasets import Dataset
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,10 +27,15 @@ def _load_default_dataset() -> Dataset:
     return load_lmsys_chat_1m(use_cache=True, datasets_dir=DATASETS_DIR)
 
 
-class AnalysisConfig(BaseModel):
-    cusum_warmup_period: int = 100
-    cusum_threshold_probability: float = 1e-5
+class CusumAnalysisConfig(BaseModel):
+    warmup_period: int = 100
+    threshold_probability: float = 1e-5
     ema_factor: float = 0.9
+
+
+class AnalysisConfig(BaseModel):
+    cusum: CusumAnalysisConfig = Field(default_factory=CusumAnalysisConfig)
+    device: str | None = "cuda" if torch.cuda.is_available() else None
 
 
 class DeviceConfig(BaseModel):
