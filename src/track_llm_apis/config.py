@@ -102,6 +102,8 @@ class LogprobConfig(BaseModel):
     batch_size: int = 64
     topk: int = 20
     temperature: float = 0.0
+    # at the time of analysis, how many samples to use per p-value test
+    n_samples_per_prompt: int = 10
 
     @property
     def other_prompts(self) -> list[str]:
