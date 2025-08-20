@@ -8,6 +8,7 @@ import os
 import random
 import re
 from collections.abc import Awaitable, Callable
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +258,7 @@ def format_mmlu_prompt(mmlu_item: dict) -> str:
     return f"{MMLU_PREFIX}{mmlu_item['question']}\n\n{choices_str}"
 
 
+@cache
 def mmlu_prompt_to_question(prompt: str) -> str:
     """Opposite of format_mmlu_prompt"""
     pattern = rf"^{MMLU_PREFIX_REGEX}(.*)\n\nA\. .*\nB\. .*\nC\. .*\nD\. .*$"
@@ -267,6 +269,7 @@ def mmlu_prompt_to_question(prompt: str) -> str:
         raise ValueError(f"Could not extract question from MMLU prompt: {prompt}")
 
 
+@cache
 def mmlu_answer_to_choice(answer: str) -> int:
     pattern = r"^.*Answer: ([A-D]).*$"
     match = re.match(pattern, answer, re.DOTALL)

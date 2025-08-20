@@ -231,7 +231,7 @@ def tokens_to_reach_power_mmlu(data: UncompressedOutput, power: float, alpha: fl
         samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
         n_tests = config.sampling.variants_n_samples // samples_per_prompt
         pvalues = []
-        for i in tqdm(range(n_tests), desc=f"Testing {variant}"):
+        for i in range(n_tests):
             start = i * samples_per_prompt
             end = (i + 1) * samples_per_prompt
             rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
