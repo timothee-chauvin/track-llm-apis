@@ -201,4 +201,4 @@ class UncompressedOutput(BaseModel):
         rows_by_prompt = defaultdict(list)
         for row in rows:
             rows_by_prompt[row.prompt[0]].append(row)
-        return rows_by_prompt
+        return dict(rows_by_prompt)
