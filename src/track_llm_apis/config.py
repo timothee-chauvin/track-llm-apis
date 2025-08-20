@@ -2,6 +2,7 @@ import json
 import logging
 import subprocess
 import tomllib
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Self
@@ -117,12 +118,21 @@ class LogprobConfig(BaseModel):
     model_config = SettingsConfigDict(
         arbitrary_types_allowed=True,  # for Dataset
     )
-    other_prompts_dataset: Dataset = Field(default_factory=_load_default_dataset, exclude=True)
+    other_prompts_dataset_loader: Callable[[], Dataset] = Field(
+        default_factory=lambda: _load_default_dataset, exclude=True
+    )
     batch_size: int = 64
     topk: int = 20
     temperature: float = 0.0
     # at the time of analysis, how many samples to use per p-value test
     n_samples_per_prompt: int = 10
+    _other_prompts_dataset: Dataset | None = None
+
+    @property
+    def other_prompts_dataset(self) -> Dataset:
+        if self._other_prompts_dataset is None:
+            self._other_prompts_dataset = self.other_prompts_dataset_loader()
+        return self._other_prompts_dataset
 
     @property
     def other_prompts(self) -> list[str]:
