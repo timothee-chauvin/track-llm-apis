@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Any
 
 import plotly.graph_objects as go
@@ -180,11 +181,12 @@ def tokens_to_reach_power_mmlu(data: UncompressedOutput, power: float, alpha: fl
 def tokens_to_reach_power_gao2025(
     data: UncompressedOutput, tokenizer: AutoTokenizer, power: float, alpha: float
 ):
+    start_time = time.time()
     # TODO: for now, just prints for each variant the average p-value and the power.
     rows_by_variant = data.rows_by_variant()
     unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
     unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
-    for variant in rows_by_variant.keys():
+    for variant_idx, variant in enumerate(rows_by_variant.keys()):
         if variant == TinyChange.unchanged_str():
             continue
         pvalue_sum = 0
@@ -214,8 +216,10 @@ def tokens_to_reach_power_gao2025(
         stat_avg = stat_sum / n_tests
         power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
         print(
-            f"Variant: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
+            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
         )
+    end_time = time.time()
+    print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
 
 def tokens_to_reach_power(data: CompressedOutput, source: DataSource, power: float, alpha: float):
