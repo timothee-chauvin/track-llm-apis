@@ -4,3 +4,4 @@ __pycache__
 /.env
 /data/datasets/
 openai_finetuning/
+/data/mmlu_answers.json

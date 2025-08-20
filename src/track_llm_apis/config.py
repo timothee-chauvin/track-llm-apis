@@ -1,3 +1,4 @@
+import json
 import logging
 import subprocess
 import tomllib
@@ -6,7 +7,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import torch
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -92,6 +93,24 @@ class MMLUConfig(BaseModel):
     subset_name: str = "abstract_algebra"
     max_tokens: int = 5
     temperature: float = 0.1
+    # at the time of analysis, how many benchmark runs to use per p-value test
+    n_samples_per_prompt: int = 10
+
+    @property
+    def answers(self) -> dict[str, int]:
+        cache_path = DATA_DIR / "mmlu_answers.json"
+        try:
+            with open(cache_path) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            # Download the dataset and create the cache file
+            answers = {}
+            mmlu = load_dataset("cais/mmlu", self.subset_name, split="test")
+            for row in mmlu:
+                answers[row["question"]] = row["answer"]
+            with open(cache_path, "w") as f:
+                json.dump(answers, f, indent=2)
+            return answers
 
 
 class LogprobConfig(BaseModel):

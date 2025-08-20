@@ -11,6 +11,7 @@ from transformers import AutoTokenizer
 from track_llm_apis.config import config
 from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sample_test_torch
 from track_llm_apis.sampling.analyze_logprobs import logprob_two_sample_test
+from track_llm_apis.sampling.analyze_mmlu import mmlu_two_sample_test
 from track_llm_apis.sampling.common import (
     CompressedOutput,
     DataSource,
@@ -214,7 +215,39 @@ def tokens_to_reach_power_logprobs(data: UncompressedOutput, power: float, alpha
 
 
 def tokens_to_reach_power_mmlu(data: UncompressedOutput, power: float, alpha: float):
-    raise NotImplementedError()
+    start_time = time.time()
+    # TODO: for now, just prints for each variant the average p-value and the power.
+    rows_by_variant = data.rows_by_variant()
+    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
+    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
+    for variant_idx, variant in enumerate(rows_by_variant.keys()):
+        if variant == TinyChange.unchanged_str():
+            continue
+        pvalue_sum = 0
+        stat_sum = 0
+        variant_rows = rows_by_variant[variant]
+        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
+        assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
+        samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
+        n_tests = config.sampling.variants_n_samples // samples_per_prompt
+        pvalues = []
+        for i in tqdm(range(n_tests), desc=f"Testing {variant}"):
+            start = i * samples_per_prompt
+            end = (i + 1) * samples_per_prompt
+            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
+            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
+            pvalue, stat = mmlu_two_sample_test(rows_subset, unchanged_rows_subset, b=1000)
+            pvalues.append(pvalue)
+            pvalue_sum += pvalue
+            stat_sum += stat
+        pvalue_avg = pvalue_sum / n_tests
+        stat_avg = stat_sum / n_tests
+        power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
+        print(
+            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
+        )
+    end_time = time.time()
+    print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
 
 def tokens_to_reach_power_gao2025(

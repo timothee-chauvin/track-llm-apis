@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import random
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger("track-llm-apis")
+
+MMLU_PREFIX = "Answer the following multiple choice question. The entire content of your response should be of the following format: ‘ANSWER: $LETTER’ (without quotes) where LETTER is one of A,B,C,D.\n\n"
+MMLU_PREFIX_REGEX = (
+    MMLU_PREFIX.replace("$", r"\$").replace(".", r"\.").replace("(", r"\(").replace(")", r"\)")
+)
 
 
 async def gather_with_concurrency(n, *coros):
@@ -248,7 +254,27 @@ def used_gpu_memory(cleanup: bool = False, as_str: bool = False) -> float | str:
 def format_mmlu_prompt(mmlu_item: dict) -> str:
     a, b, c, d = mmlu_item["choices"]
     choices_str = f"A. {a}\nB. {b}\nC. {c}\nD. {d}"
-    return f"Answer the following multiple choice question. The entire content of your response should be of the following format: ‘ANSWER: $LETTER’ (without quotes) where LETTER is one of A,B,C,D.\n\n{mmlu_item['question']}\n\n{choices_str}"
+    return f"{MMLU_PREFIX}{mmlu_item['question']}\n\n{choices_str}"
+
+
+def mmlu_prompt_to_question(prompt: str) -> str:
+    """Opposite of format_mmlu_prompt"""
+    pattern = rf"^{MMLU_PREFIX_REGEX}(.*)\n\nA\. .*\nB\. .*\nC\. .*\nD\. .*$"
+    match = re.match(pattern, prompt, re.DOTALL)
+    if match:
+        return match.group(1)
+    else:
+        raise ValueError(f"Could not extract question from MMLU prompt: {prompt}")
+
+
+def mmlu_answer_to_choice(answer: str) -> int:
+    pattern = r"^.*Answer: ([A-D]).*$"
+    match = re.match(pattern, answer, re.DOTALL)
+    if match:
+        return ord(match.group(1)) - ord("A")
+    else:
+        # Not formatting the answer correctly is an error
+        return -1
 
 
 def format_wikipedia_prompt(wikipedia_item: dict) -> str:
