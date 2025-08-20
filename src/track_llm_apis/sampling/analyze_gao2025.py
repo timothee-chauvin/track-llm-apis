@@ -6,6 +6,8 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
+from jaxtyping import Float, Int
+from torch import Tensor
 from tqdm import tqdm
 
 from track_llm_apis.config import config
@@ -71,7 +73,7 @@ class EmpiricalPvalueCalculatorTorch:
     Given an empirical sample of test statitics, provides a callable that returns the p-value of an observed test statistic.
     """
 
-    def __init__(self, observed_stats: torch.Tensor):
+    def __init__(self, observed_stats: Float[Tensor, " b"]):
         """
         Args:
             observed_stats: a torch tensor of shape (b,)
@@ -79,7 +81,7 @@ class EmpiricalPvalueCalculatorTorch:
         """
         self.stats = observed_stats
 
-    def __call__(self, obs_stat: float | torch.Tensor) -> float:
+    def __call__(self, obs_stat: float | Float[Tensor, " b"]) -> float:
         return torch.mean((self.stats >= obs_stat), dim=0, dtype=torch.float32).item()
 
 
@@ -329,7 +331,9 @@ def mmd_hamming(
     )
 
 
-def mmd_hamming_torch(X: torch.Tensor, Y: torch.Tensor, normalize: bool = True) -> torch.Tensor:
+def mmd_hamming_torch(
+    X: Int[Tensor, "b n Lp1"], Y: Int[Tensor, "b m Lp1"], normalize: bool = True
+) -> Float[Tensor, " b"]:
     """
     Computes MMD with Hamming kernel sequentially to save memory.
     Args:
