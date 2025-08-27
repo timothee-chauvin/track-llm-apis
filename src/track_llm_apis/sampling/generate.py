@@ -254,7 +254,8 @@ async def main():
     assert isinstance(tc_config.finetuning_dataset, Dataset)
     tiny_change = TinyChange(model, tokenizer, tc_config)
     n_variants = tiny_change.n_variants
-    compressed_output = CompressedOutput(model_name=model_name)
+    gpus = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+    compressed_output = CompressedOutput(model_name=model_name, gpus=gpus)
 
     gao2025_config = config.sampling.gao2025
     mmlu_config = config.sampling.mmlu

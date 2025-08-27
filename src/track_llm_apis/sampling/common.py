@@ -91,6 +91,8 @@ class Reference(BaseModel):
 
 class CompressedOutput(BaseModel):
     model_name: str
+    # GPUs used during sampling
+    gpus: list[str]
     rows: list[CompressedOutputRow] = Field(default_factory=list)
     references: list[Reference] = Field(
         default_factory=lambda: [
