@@ -201,7 +201,7 @@ def load_lmsys_chat_1m(
 
 def slugify(s: str, max_length: int = 50, hash_length: int = 8) -> str:
     """
-    Convert a string to a slugified version suitable for Linux filenames.
+    Convert a string to a slugified version suitable for Linux and MacOS filenames.
 
     Special characters are hex-encoded to preserve information while keeping
     the filename safe. For example, "|" becomes "-x7c-".
@@ -212,17 +212,17 @@ def slugify(s: str, max_length: int = 50, hash_length: int = 8) -> str:
         hash_length: Length of the hash to append to the output (default: 8)
 
     Returns:
-        A slugified string safe for use as a Linux filename
+        A slugified string safe for use as a Linux or MacOS filename
     """
     slug = ""
 
     for char in s:
-        if char.isalnum() or char in "._-":
+        if char.isalnum() or char in "._-+=@~,":
             slug += char
         elif char == " ":
             slug += "-"
         else:
-            slug += f"-x{ord(char):02x}-"
+            slug += f"{ord(char):02x}"
 
     slug = slug[:max_length]
 
