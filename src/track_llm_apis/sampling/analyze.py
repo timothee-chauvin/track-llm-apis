@@ -272,66 +272,84 @@ def evaluate_detectors_on_variant(
 
 
 def evaluate_detectors(
-    data: CompressedOutput, source: DataSource, alpha: float, compute_pvalue: bool = True
+    data: CompressedOutput, sources: list[DataSource], alpha: float, compute_pvalue: bool = False
 ):
-    print(f"{source=}")
+    print(f"{sources=}")
     variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
     prompts = data.references_dict["prompt"]
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
-    uncompressed_output = UncompressedOutput.from_compressed_output(data, keep_datasource=source)
+
+    rows_by_variant = {
+        source: UncompressedOutput.from_compressed_output(
+            data, keep_datasource=source
+        ).rows_by_variant()
+        for source in sources
+    }
+    unchanged_rows = {
+        source: rows_by_variant[source][TinyChange.unchanged_str()] for source in sources
+    }
+    unchanged_rows_by_prompt = {
+        source: UncompressedOutput.rows_by_prompt(unchanged_rows[source]) for source in sources
+    }
+
     tokenizer = AutoTokenizer.from_pretrained(data.model_name)
     start_time = time.time()
-    rows_by_variant = uncompressed_output.rows_by_variant()
-    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
-    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
     # Get data on the false positive rate
-    results_original = evaluate_detectors_on_variant(
-        source,
-        unchanged_rows_by_prompt,
-        unchanged_rows_by_prompt,
-        prompt_length,
-        tokenizer,
-        compute_pvalue=compute_pvalue,
-        sample_with_replacement=True,
-        n_subsets_with_replacement=100,
-    )
-    y_true_orig = [0] * len(results_original.stats)
-    y_pred_orig = results_original.stats
-    y_true = copy.deepcopy(y_true_orig)
-    y_pred = copy.deepcopy(y_pred_orig)
-    for variant_idx, variant in enumerate(variants):
-        variant_rows = rows_by_variant[variant]
-        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
-        assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
-        results = evaluate_detectors_on_variant(
+    results_original = {
+        source: evaluate_detectors_on_variant(
             source,
-            unchanged_rows_by_prompt,
-            rows_by_prompt,
+            unchanged_rows_by_prompt[source],
+            unchanged_rows_by_prompt[source],
             prompt_length,
             tokenizer,
             compute_pvalue=compute_pvalue,
             sample_with_replacement=True,
             n_subsets_with_replacement=100,
         )
-        variant_true = [1] * len(results.stats)
-        variant_pred = results.stats
-        y_true.extend(variant_true)
-        y_pred.extend(variant_pred)
-        roc_auc = roc_auc_score(y_true_orig + variant_true, y_pred_orig + variant_pred)
-        stat_avg = sum(results.stats) / len(results.stats)
-        pvalue_avg = sum(results.pvalues) / len(results.pvalues) if results.pvalues else None
-        input_tokens_avg = sum(results.n_input_tokens) / len(results.n_input_tokens)
-        output_tokens_avg = sum(results.n_output_tokens) / len(results.n_output_tokens)
-        power = (
-            sum(pvalue < alpha for pvalue in results.pvalues) / len(results.pvalues)
-            if results.pvalues
-            else None
-        )
-        print(
-            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, {roc_auc=}"
-        )
-    overall_roc_auc = roc_auc_score(y_true, y_pred)
-    print(f"Overall ROC AUC: {overall_roc_auc}")
+        for source in sources
+    }
+    y_true_orig = {source: [0] * len(results_original[source].stats) for source in sources}
+    y_pred_orig = {source: results_original[source].stats for source in sources}
+    y_true = copy.deepcopy(y_true_orig)
+    y_pred = copy.deepcopy(y_pred_orig)
+    for variant_idx, variant in enumerate(variants):
+        print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
+        for source in sources:
+            variant_rows = rows_by_variant[source][variant]
+            rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
+            assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt[source].keys())
+            results = evaluate_detectors_on_variant(
+                source,
+                unchanged_rows_by_prompt[source],
+                rows_by_prompt,
+                prompt_length,
+                tokenizer,
+                compute_pvalue=compute_pvalue,
+                sample_with_replacement=True,
+                n_subsets_with_replacement=100,
+            )
+            variant_true = [1] * len(results.stats)
+            variant_pred = results.stats
+            y_true[source].extend(variant_true)
+            y_pred[source].extend(variant_pred)
+            roc_auc = roc_auc_score(
+                y_true_orig[source] + variant_true, y_pred_orig[source] + variant_pred
+            )
+            stat_avg = sum(results.stats) / len(results.stats)
+            pvalue_avg = sum(results.pvalues) / len(results.pvalues) if results.pvalues else None
+            input_tokens_avg = sum(results.n_input_tokens) / len(results.n_input_tokens)
+            output_tokens_avg = sum(results.n_output_tokens) / len(results.n_output_tokens)
+            power = (
+                sum(pvalue < alpha for pvalue in results.pvalues) / len(results.pvalues)
+                if results.pvalues
+                else None
+            )
+            print(
+                f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, {roc_auc=}"
+            )
+    overall_roc_auc = {source: roc_auc_score(y_true[source], y_pred[source]) for source in sources}
+    for source in sources:
+        print(f"Overall ROC AUC for {source}: {overall_roc_auc[source]}")
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
@@ -347,8 +365,9 @@ if __name__ == "__main__":
         print(f"number of rows: {len(compressed_output.rows)}")
         for ref in compressed_output.references:
             print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
-        for alpha in [0.05]:
-            for source in [DataSource.MMLU, DataSource.US, DataSource.GAO2025]:
-                evaluate_detectors(
-                    data=compressed_output, source=source, alpha=alpha, compute_pvalue=False
-                )
+        evaluate_detectors(
+            data=compressed_output,
+            sources=[DataSource.MMLU, DataSource.US, DataSource.GAO2025],
+            alpha=0.05,
+            compute_pvalue=False,
+        )
