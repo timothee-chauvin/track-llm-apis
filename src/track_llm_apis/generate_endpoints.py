@@ -278,7 +278,6 @@ async def main(add_to_existing: bool = False):
 
 
 def entrypoint(add_to_existing: bool = False):
-    add_to_existing = True
     asyncio.run(main(add_to_existing=add_to_existing))
 
 
