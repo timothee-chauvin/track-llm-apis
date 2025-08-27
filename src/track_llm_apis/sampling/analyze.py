@@ -197,7 +197,7 @@ def gen_sample_pairs(
             ]
 
 
-def tokens_to_reach_power_variant(
+def evaluate_detectors_on_variant(
     source: DataSource,
     unchanged_rows_by_prompt: dict[str, list[OutputRow]],
     rows_by_prompt: dict[str, list[OutputRow]],
@@ -254,7 +254,7 @@ def tokens_to_reach_power_variant(
     return pvalue_avg, stat_avg, power, input_tokens_avg, output_tokens_avg
 
 
-def tokens_to_reach_power(data: CompressedOutput, source: DataSource, power: float, alpha: float):
+def evaluate_detectors(data: CompressedOutput, source: DataSource, power: float, alpha: float):
     variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
     prompts = data.references_dict["prompt"]
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
@@ -269,7 +269,7 @@ def tokens_to_reach_power(data: CompressedOutput, source: DataSource, power: flo
         rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
         assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
         pvalue_avg, stat_avg, power, input_tokens_avg, output_tokens_avg = (
-            tokens_to_reach_power_variant(
+            evaluate_detectors_on_variant(
                 source,
                 unchanged_rows_by_prompt,
                 rows_by_prompt,
@@ -299,4 +299,4 @@ if __name__ == "__main__":
             print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
         for alpha in [0.05]:
             for source in [DataSource.MMLU, DataSource.US, DataSource.GAO2025]:
-                tokens_to_reach_power(data=compressed_output, source=source, power=0.8, alpha=alpha)
+                evaluate_detectors(data=compressed_output, source=source, power=0.8, alpha=alpha)
