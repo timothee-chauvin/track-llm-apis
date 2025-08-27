@@ -11,6 +11,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from track_llm_apis.config import config
+from track_llm_apis.sampling.common import TwoSampleTestResult
 
 
 class CompletionSample:
@@ -205,14 +206,18 @@ def run_two_sample_test(
 def run_two_sample_test_torch(
     sample: CompletionSample,
     other_sample: CompletionSample,
+    compute_pvalue: bool = True,
     b=1000,
-) -> tuple[float, float]:
-    get_pvalue = two_sample_permutation_pvalue_torch(sample, other_sample, b=b)
+) -> TwoSampleTestResult:
     statistic = mmd_hamming_torch(
         sample.sequences.unsqueeze(0), other_sample.sequences.unsqueeze(0)
     ).item()
-    pvalue = get_pvalue(statistic)
-    return (pvalue, statistic)
+    if compute_pvalue:
+        get_pvalue = two_sample_permutation_pvalue_torch(sample, other_sample, b=b)
+        pvalue = get_pvalue(statistic)
+        return TwoSampleTestResult(pvalue=pvalue, statistic=statistic)
+    else:
+        return TwoSampleTestResult(statistic=statistic)
 
 
 ### from tests.py

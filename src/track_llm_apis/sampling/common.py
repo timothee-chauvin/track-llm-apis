@@ -206,3 +206,15 @@ class UncompressedOutput(BaseModel):
         for row in rows:
             rows_by_prompt[row.prompt[0]].append(row)
         return dict(rows_by_prompt)
+
+
+class TwoSampleTestResult(BaseModel):
+    pvalue: float | None = None
+    statistic: float
+
+
+class TwoSampleTestResults(BaseModel):
+    stats: list[float]
+    n_input_tokens: list[int]
+    n_output_tokens: list[int]
+    pvalues: list[float] | None = None

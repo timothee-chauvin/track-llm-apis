@@ -7,7 +7,7 @@ from jaxtyping import Float
 from torch import Tensor
 
 from track_llm_apis.config import config
-from track_llm_apis.sampling.common import OutputRow
+from track_llm_apis.sampling.common import OutputRow, TwoSampleTestResult
 
 
 def frozenlist(li: list) -> FrozenList:
@@ -58,8 +58,9 @@ def logprob_two_sample_test(
     sample1: dict[str, list[OutputRow]],
     sample2: dict[str, list[OutputRow]],
     b: int = 1000,
+    compute_pvalue: bool = True,
     **kwargs,
-) -> tuple[float, float]:
+) -> TwoSampleTestResult:
     assert len(sample1) == 1 and len(sample2) == 1
     values1 = next(iter(sample1.values()))
     values2 = next(iter(sample2.values()))
@@ -70,10 +71,13 @@ def logprob_two_sample_test(
     sample2_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in values2])
     t1 = build_logprob_tensor(sample1_logprobs, seen_tokens, token_short_ids)
     t2 = build_logprob_tensor(sample2_logprobs, seen_tokens, token_short_ids)
-    permutation_stats = logprob_two_sample_permutation_pvalue(t1, t2, b=b)
     statistic = logprob_two_sample_statistic(t1.unsqueeze(0), t2.unsqueeze(0)).item()
-    pvalue = torch.mean(permutation_stats >= statistic, dim=0, dtype=torch.float32).item()
-    return pvalue, statistic
+    if compute_pvalue:
+        permutation_stats = logprob_two_sample_permutation_pvalue(t1, t2, b=b)
+        pvalue = torch.mean(permutation_stats >= statistic, dim=0, dtype=torch.float32).item()
+        return TwoSampleTestResult(pvalue=pvalue, statistic=statistic)
+    else:
+        return TwoSampleTestResult(statistic=statistic)
 
 
 def logprob_two_sample_permutation_pvalue(

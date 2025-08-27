@@ -1,10 +1,13 @@
+import copy
 import os
+import random
 import time
 from typing import Any
 
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import roc_auc_score
 from transformers import AutoTokenizer
 
 from track_llm_apis.config import config
@@ -15,6 +18,7 @@ from track_llm_apis.sampling.common import (
     CompressedOutput,
     DataSource,
     OutputRow,
+    TwoSampleTestResults,
     UncompressedOutput,
 )
 from track_llm_apis.tinychange import TinyChange
@@ -175,11 +179,12 @@ def gao2025_two_sample_test(
     rows_subset: dict[str, list[OutputRow]],
     unchanged_rows_subset: dict[str, list[OutputRow]],
     tokenizer: AutoTokenizer,
+    compute_pvalue: bool = True,
     b: int = 1000,
 ):
     sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
     sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
-    return run_two_sample_test_torch(sample1, sample2, b=b)
+    return run_two_sample_test_torch(sample1, sample2, b=b, compute_pvalue=compute_pvalue)
 
 
 def gen_sample_pairs(
@@ -203,11 +208,10 @@ def evaluate_detectors_on_variant(
     rows_by_prompt: dict[str, list[OutputRow]],
     prompt_length: dict[str, int],
     tokenizer: AutoTokenizer,
-    power: float,
-    alpha: float,
-):
-    pvalue_sum = 0
-    stat_sum = 0
+    compute_pvalue: bool = True,
+    sample_with_replacement: bool = False,
+    n_subsets_with_replacement: int = 100,
+) -> TwoSampleTestResults:
     match source:
         case DataSource.GAO2025:
             samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
@@ -219,23 +223,37 @@ def evaluate_detectors_on_variant(
             samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
             two_sample_test_fn = logprob_two_sample_test
 
-    n_subsets = config.sampling.variants_n_samples // samples_per_prompt
+    if sample_with_replacement:
+        n_subsets = n_subsets_with_replacement
+    else:
+        n_subsets = config.sampling.variants_n_samples // samples_per_prompt
+    stats = []
     pvalues = []
     n_input_tokens = []
     n_output_tokens = []
     sample_pairs = []
     for i in range(n_subsets):
-        start = i * samples_per_prompt
-        end = (i + 1) * samples_per_prompt
-        rows_subset = {p: r[start:end] for p, r in rows_by_prompt.items()}
-        unchanged_rows_subset = {p: r[start:end] for p, r in unchanged_rows_by_prompt.items()}
+        if sample_with_replacement:
+            rows_subset = {
+                p: random.sample(r, samples_per_prompt) for p, r in rows_by_prompt.items()
+            }
+            unchanged_rows_subset = {
+                p: random.sample(r, samples_per_prompt) for p, r in unchanged_rows_by_prompt.items()
+            }
+        else:
+            start = i * samples_per_prompt
+            end = (i + 1) * samples_per_prompt
+            rows_subset = {p: r[start:end] for p, r in rows_by_prompt.items()}
+            unchanged_rows_subset = {p: r[start:end] for p, r in unchanged_rows_by_prompt.items()}
         sample_pairs.extend(gen_sample_pairs(source, rows_subset, unchanged_rows_subset))
 
     for sample1, sample2 in sample_pairs:
-        pvalue, stat = two_sample_test_fn(sample1, sample2, b=1000, tokenizer=tokenizer)
-        pvalues.append(pvalue)
-        pvalue_sum += pvalue
-        stat_sum += stat
+        result = two_sample_test_fn(
+            sample1, sample2, b=1000, compute_pvalue=compute_pvalue, tokenizer=tokenizer
+        )
+        stats.append(result.statistic)
+        if compute_pvalue:
+            pvalues.append(result.pvalue)
         n_input_tokens.append(
             sum(prompt_length[p] * len(r) for p, r in sample1.items())
             + sum(prompt_length[p] * len(r) for p, r in sample2.items())
@@ -245,16 +263,18 @@ def evaluate_detectors_on_variant(
             + sum(r.text[1] for rows in sample2.values() for r in rows)
         )
 
-    n_tests = len(sample_pairs)
-    pvalue_avg = pvalue_sum / n_tests
-    stat_avg = stat_sum / n_tests
-    input_tokens_avg = sum(n_input_tokens) / n_tests
-    output_tokens_avg = sum(n_output_tokens) / n_tests
-    power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
-    return pvalue_avg, stat_avg, power, input_tokens_avg, output_tokens_avg
+    return TwoSampleTestResults(
+        stats=stats,
+        pvalues=pvalues if compute_pvalue else None,
+        n_input_tokens=n_input_tokens,
+        n_output_tokens=n_output_tokens,
+    )
 
 
-def evaluate_detectors(data: CompressedOutput, source: DataSource, power: float, alpha: float):
+def evaluate_detectors(
+    data: CompressedOutput, source: DataSource, alpha: float, compute_pvalue: bool = True
+):
+    print(f"{source=}")
     variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
     prompts = data.references_dict["prompt"]
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
@@ -264,24 +284,54 @@ def evaluate_detectors(data: CompressedOutput, source: DataSource, power: float,
     rows_by_variant = uncompressed_output.rows_by_variant()
     unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
     unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
+    # Get data on the false positive rate
+    results_original = evaluate_detectors_on_variant(
+        source,
+        unchanged_rows_by_prompt,
+        unchanged_rows_by_prompt,
+        prompt_length,
+        tokenizer,
+        compute_pvalue=compute_pvalue,
+        sample_with_replacement=True,
+        n_subsets_with_replacement=100,
+    )
+    y_true_orig = [0] * len(results_original.stats)
+    y_pred_orig = results_original.stats
+    y_true = copy.deepcopy(y_true_orig)
+    y_pred = copy.deepcopy(y_pred_orig)
     for variant_idx, variant in enumerate(variants):
         variant_rows = rows_by_variant[variant]
         rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
         assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
-        pvalue_avg, stat_avg, power, input_tokens_avg, output_tokens_avg = (
-            evaluate_detectors_on_variant(
-                source,
-                unchanged_rows_by_prompt,
-                rows_by_prompt,
-                prompt_length,
-                tokenizer,
-                power,
-                alpha,
-            )
+        results = evaluate_detectors_on_variant(
+            source,
+            unchanged_rows_by_prompt,
+            rows_by_prompt,
+            prompt_length,
+            tokenizer,
+            compute_pvalue=compute_pvalue,
+            sample_with_replacement=True,
+            n_subsets_with_replacement=100,
+        )
+        variant_true = [1] * len(results.stats)
+        variant_pred = results.stats
+        y_true.extend(variant_true)
+        y_pred.extend(variant_pred)
+        roc_auc = roc_auc_score(y_true_orig + variant_true, y_pred_orig + variant_pred)
+        stat_avg = sum(results.stats) / len(results.stats)
+        pvalue_avg = sum(results.pvalues) / len(results.pvalues) if results.pvalues else None
+        input_tokens_avg = sum(results.n_input_tokens) / len(results.n_input_tokens)
+        output_tokens_avg = sum(results.n_output_tokens) / len(results.n_output_tokens)
+        power = (
+            sum(pvalue < alpha for pvalue in results.pvalues) / len(results.pvalues)
+            if results.pvalues
+            else None
         )
         print(
-            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}, Input tokens average: {input_tokens_avg}, Output tokens average: {output_tokens_avg}"
+            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, {roc_auc=}"
         )
+    overall_roc_auc = roc_auc_score(y_true, y_pred)
+    print(f"Overall ROC AUC: {overall_roc_auc}")
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
@@ -299,4 +349,6 @@ if __name__ == "__main__":
             print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
         for alpha in [0.05]:
             for source in [DataSource.MMLU, DataSource.US, DataSource.GAO2025]:
-                evaluate_detectors(data=compressed_output, source=source, power=0.8, alpha=alpha)
+                evaluate_detectors(
+                    data=compressed_output, source=source, alpha=alpha, compute_pvalue=False
+                )
