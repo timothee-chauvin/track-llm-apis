@@ -5,7 +5,6 @@ from typing import Any
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
-from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from track_llm_apis.config import config
@@ -172,6 +171,28 @@ def prompt_rows_dict_to_completion_sample(
     return CompletionSample(prompts=prompts, completions=completions)
 
 
+def _gen_sample_pairs_logprobs(
+    rows_subset: dict[str, list[OutputRow]], unchanged_rows_subset: dict[str, list[OutputRow]]
+):
+    return [(rows_subset[prompt], unchanged_rows_subset[prompt]) for prompt in rows_subset.keys()]
+
+
+def _gen_sample_pairs_mmlu(
+    rows_subset: dict[str, list[OutputRow]], unchanged_rows_subset: dict[str, list[OutputRow]]
+):
+    return [(rows_subset, unchanged_rows_subset)]
+
+
+def _gen_sample_pairs_gao2025(
+    rows_subset: dict[str, list[OutputRow]],
+    unchanged_rows_subset: dict[str, list[OutputRow]],
+    tokenizer: AutoTokenizer,
+):
+    sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
+    sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
+    return [(sample1, sample2)]
+
+
 def tokens_to_reach_power_variant(
     source: DataSource,
     unchanged_rows_by_prompt: dict[str, list[OutputRow]],
@@ -182,57 +203,39 @@ def tokens_to_reach_power_variant(
 ):
     pvalue_sum = 0
     stat_sum = 0
-    if source == DataSource.GAO2025:
-        samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
-        n_tests = config.sampling.variants_n_samples // samples_per_prompt
-        pvalues = []
-        for i in tqdm(range(n_tests)):
-            start = i * samples_per_prompt
-            end = (i + 1) * samples_per_prompt
-            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
-            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
-            sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
-            sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
-            pvalue, stat = run_two_sample_test_torch(sample1, sample2, b=1000)
-            pvalues.append(pvalue)
-            pvalue_sum += pvalue
-            stat_sum += stat
+    match source:
+        case DataSource.GAO2025:
+            samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
+            two_sample_test_fn = run_two_sample_test_torch
 
-    elif source == DataSource.MMLU:
-        samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
-        n_tests = config.sampling.variants_n_samples // samples_per_prompt
-        pvalues = []
-        for i in range(n_tests):
-            start = i * samples_per_prompt
-            end = (i + 1) * samples_per_prompt
-            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
-            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
-            pvalue, stat = mmlu_two_sample_test(rows_subset, unchanged_rows_subset, b=1000)
-            pvalues.append(pvalue)
-            pvalue_sum += pvalue
-            stat_sum += stat
+            def gen_sample_pairs_fn(rows_subset, unchanged_rows_subset):
+                return _gen_sample_pairs_gao2025(rows_subset, unchanged_rows_subset, tokenizer)
+        case DataSource.MMLU:
+            samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
+            two_sample_test_fn = mmlu_two_sample_test
+            gen_sample_pairs_fn = _gen_sample_pairs_mmlu
+        case DataSource.US:
+            samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
+            two_sample_test_fn = logprob_two_sample_test
+            gen_sample_pairs_fn = _gen_sample_pairs_logprobs
 
-    elif source == DataSource.US:
-        samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
-        n_tests = config.sampling.variants_n_samples // samples_per_prompt
-        pvalues = []
-        for i in tqdm(range(n_tests)):
-            start = i * samples_per_prompt
-            end = (i + 1) * samples_per_prompt
-            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
-            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
-            for prompt in rows_by_prompt.keys():
-                rows_subset_list = rows_subset[prompt]
-                unchanged_rows_subset_list = unchanged_rows_subset[prompt]
-                pvalue, stat = logprob_two_sample_test(
-                    rows_subset_list, unchanged_rows_subset_list, b=1000
-                )
-                pvalues.append(pvalue)
-                pvalue_sum += pvalue
-                stat_sum += stat
-        # for averaging
-        n_tests *= len(rows_by_prompt.keys())
+    n_subsets = config.sampling.variants_n_samples // samples_per_prompt
+    pvalues = []
+    sample_pairs = []
+    for i in range(n_subsets):
+        start = i * samples_per_prompt
+        end = (i + 1) * samples_per_prompt
+        rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
+        unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
+        sample_pairs.extend(gen_sample_pairs_fn(rows_subset, unchanged_rows_subset))
 
+    for sample1, sample2 in sample_pairs:
+        pvalue, stat = two_sample_test_fn(sample1, sample2, b=1000)
+        pvalues.append(pvalue)
+        pvalue_sum += pvalue
+        stat_sum += stat
+
+    n_tests = len(sample_pairs)
     pvalue_avg = pvalue_sum / n_tests
     stat_avg = stat_sum / n_tests
     power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
@@ -274,6 +277,5 @@ if __name__ == "__main__":
         for ref in compressed_output.references:
             print(f"{ref.row_attr}: {len(ref.elems)}")
         for alpha in [0.05]:
-            tokens_to_reach_power(
-                data=compressed_output, source=DataSource.GAO2025, power=0.8, alpha=alpha
-            )
+            for source in [DataSource.MMLU, DataSource.US, DataSource.GAO2025]:
+                tokens_to_reach_power(data=compressed_output, source=source, power=0.8, alpha=alpha)
