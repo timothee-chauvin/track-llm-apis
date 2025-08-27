@@ -76,7 +76,7 @@ async def test_endpoint_logprobs(endpoint):
 
 
 async def main(add_to_existing: bool = False):
-    config.max_retries = 5
+    config.api.max_retries = 5
 
     # Get the model IDs
     logger.info("Fetching model list...")
@@ -278,6 +278,7 @@ async def main(add_to_existing: bool = False):
 
 
 def entrypoint(add_to_existing: bool = False):
+    add_to_existing = True
     asyncio.run(main(add_to_existing=add_to_existing))
 
 
