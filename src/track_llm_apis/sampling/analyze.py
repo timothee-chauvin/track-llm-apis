@@ -1,13 +1,15 @@
 import copy
+import json
 import os
 import random
 import time
 from typing import Any
 
+import numpy as np
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 from transformers import AutoTokenizer
 
 from track_llm_apis.config import config
@@ -271,8 +273,64 @@ def evaluate_detectors_on_variant(
     )
 
 
+def plot_roc_curve(
+    roc_curves: dict[DataSource, tuple[np.ndarray, np.ndarray, np.ndarray]],
+    aucs: dict[DataSource, float],
+    model_name: str,
+    variant: str | None,
+):
+    sources = list(roc_curves.keys())
+    fig = go.Figure()
+    for source in sources:
+        fpr, tpr, _ = roc_curves[source]
+        auc = aucs[source]
+        display_name = f"{source.name} (AUC: {auc:.4f})"
+        fig.add_trace(go.Scatter(x=fpr, y=tpr, name=display_name))
+
+    # Random chance diagonal
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 1],
+            mode="lines",
+            name="Random chance",
+            line=dict(dash="dash", color="black"),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    if variant:
+        variant_metadata = json.loads(variant)
+        variant_preslug = (
+            variant_metadata["type"]
+            + ","
+            + ",".join(f"{k}={v}" for k, v in variant_metadata.items() if k != "type")
+        )
+    else:
+        variant_preslug = "all"
+    title = f"ROC Curves on model {model_name}"
+    if variant:
+        title += f", on variant: {variant_preslug}"
+    else:
+        title += " across all variants"
+    fig.update_layout(
+        title=title,
+        xaxis_title="False Positive Rate",
+        yaxis_title="True Positive Rate",
+    )
+    model_slug = slugify(model_name, max_length=100, hash_length=0)
+    variant_slug = slugify(variant_preslug, max_length=200, hash_length=0)
+    out_dir = config.plots_dir / "roc_curves" / model_slug
+    os.makedirs(out_dir, exist_ok=True)
+    fig.write_html(out_dir / f"{variant_slug}.html")
+
+
 def evaluate_detectors(
-    data: CompressedOutput, sources: list[DataSource], alpha: float, compute_pvalue: bool = False
+    data: CompressedOutput,
+    sources: list[DataSource],
+    alpha: float,
+    compute_pvalue: bool = False,
+    plot_roc: bool = False,
 ):
     print(f"{sources=}")
     variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
@@ -314,6 +372,8 @@ def evaluate_detectors(
     y_pred = copy.deepcopy(y_pred_orig)
     for variant_idx, variant in enumerate(variants):
         print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
+        roc_curves = {}
+        roc_aucs = {}
         for source in sources:
             variant_rows = rows_by_variant[source][variant]
             rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
@@ -332,7 +392,11 @@ def evaluate_detectors(
             variant_pred = results.stats
             y_true[source].extend(variant_true)
             y_pred[source].extend(variant_pred)
-            roc_auc = roc_auc_score(
+            if plot_roc:
+                roc_curves[source] = roc_curve(
+                    y_true_orig[source] + variant_true, y_pred_orig[source] + variant_pred
+                )
+            roc_aucs[source] = roc_auc_score(
                 y_true_orig[source] + variant_true, y_pred_orig[source] + variant_pred
             )
             stat_avg = sum(results.stats) / len(results.stats)
@@ -345,11 +409,16 @@ def evaluate_detectors(
                 else None
             )
             print(
-                f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, {roc_auc=}"
+                f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, roc_auc={roc_aucs[source]}"
             )
-    overall_roc_auc = {source: roc_auc_score(y_true[source], y_pred[source]) for source in sources}
+        if plot_roc:
+            plot_roc_curve(roc_curves, roc_aucs, data.model_name, variant)
+    overall_roc_curves = {source: roc_curve(y_true[source], y_pred[source]) for source in sources}
+    overall_roc_aucs = {source: roc_auc_score(y_true[source], y_pred[source]) for source in sources}
     for source in sources:
-        print(f"Overall ROC AUC for {source}: {overall_roc_auc[source]}")
+        print(f"Overall ROC AUC for {source}: {overall_roc_aucs[source]}")
+    if plot_roc:
+        plot_roc_curve(overall_roc_curves, overall_roc_aucs, data.model_name, None)
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
@@ -367,7 +436,8 @@ if __name__ == "__main__":
             print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
         evaluate_detectors(
             data=compressed_output,
-            sources=[DataSource.MMLU, DataSource.US, DataSource.GAO2025],
+            sources=[DataSource.US, DataSource.MMLU, DataSource.GAO2025],
             alpha=0.05,
             compute_pvalue=False,
+            plot_roc=True,
         )
