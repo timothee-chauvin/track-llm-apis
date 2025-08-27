@@ -171,32 +171,37 @@ def prompt_rows_dict_to_completion_sample(
     return CompletionSample(prompts=prompts, completions=completions)
 
 
-def _gen_sample_pairs_logprobs(
-    rows_subset: dict[str, list[OutputRow]], unchanged_rows_subset: dict[str, list[OutputRow]]
-):
-    return [(rows_subset[prompt], unchanged_rows_subset[prompt]) for prompt in rows_subset.keys()]
-
-
-def _gen_sample_pairs_mmlu(
-    rows_subset: dict[str, list[OutputRow]], unchanged_rows_subset: dict[str, list[OutputRow]]
-):
-    return [(rows_subset, unchanged_rows_subset)]
-
-
-def _gen_sample_pairs_gao2025(
+def gao2025_two_sample_test(
     rows_subset: dict[str, list[OutputRow]],
     unchanged_rows_subset: dict[str, list[OutputRow]],
     tokenizer: AutoTokenizer,
+    b: int = 1000,
 ):
     sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
     sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
-    return [(sample1, sample2)]
+    return run_two_sample_test_torch(sample1, sample2, b=b)
+
+
+def gen_sample_pairs(
+    source: DataSource,
+    rows_subset: dict[str, list[OutputRow]],
+    unchanged_rows_subset: dict[str, list[OutputRow]],
+) -> list[tuple[dict[str, list[OutputRow]], dict[str, list[OutputRow]]]]:
+    match source:
+        case DataSource.GAO2025 | DataSource.MMLU:
+            return [(rows_subset, unchanged_rows_subset)]
+        case DataSource.US:
+            return [
+                ({prompt: rows_subset[prompt]}, {prompt: unchanged_rows_subset[prompt]})
+                for prompt in rows_subset.keys()
+            ]
 
 
 def tokens_to_reach_power_variant(
     source: DataSource,
     unchanged_rows_by_prompt: dict[str, list[OutputRow]],
     rows_by_prompt: dict[str, list[OutputRow]],
+    prompt_length: dict[str, int],
     tokenizer: AutoTokenizer,
     power: float,
     alpha: float,
@@ -206,60 +211,76 @@ def tokens_to_reach_power_variant(
     match source:
         case DataSource.GAO2025:
             samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
-            two_sample_test_fn = run_two_sample_test_torch
-
-            def gen_sample_pairs_fn(rows_subset, unchanged_rows_subset):
-                return _gen_sample_pairs_gao2025(rows_subset, unchanged_rows_subset, tokenizer)
+            two_sample_test_fn = gao2025_two_sample_test
         case DataSource.MMLU:
             samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
             two_sample_test_fn = mmlu_two_sample_test
-            gen_sample_pairs_fn = _gen_sample_pairs_mmlu
         case DataSource.US:
             samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
             two_sample_test_fn = logprob_two_sample_test
-            gen_sample_pairs_fn = _gen_sample_pairs_logprobs
 
     n_subsets = config.sampling.variants_n_samples // samples_per_prompt
     pvalues = []
+    n_input_tokens = []
+    n_output_tokens = []
     sample_pairs = []
     for i in range(n_subsets):
         start = i * samples_per_prompt
         end = (i + 1) * samples_per_prompt
-        rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
-        unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
-        sample_pairs.extend(gen_sample_pairs_fn(rows_subset, unchanged_rows_subset))
+        rows_subset = {p: r[start:end] for p, r in rows_by_prompt.items()}
+        unchanged_rows_subset = {p: r[start:end] for p, r in unchanged_rows_by_prompt.items()}
+        sample_pairs.extend(gen_sample_pairs(source, rows_subset, unchanged_rows_subset))
 
     for sample1, sample2 in sample_pairs:
-        pvalue, stat = two_sample_test_fn(sample1, sample2, b=1000)
+        pvalue, stat = two_sample_test_fn(sample1, sample2, b=1000, tokenizer=tokenizer)
         pvalues.append(pvalue)
         pvalue_sum += pvalue
         stat_sum += stat
+        n_input_tokens.append(
+            sum(prompt_length[p] * len(r) for p, r in sample1.items())
+            + sum(prompt_length[p] * len(r) for p, r in sample2.items())
+        )
+        n_output_tokens.append(
+            sum(r.text[1] for rows in sample1.values() for r in rows)
+            + sum(r.text[1] for rows in sample2.values() for r in rows)
+        )
 
     n_tests = len(sample_pairs)
     pvalue_avg = pvalue_sum / n_tests
     stat_avg = stat_sum / n_tests
+    input_tokens_avg = sum(n_input_tokens) / n_tests
+    output_tokens_avg = sum(n_output_tokens) / n_tests
     power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
-    return pvalue_avg, stat_avg, power
+    return pvalue_avg, stat_avg, power, input_tokens_avg, output_tokens_avg
 
 
 def tokens_to_reach_power(data: CompressedOutput, source: DataSource, power: float, alpha: float):
+    variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
+    prompts = data.references_dict["prompt"]
+    prompt_length = {prompt: tokens for prompt, tokens in prompts}
     uncompressed_output = UncompressedOutput.from_compressed_output(data, keep_datasource=source)
     tokenizer = AutoTokenizer.from_pretrained(data.model_name)
     start_time = time.time()
     rows_by_variant = uncompressed_output.rows_by_variant()
     unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
     unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
-    for variant_idx, variant in enumerate(rows_by_variant.keys()):
-        if variant == TinyChange.unchanged_str():
-            continue
+    for variant_idx, variant in enumerate(variants):
         variant_rows = rows_by_variant[variant]
         rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
         assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
-        pvalue_avg, stat_avg, power = tokens_to_reach_power_variant(
-            source, unchanged_rows_by_prompt, rows_by_prompt, tokenizer, power, alpha
+        pvalue_avg, stat_avg, power, input_tokens_avg, output_tokens_avg = (
+            tokens_to_reach_power_variant(
+                source,
+                unchanged_rows_by_prompt,
+                rows_by_prompt,
+                prompt_length,
+                tokenizer,
+                power,
+                alpha,
+            )
         )
         print(
-            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
+            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}, Input tokens average: {input_tokens_avg}, Output tokens average: {output_tokens_avg}"
         )
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
@@ -275,7 +296,7 @@ if __name__ == "__main__":
         print(compressed_output.model_name)
         print(f"number of rows: {len(compressed_output.rows)}")
         for ref in compressed_output.references:
-            print(f"{ref.row_attr}: {len(ref.elems)}")
+            print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
         for alpha in [0.05]:
             for source in [DataSource.MMLU, DataSource.US, DataSource.GAO2025]:
                 tokens_to_reach_power(data=compressed_output, source=source, power=0.8, alpha=alpha)

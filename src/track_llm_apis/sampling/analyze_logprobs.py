@@ -55,15 +55,19 @@ def get_seen_tokens(
 
 
 def logprob_two_sample_test(
-    sample1: list[OutputRow],
-    sample2: list[OutputRow],
+    sample1: dict[str, list[OutputRow]],
+    sample2: dict[str, list[OutputRow]],
     b: int = 1000,
+    **kwargs,
 ) -> tuple[float, float]:
+    assert len(sample1) == 1 and len(sample2) == 1
+    values1 = next(iter(sample1.values()))
+    values2 = next(iter(sample2.values()))
     # Convert the samples to suitable tensors.
-    all_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in sample1 + sample2])
+    all_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in values1 + values2])
     seen_tokens, token_short_ids = get_seen_tokens(all_logprobs)
-    sample1_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in sample1])
-    sample2_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in sample2])
+    sample1_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in values1])
+    sample2_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in values2])
     t1 = build_logprob_tensor(sample1_logprobs, seen_tokens, token_short_ids)
     t2 = build_logprob_tensor(sample2_logprobs, seen_tokens, token_short_ids)
     permutation_stats = logprob_two_sample_permutation_pvalue(t1, t2, b=b)

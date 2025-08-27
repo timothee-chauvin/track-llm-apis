@@ -101,6 +101,10 @@ class CompressedOutput(BaseModel):
         ]
     )
 
+    @property
+    def references_dict(self) -> dict[str, list[Any]]:
+        return {ref.row_attr: ref.elems for ref in self.references}
+
     def add_row(self, row: OutputRow):
         compressed_row_kwargs = {"source": row.source.value}
         for ref in self.references:

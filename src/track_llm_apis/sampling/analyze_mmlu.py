@@ -21,6 +21,7 @@ def mmlu_two_sample_test(
     rows_subset: dict[str, list[OutputRow]],
     unchanged_rows_subset: dict[str, list[OutputRow]],
     b: int = 1000,
+    **kwargs,
 ) -> tuple[float, float]:
     assert set(rows_subset.keys()) == set(unchanged_rows_subset.keys())
     prompts = list(rows_subset.keys())
