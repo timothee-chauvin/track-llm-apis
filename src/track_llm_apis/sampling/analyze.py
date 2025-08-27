@@ -172,25 +172,51 @@ def prompt_rows_dict_to_completion_sample(
     return CompletionSample(prompts=prompts, completions=completions)
 
 
-def tokens_to_reach_power_logprobs(data: UncompressedOutput, power: float, alpha: float):
-    # TODO: for now, just prints for each variant and each prompt the average p-value and the power.
-    start_time = time.time()
-    rows_by_variant = data.rows_by_variant()
-    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
-    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
-    for variant_idx, variant in enumerate(rows_by_variant.keys()):
-        if variant == TinyChange.unchanged_str():
-            continue
-        pvalue_sum = 0
-        stat_sum = 0
-        variant_rows = rows_by_variant[variant]
-        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
-        n_prompts = len(rows_by_prompt)
-        assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
+def tokens_to_reach_power_variant(
+    source: DataSource,
+    unchanged_rows_by_prompt: dict[str, list[OutputRow]],
+    rows_by_prompt: dict[str, list[OutputRow]],
+    tokenizer: AutoTokenizer,
+    power: float,
+    alpha: float,
+):
+    pvalue_sum = 0
+    stat_sum = 0
+    if source == DataSource.GAO2025:
+        samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
+        n_tests = config.sampling.variants_n_samples // samples_per_prompt
+        pvalues = []
+        for i in tqdm(range(n_tests)):
+            start = i * samples_per_prompt
+            end = (i + 1) * samples_per_prompt
+            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
+            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
+            sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
+            sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
+            pvalue, stat = run_two_sample_test_torch(sample1, sample2, b=1000)
+            pvalues.append(pvalue)
+            pvalue_sum += pvalue
+            stat_sum += stat
+
+    elif source == DataSource.MMLU:
+        samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
+        n_tests = config.sampling.variants_n_samples // samples_per_prompt
+        pvalues = []
+        for i in range(n_tests):
+            start = i * samples_per_prompt
+            end = (i + 1) * samples_per_prompt
+            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
+            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
+            pvalue, stat = mmlu_two_sample_test(rows_subset, unchanged_rows_subset, b=1000)
+            pvalues.append(pvalue)
+            pvalue_sum += pvalue
+            stat_sum += stat
+
+    elif source == DataSource.US:
         samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
         n_tests = config.sampling.variants_n_samples // samples_per_prompt
         pvalues = []
-        for i in tqdm(range(n_tests), desc=f"Testing {variant}"):
+        for i in tqdm(range(n_tests)):
             start = i * samples_per_prompt
             end = (i + 1) * samples_per_prompt
             rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
@@ -204,102 +230,36 @@ def tokens_to_reach_power_logprobs(data: UncompressedOutput, power: float, alpha
                 pvalues.append(pvalue)
                 pvalue_sum += pvalue
                 stat_sum += stat
-        pvalue_avg = pvalue_sum / (n_tests * n_prompts)
-        stat_avg = stat_sum / (n_tests * n_prompts)
-        power = sum(pvalue < alpha for pvalue in pvalues) / (n_tests * n_prompts)
-        print(
-            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
-        )
-    end_time = time.time()
-    print(f"Time taken: {(end_time - start_time):.2f} seconds")
+        # for averaging
+        n_tests *= len(rows_by_prompt.keys())
 
-
-def tokens_to_reach_power_mmlu(data: UncompressedOutput, power: float, alpha: float):
-    start_time = time.time()
-    # TODO: for now, just prints for each variant the average p-value and the power.
-    rows_by_variant = data.rows_by_variant()
-    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
-    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
-    for variant_idx, variant in enumerate(rows_by_variant.keys()):
-        if variant == TinyChange.unchanged_str():
-            continue
-        pvalue_sum = 0
-        stat_sum = 0
-        variant_rows = rows_by_variant[variant]
-        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
-        assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
-        samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
-        n_tests = config.sampling.variants_n_samples // samples_per_prompt
-        pvalues = []
-        for i in range(n_tests):
-            start = i * samples_per_prompt
-            end = (i + 1) * samples_per_prompt
-            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
-            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
-            pvalue, stat = mmlu_two_sample_test(rows_subset, unchanged_rows_subset, b=1000)
-            pvalues.append(pvalue)
-            pvalue_sum += pvalue
-            stat_sum += stat
-        pvalue_avg = pvalue_sum / n_tests
-        stat_avg = stat_sum / n_tests
-        power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
-        print(
-            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
-        )
-    end_time = time.time()
-    print(f"Time taken: {(end_time - start_time):.2f} seconds")
-
-
-def tokens_to_reach_power_gao2025(
-    data: UncompressedOutput, tokenizer: AutoTokenizer, power: float, alpha: float
-):
-    start_time = time.time()
-    # TODO: for now, just prints for each variant the average p-value and the power.
-    rows_by_variant = data.rows_by_variant()
-    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
-    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
-    for variant_idx, variant in enumerate(rows_by_variant.keys()):
-        if variant == TinyChange.unchanged_str():
-            continue
-        pvalue_sum = 0
-        stat_sum = 0
-        variant_rows = rows_by_variant[variant]
-        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
-        assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
-        samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
-        n_tests = config.sampling.variants_n_samples // samples_per_prompt
-        pvalues = []
-        for i in tqdm(range(n_tests), desc=f"Testing {variant}"):
-            start = i * samples_per_prompt
-            end = (i + 1) * samples_per_prompt
-            rows_subset = {k: v[start:end] for k, v in rows_by_prompt.items()}
-            unchanged_rows_subset = {k: v[start:end] for k, v in unchanged_rows_by_prompt.items()}
-            sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
-            sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
-            pvalue, stat = run_two_sample_test_torch(sample1, sample2, b=1000)
-            pvalues.append(pvalue)
-            pvalue_sum += pvalue
-            stat_sum += stat
-        pvalue_avg = pvalue_sum / n_tests
-        stat_avg = stat_sum / n_tests
-        power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
-        print(
-            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
-        )
-    end_time = time.time()
-    print(f"Time taken: {(end_time - start_time):.2f} seconds")
+    pvalue_avg = pvalue_sum / n_tests
+    stat_avg = stat_sum / n_tests
+    power = sum(pvalue < alpha for pvalue in pvalues) / n_tests
+    return pvalue_avg, stat_avg, power
 
 
 def tokens_to_reach_power(data: CompressedOutput, source: DataSource, power: float, alpha: float):
     uncompressed_output = UncompressedOutput.from_compressed_output(data, keep_datasource=source)
     tokenizer = AutoTokenizer.from_pretrained(data.model_name)
-    match source:
-        case DataSource.US:
-            return tokens_to_reach_power_logprobs(uncompressed_output, power, alpha)
-        case DataSource.MMLU:
-            return tokens_to_reach_power_mmlu(uncompressed_output, power, alpha)
-        case DataSource.GAO2025:
-            return tokens_to_reach_power_gao2025(uncompressed_output, tokenizer, power, alpha)
+    start_time = time.time()
+    rows_by_variant = uncompressed_output.rows_by_variant()
+    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
+    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
+    for variant_idx, variant in enumerate(rows_by_variant.keys()):
+        if variant == TinyChange.unchanged_str():
+            continue
+        variant_rows = rows_by_variant[variant]
+        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
+        assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
+        pvalue_avg, stat_avg, power = tokens_to_reach_power_variant(
+            source, unchanged_rows_by_prompt, rows_by_prompt, tokenizer, power, alpha
+        )
+        print(
+            f"Variant {variant_idx + 1}/{len(rows_by_variant)}: {variant}, P-value average: {pvalue_avg}, Statistic average: {stat_avg}, Power: {power:.2%}"
+        )
+    end_time = time.time()
+    print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
 
 if __name__ == "__main__":
