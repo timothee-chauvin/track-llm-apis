@@ -24,7 +24,8 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "requests>=2.32.3",
     "scikit-learn>=1.7.1",
-    "scipy<=1.15.3", # due to a bug https://github.com/statsmodels/statsmodels/issues/9584
+    # due to a bug https://github.com/statsmodels/statsmodels/issues/9584
+    "scipy<=1.15.3",
     "statsmodels>=0.14.4",
     "torch>=2.7.1",
     "tqdm>=4.67.1",
@@ -46,6 +47,10 @@ dev = [
     "pytest-env>=1.1.5",
     "ruff>=0.11.9",
 ]
+
+[build-system]
+requires = ["uv_build==0.8.14"]
+build-backend = "uv_build"
 
 [tool.ruff]
 line-length = 100
