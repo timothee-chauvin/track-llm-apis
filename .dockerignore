@@ -1,0 +1,10 @@
+# Ignore everything
+*
+
+!/src/**/*.py
+!/src/**/*.toml
+!/tests/**/*.py
+!/.env.config
+!/pyproject.toml
+!/uv.lock
+!/README.md
