@@ -10,31 +10,34 @@ RUN apt-get update && apt-get install -y \
     git \  
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user: "tluser" for "track LLMs user"
-ENV UID=1000
-RUN useradd --uid $UID --create-home --user-group tluser
-USER tluser
-ENV HOME=/home/tluser
-WORKDIR $HOME/trackllm
+ENV CODE_DIR=/app \
+    DATA_DIR=/data
 
-# Copy from the cache instead of linking since it's a mounted volume
-ENV UV_LINK_MODE=copy
+RUN mkdir -p $CODE_DIR $DATA_DIR && chmod -R 777 $CODE_DIR $DATA_DIR
+WORKDIR $CODE_DIR
 
-ENV UV_CACHE_DIR=$HOME/.cache/uv
+ENV UV_PROJECT_ENVIRONMENT=/venv \
+    UV_CACHE_DIR=/uv_cache \
+    # Copy from the cache instead of linking since it's a mounted volume
+    UV_LINK_MODE=copy
+    
+RUN mkdir -p $UV_CACHE_DIR && chmod -R 777 $UV_CACHE_DIR
 
 # Install the project's dependencies using the lockfile and settings
-RUN --mount=type=cache,target=$UV_CACHE_DIR,uid=$UID,gid=$UID \
+RUN --mount=type=cache,target=$UV_CACHE_DIR \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --locked --no-install-project --no-dev
 
 # Then, add the rest of the project source code and install it
 # Installing separately from its dependencies allows optimal layer caching
-COPY --chown=$UID:$UID . .
-RUN --mount=type=cache,target=$UV_CACHE_DIR,uid=$UID,gid=$UID \
+COPY . .
+RUN --mount=type=cache,target=$UV_CACHE_DIR \
     uv sync --locked --no-dev
 
 RUN uv build
+
+RUN chmod -R 777 $UV_CACHE_DIR $UV_PROJECT_ENVIRONMENT
 
 # Reset the entrypoint, don't invoke `uv`
 ENTRYPOINT []
