@@ -212,7 +212,7 @@ def evaluate_detectors_on_variant(
     tokenizer: AutoTokenizer,
     compute_pvalue: bool = True,
     sample_with_replacement: bool = False,
-    n_subsets_with_replacement: int = 100,
+    n_subsets_with_replacement: int = 200,
 ) -> TwoSampleTestResults:
     match source:
         case DataSource.GAO2025:
@@ -331,6 +331,7 @@ def evaluate_detectors(
     alpha: float,
     compute_pvalue: bool = False,
     plot_roc: bool = False,
+    n_subsets_with_replacement: int = 200,
 ):
     print(f"{sources=}")
     variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
@@ -362,7 +363,7 @@ def evaluate_detectors(
             tokenizer,
             compute_pvalue=compute_pvalue,
             sample_with_replacement=True,
-            n_subsets_with_replacement=100,
+            n_subsets_with_replacement=n_subsets_with_replacement,
         )
         for source in sources
     }
@@ -386,7 +387,7 @@ def evaluate_detectors(
                 tokenizer,
                 compute_pvalue=compute_pvalue,
                 sample_with_replacement=True,
-                n_subsets_with_replacement=100,
+                n_subsets_with_replacement=n_subsets_with_replacement,
             )
             variant_true = [1] * len(results.stats)
             variant_pred = results.stats
@@ -440,4 +441,5 @@ if __name__ == "__main__":
             alpha=0.05,
             compute_pvalue=False,
             plot_roc=True,
+            n_subsets_with_replacement=200,
         )
