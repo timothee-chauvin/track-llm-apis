@@ -1,0 +1,8 @@
+services:
+  trackllm:
+    # Build the image from the Dockerfile in the current directory
+    build: .
+    image: trackllm:latest
+    command: bash
+    stdin_open: true
+    tty: true
