@@ -199,11 +199,6 @@ class Config(BaseSettings):
 
     # Paths
     data_dir: Path = Field(default_factory=lambda: DATA_DIR)
-    db_path: Path = Field(default_factory=lambda: DATA_DIR / "db" / "llm_logprobs.db")
-    plots_dir: Path = Field(default_factory=lambda: DATA_DIR / "plots")
-    openai_finetuning_dir: Path = Field(default_factory=lambda: DATA_DIR / "openai_finetuning")
-    sampling_data_dir: Path = Field(default_factory=lambda: DATA_DIR / "sampling")
-    baselines_dir: Path = Field(default_factory=lambda: DATA_DIR / "baselines")
     datasets_dir: Path = Field(default_factory=lambda: DATASETS_DIR)
 
     # Prompts to send to the smaller list of endpoints
@@ -239,6 +234,26 @@ class Config(BaseSettings):
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     api: APIConfig = Field(default_factory=APIConfig)
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "db" / "llm_logprobs.db"
+
+    @property
+    def plots_dir(self) -> Path:
+        return self.data_dir / "plots"
+
+    @property
+    def openai_finetuning_dir(self) -> Path:
+        return self.data_dir / "openai_finetuning"
+
+    @property
+    def sampling_data_dir(self) -> Path:
+        return self.data_dir / "sampling"
+
+    @property
+    def baselines_dir(self) -> Path:
+        return self.data_dir / "baselines"
 
     @property
     def logger(self) -> logging.Logger:
