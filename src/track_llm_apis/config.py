@@ -2,7 +2,6 @@ import json
 import logging
 import subprocess
 import tomllib
-from collections.abc import Callable
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
@@ -20,12 +19,6 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
-DATA_DIR = Path("/data")
-DATASETS_DIR = DATA_DIR / "datasets"
-
-
-def _load_default_dataset() -> Dataset:
-    return load_lmsys_chat_1m(use_cache=True, datasets_dir=DATASETS_DIR)
 
 
 class CusumAnalysisConfig(BaseModel):
@@ -98,7 +91,7 @@ class MMLUConfig(BaseModel):
 
     @property
     def answers(self) -> dict[str, int]:
-        cache_path = DATA_DIR / "mmlu_answers.json"
+        cache_path = config.data_dir / "mmlu_answers.json"
         try:
             with open(cache_path) as f:
                 return json.load(f)
@@ -117,9 +110,6 @@ class LogprobConfig(BaseModel):
     model_config = SettingsConfigDict(
         arbitrary_types_allowed=True,  # for Dataset
     )
-    other_prompts_dataset_loader: Callable[[], Dataset] = Field(
-        default_factory=lambda: _load_default_dataset, exclude=True
-    )
     batch_size: int = 64
     topk: int = 20
     temperature: float = 0.0
@@ -130,7 +120,9 @@ class LogprobConfig(BaseModel):
     @property
     def other_prompts_dataset(self) -> Dataset:
         if self._other_prompts_dataset is None:
-            self._other_prompts_dataset = self.other_prompts_dataset_loader()
+            self._other_prompts_dataset = load_lmsys_chat_1m(
+                use_cache=True, datasets_dir=config.datasets_dir
+            )
         return self._other_prompts_dataset
 
     @property
@@ -198,8 +190,7 @@ class Config(BaseSettings):
     )
 
     # Paths
-    data_dir: Path = Field(default_factory=lambda: DATA_DIR)
-    datasets_dir: Path = Field(default_factory=lambda: DATASETS_DIR)
+    data_dir: Path = Field(default_factory=lambda: Path("/data"))
 
     # Prompts to send to the smaller list of endpoints
     prompts: list[str] = Field(
@@ -254,6 +245,10 @@ class Config(BaseSettings):
     @property
     def baselines_dir(self) -> Path:
         return self.data_dir / "baselines"
+
+    @property
+    def datasets_dir(self) -> Path:
+        return self.data_dir / "datasets"
 
     @property
     def logger(self) -> logging.Logger:
