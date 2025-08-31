@@ -1,6 +1,5 @@
 import json
 import logging
-import subprocess
 import tomllib
 from datetime import datetime
 from importlib import resources
@@ -263,11 +262,6 @@ class Config(BaseSettings):
     @property
     def date(self) -> str:
         return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-    @computed_field
-    @property
-    def last_commit_hash(self) -> str:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
 
 
 config = Config()
