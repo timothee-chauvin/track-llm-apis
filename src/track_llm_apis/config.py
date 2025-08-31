@@ -4,6 +4,7 @@ import subprocess
 import tomllib
 from collections.abc import Callable
 from datetime import datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any, Self
 
@@ -19,9 +20,7 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
-ROOT_DIR = Path(__file__).parent.parent.parent
-SRC_DIR = Path(__file__).parent
-DATA_DIR = ROOT_DIR / "data"
+DATA_DIR = Path("/data")
 DATASETS_DIR = DATA_DIR / "datasets"
 
 
@@ -199,10 +198,9 @@ class Config(BaseSettings):
     )
 
     # Paths
-    root_dir: Path = Field(default_factory=lambda: ROOT_DIR)
-    db_path: Path = Field(default_factory=lambda: ROOT_DIR / "db" / "llm_logprobs.db")
-    plots_dir: Path = Field(default_factory=lambda: ROOT_DIR / "plots")
     data_dir: Path = Field(default_factory=lambda: DATA_DIR)
+    db_path: Path = Field(default_factory=lambda: DATA_DIR / "db" / "llm_logprobs.db")
+    plots_dir: Path = Field(default_factory=lambda: DATA_DIR / "plots")
     openai_finetuning_dir: Path = Field(default_factory=lambda: DATA_DIR / "openai_finetuning")
     sampling_data_dir: Path = Field(default_factory=lambda: DATA_DIR / "sampling")
     baselines_dir: Path = Field(default_factory=lambda: DATA_DIR / "baselines")
@@ -248,7 +246,7 @@ class Config(BaseSettings):
 
     @property
     def chat_templates(self) -> dict[str, Any]:
-        with open(SRC_DIR / "chat_templates.toml", "rb") as f:
+        with resources.open_binary("track_llm_apis", "chat_templates.toml") as f:
             return tomllib.load(f)
 
     @computed_field

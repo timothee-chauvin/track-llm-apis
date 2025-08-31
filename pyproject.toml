@@ -16,7 +16,6 @@ dependencies = [
     "matplotlib>=3.10.3",
     "numpy>=2.2.6",
     "nvidia-modelopt>=0.33.0",
-    "onnx>=1.18.0",
     "openai>=1.78.1",
     "peft>=0.16.0",
     "plotly>=6.1.0",
@@ -30,7 +29,6 @@ dependencies = [
     "torch>=2.7.1",
     "tqdm>=4.67.1",
     "transformers>=4.53.1",
-    "trl>=0.19.1",
     "vllm>=0.10.0",
     "xxhash>=3.5.0",
 ]

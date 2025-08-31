@@ -1,7 +1,3 @@
 __pycache__
-/db/
-/plots/
 /.env
-/data/datasets/
-openai_finetuning/
-/data/mmlu_answers.json
+/data/

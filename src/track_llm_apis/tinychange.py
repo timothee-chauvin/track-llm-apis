@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # TODO remove these dependencies
+from track_llm_apis.config import config as trackllm_config
 from track_llm_apis.util import (
     copy_model_to,
     dataset_info,
@@ -42,8 +43,6 @@ logging.basicConfig(
 
 logger = logging.getLogger("tinychange")
 
-ROOT_DIR = Path(__file__).parent.parent.parent
-
 
 class TinyChangeConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -55,7 +54,7 @@ class TinyChangeConfig(BaseSettings):
         case_sensitive=False,
     )
 
-    datasets_dir: Path = Field(default_factory=lambda: ROOT_DIR / "data" / "datasets")
+    datasets_dir: Path = Field(default_factory=lambda: trackllm_config.datasets_dir)
 
     variants_device: str | None = None
     enable_random_noise: bool = True
