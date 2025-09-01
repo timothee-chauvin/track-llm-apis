@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, roc_curve
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from track_llm_apis.config import config
 from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sample_test_torch
@@ -157,7 +157,7 @@ def plot_logprobs_over_time(
 
 
 def prompt_rows_dict_to_completion_sample(
-    prompt_rows_dict: dict[str, list[OutputRow]], tokenizer: AutoTokenizer
+    prompt_rows_dict: dict[str, list[OutputRow]], tokenizer: PreTrainedTokenizerBase
 ) -> CompletionSample:
     prompts_list = []
     completions_list = []
@@ -180,7 +180,7 @@ def prompt_rows_dict_to_completion_sample(
 def gao2025_two_sample_test(
     rows_subset: dict[str, list[OutputRow]],
     unchanged_rows_subset: dict[str, list[OutputRow]],
-    tokenizer: AutoTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     compute_pvalue: bool = True,
     b: int = 1000,
 ):
@@ -209,7 +209,7 @@ def evaluate_detectors_on_variant(
     unchanged_rows_by_prompt: dict[str, list[OutputRow]],
     rows_by_prompt: dict[str, list[OutputRow]],
     prompt_length: dict[str, int],
-    tokenizer: AutoTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     compute_pvalue: bool = True,
     sample_with_replacement: bool = False,
     n_subsets_with_replacement: int = 200,

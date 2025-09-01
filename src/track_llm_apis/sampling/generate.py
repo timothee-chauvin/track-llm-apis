@@ -310,7 +310,7 @@ async def main():
             variant_name = variant.name()
 
             inference_start = time.time()
-            if llm is not None:
+            if llm is not None and config.sampling.vllm_enable_sleep_mode:
                 llm.wake_up()
 
             load_model_to_vllm(llm, variant.model)
@@ -365,7 +365,8 @@ async def main():
                 compressed_output.add_row(row)
 
             # Free up model weights and KV cache from vLLM memory
-            llm.sleep(level=2)
+            if config.sampling.vllm_enable_sleep_mode:
+                llm.sleep(level=2)
 
             total_time = time.time() - start_time
             total_time_str = str(timedelta(seconds=total_time))

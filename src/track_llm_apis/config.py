@@ -140,6 +140,7 @@ class SamplingConfig(BaseModel):
     # How many times to sample the original model vs variants
     original_model_n_samples: int = 1_000
     variants_n_samples: int = 100
+    vllm_enable_sleep_mode: bool = False
 
     gao2025: Gao2025Config = Field(default_factory=Gao2025Config)
     mmlu: MMLUConfig = Field(default_factory=MMLUConfig)
