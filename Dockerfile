@@ -4,16 +4,22 @@ FROM python:3.11-slim@sha256:1d6131b5d479888b43200645e03a78443c7157efbdb730e6b48
 
 COPY --from=ghcr.io/astral-sh/uv:0.8.13@sha256:4de5495181a281bc744845b9579acf7b221d6791f99bcc211b9ec13f417c2853 /uv /uvx /bin/
 
+ENV TZ=UTC \
+    LANGUAGE=en_US:en \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
 # Dependencies
 RUN apt-get update && apt-get install -y \
     # for uv dependencies based on git repositories
     git \  
     && rm -rf /var/lib/apt/lists/*
 
-ENV CODE_DIR=/app \
-    DATA_DIR=/data
+ENV CODE_DIR=/app
 
-RUN mkdir -p $CODE_DIR $DATA_DIR && chmod -R 777 $CODE_DIR $DATA_DIR
+RUN mkdir -p $CODE_DIR && chmod -R 777 $CODE_DIR
 WORKDIR $CODE_DIR
 
 ENV UV_PROJECT_ENVIRONMENT=/venv \
