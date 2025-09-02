@@ -243,8 +243,8 @@ class Config(BaseSettings):
         return self.data_dir / "sampling"
 
     @property
-    def baselines_dir(self) -> Path:
-        return self.data_dir / "baselines"
+    def assets_dir(self) -> Path:
+        return Path(resources.files("track_llm_apis") / "assets")
 
     @property
     def datasets_dir(self) -> Path:
