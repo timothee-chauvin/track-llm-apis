@@ -473,9 +473,9 @@ def plot_top_token_logprobs_over_time(
             if with_cusum:
                 colorway = fig.layout.template.layout.colorway
                 detector = ProbCUSUM_Detector(
-                    warmup_period=analysis_config.cusum_warmup_period,
-                    threshold_probability=analysis_config.cusum_threshold_probability,
-                    ema_factor=analysis_config.ema_factor,
+                    warmup_period=analysis_config.cusum.warmup_period,
+                    threshold_probability=analysis_config.cusum.threshold_probability,
+                    ema_factor=analysis_config.cusum.ema_factor,
                 )
                 for i, token in enumerate(sorted_tokens):
                     token_logprobs = all_token_logprobs[token]
@@ -528,7 +528,7 @@ def plot_top_token_logprobs_over_time(
                 fig_dir = (
                     fig_dir
                     / "cusum"
-                    / f"{analysis_config.cusum_warmup_period}_{analysis_config.cusum_threshold_probability:.1e}_ema={analysis_config.ema_factor}"
+                    / f"{analysis_config.cusum.warmup_period}_{analysis_config.cusum.threshold_probability:.1e}_ema={analysis_config.cusum.ema_factor}"
                 )
             os.makedirs(fig_dir, exist_ok=True)
             fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
