@@ -55,7 +55,7 @@ class TinyChangeConfig(BaseSettings):
     )
 
     datasets_dir: Path = Field(default_factory=lambda: trackllm_config.datasets_dir)
-
+    return_unchanged: bool = True
     variants_device: str | None = None
     enable_random_noise: bool = True
     enable_weight_pruning: bool = True
@@ -276,8 +276,8 @@ class TinyChange:
             pl.seed_everything(self.config.seed)
 
         self.tasks = []
-        # Start by always returning the unchanged model
-        self.tasks.append(self.get_unchanged())
+        if self.config.return_unchanged:
+            self.tasks.append(self.get_unchanged())
 
         if self.config.enable_finetuning:
             self.tasks.extend(self._generate_finetuning_tasks(use_lora=False))
