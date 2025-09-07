@@ -278,6 +278,13 @@ class TinyChange:
         self.tasks = []
         # Start by always returning the unchanged model
         self.tasks.append(self.get_unchanged())
+
+        if self.config.enable_finetuning:
+            self.tasks.extend(self._generate_finetuning_tasks(use_lora=False))
+
+        if self.config.enable_lora_finetuning:
+            self.tasks.extend(self._generate_finetuning_tasks(use_lora=True))
+
         if self.config.enable_quantization:
             self.tasks.extend(
                 [self.quantize(method) for method in self.config.quantization_methods]
@@ -300,26 +307,20 @@ class TinyChange:
                 ]
             )
 
-        def generate_finetuning_tasks(use_lora: bool):
-            return [
-                self.finetune(
-                    lr,
-                    n_samples,
-                    self.config.finetuning_epochs,
-                    self.config.finetuning_batch_size,
-                    use_lora=use_lora,
-                )
-                for lr in self.config.finetuning_lr_scale
-                for n_samples in self.config.finetuning_samples
-            ]
-
-        if self.config.enable_finetuning:
-            self.tasks.extend(generate_finetuning_tasks(use_lora=False))
-
-        if self.config.enable_lora_finetuning:
-            self.tasks.extend(generate_finetuning_tasks(use_lora=True))
-
         self._task_index = 0
+
+    def _generate_finetuning_tasks(self, use_lora: bool):
+        return [
+            self.finetune(
+                lr,
+                n_samples,
+                self.config.finetuning_epochs,
+                self.config.finetuning_batch_size,
+                use_lora=use_lora,
+            )
+            for lr in self.config.finetuning_lr_scale
+            for n_samples in self.config.finetuning_samples
+        ]
 
     @property
     def n_variants(self) -> int:
