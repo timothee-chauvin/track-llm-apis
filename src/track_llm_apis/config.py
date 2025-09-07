@@ -2,7 +2,6 @@ import json
 import logging
 import tomllib
 from datetime import datetime
-from importlib import resources
 from pathlib import Path
 from typing import Any, Self
 
@@ -11,6 +10,7 @@ from datasets import Dataset, load_dataset
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from track_llm_apis import get_assets_dir
 from track_llm_apis.util import dataset_info, load_lmsys_chat_1m
 
 logging.basicConfig(
@@ -227,6 +227,10 @@ class Config(BaseSettings):
     api: APIConfig = Field(default_factory=APIConfig)
 
     @property
+    def assets_dir(self) -> Path:
+        return get_assets_dir()
+
+    @property
     def db_path(self) -> Path:
         return self.data_dir / "db" / "llm_logprobs.db"
 
@@ -243,10 +247,6 @@ class Config(BaseSettings):
         return self.data_dir / "sampling"
 
     @property
-    def assets_dir(self) -> Path:
-        return Path(resources.files("track_llm_apis") / "assets")
-
-    @property
     def datasets_dir(self) -> Path:
         return self.data_dir / "datasets"
 
@@ -256,7 +256,7 @@ class Config(BaseSettings):
 
     @property
     def chat_templates(self) -> dict[str, Any]:
-        with resources.open_binary("track_llm_apis", "chat_templates.toml") as f:
+        with open(get_assets_dir() / "chat_templates.toml", "rb") as f:
             return tomllib.load(f)
 
     @computed_field

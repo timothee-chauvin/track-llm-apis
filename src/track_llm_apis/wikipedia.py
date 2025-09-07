@@ -2,9 +2,9 @@ import json
 
 from datasets import load_dataset
 
-from track_llm_apis.config import config
+from track_llm_apis import get_assets_dir
 
-OUTPUT_FILE = config.assets_dir / "gao2025" / "wikipedia_first_100.json"
+OUTPUT_FILE = get_assets_dir() / "gao2025" / "wikipedia_first_100.json"
 
 
 def download_wikipedia_first_100():
@@ -40,7 +40,7 @@ def get_wikipedia_samples(n: int, seed: int) -> list[dict[str, str]]:
         wikipedia_first_100 = json.load(f)
 
     with open(
-        config.assets_dir / "gao2025" / "wikipedia_prompt_indices_test" / f"{n}" / f"{seed}.json"
+        get_assets_dir() / "gao2025" / "wikipedia_prompt_indices_test" / f"{n}" / f"{seed}.json"
     ) as f:
         ids_by_language = json.load(f)
 
