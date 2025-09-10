@@ -172,7 +172,7 @@ def prompt_rows_dict_to_completion_sample(
     prompts = torch.tensor(prompts_list).to(device=config.analysis.device, dtype=torch.int32)
     completions = tokenizer(
         completions_list,
-        padding=True,
+        padding="max_length",
         truncation=True,
         max_length=config.sampling.gao2025.max_tokens,
         return_tensors="pt",
