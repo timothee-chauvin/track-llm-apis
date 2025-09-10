@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -215,6 +216,7 @@ def evaluate_detectors_on_variant(
     compute_pvalue: bool = True,
     sample_with_replacement: bool = False,
     n_subsets_with_replacement: int = 200,
+    b: int = 1000,
 ) -> TwoSampleTestResults:
     match source:
         case DataSource.GAO2025:
@@ -253,7 +255,7 @@ def evaluate_detectors_on_variant(
 
     for sample1, sample2 in sample_pairs:
         result = two_sample_test_fn(
-            sample1, sample2, b=1000, compute_pvalue=compute_pvalue, tokenizer=tokenizer
+            sample1, sample2, b=b, compute_pvalue=compute_pvalue, tokenizer=tokenizer
         )
         stats.append(result.statistic)
         if compute_pvalue:
@@ -328,14 +330,30 @@ def plot_roc_curve(
 
 
 def evaluate_detectors(
+    directory: Path,
     data: CompressedOutput,
     sources: list[DataSource],
     alpha: float,
     compute_pvalue: bool = False,
     plot_roc: bool = False,
     n_subsets_with_replacement: int = 200,
+    b: int = 1000,
 ):
+    analysis_results = {
+        "metadata": {
+            "model_name": data.model_name,
+            "sources": [source.name for source in sources],
+            "alpha": alpha,
+            "compute_pvalue": compute_pvalue,
+            "n_subsets_with_replacement": n_subsets_with_replacement,
+            "b": b,
+        }
+    }
+    for source in sources:
+        analysis_results[source.name] = {}
+
     print(f"{sources=}")
+    print(f"{data.model_name=}")
     variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
     prompts = data.references_dict["prompt"]
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
@@ -370,6 +388,7 @@ def evaluate_detectors(
             compute_pvalue=compute_pvalue,
             sample_with_replacement=True,
             n_subsets_with_replacement=n_subsets_with_replacement,
+            b=b,
         )
         for source in sources
     }
@@ -394,6 +413,7 @@ def evaluate_detectors(
                 compute_pvalue=compute_pvalue,
                 sample_with_replacement=True,
                 n_subsets_with_replacement=n_subsets_with_replacement,
+                b=b,
             )
             variant_true = [1] * len(results.stats)
             variant_pred = results.stats
@@ -418,8 +438,19 @@ def evaluate_detectors(
             print(
                 f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, roc_auc={roc_aucs[source]}"
             )
+            analysis_results[source.name][variant] = {
+                "pvalue_avg": pvalue_avg,
+                "stat_avg": stat_avg,
+                "power": power,
+                "input_tokens_avg": input_tokens_avg,
+                "output_tokens_avg": output_tokens_avg,
+                "roc_auc": roc_aucs[source],
+            }
         if plot_roc:
             plot_roc_curve(roc_curves, roc_aucs, data.model_name, variant)
+        with open(directory / "analysis.json", "w") as f:
+            json.dump(analysis_results, f, indent=2)
+
     overall_roc_curves = {source: roc_curve(y_true[source], y_pred[source]) for source in sources}
     overall_roc_aucs = {source: roc_auc_score(y_true[source], y_pred[source]) for source in sources}
     for source in sources:
@@ -432,7 +463,9 @@ def evaluate_detectors(
 
 if __name__ == "__main__":
     output_dirs = [
-        config.sampling_data_dir / "keep" / "2025-08-14_12-35-09",
+        config.sampling_data_dir / "keep" / "2025-09-07_13-15-56",
+        config.sampling_data_dir / "keep" / "2025-09-07_15-28-14",
+        config.sampling_data_dir / "keep" / "2025-09-08_14-14-47",
     ]
 
     for output_dir in output_dirs:
@@ -442,10 +475,12 @@ if __name__ == "__main__":
         for ref in compressed_output.references:
             print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
         evaluate_detectors(
+            directory=output_dir,
             data=compressed_output,
             sources=[DataSource.US, DataSource.MMLU, DataSource.GAO2025],
             alpha=0.05,
             compute_pvalue=False,
-            plot_roc=True,
-            n_subsets_with_replacement=200,
+            plot_roc=False,
+            n_subsets_with_replacement=20,
+            b=1000,
         )
