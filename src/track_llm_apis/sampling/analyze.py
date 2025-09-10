@@ -349,8 +349,6 @@ def evaluate_detectors(
             "b": b,
         }
     }
-    for source in sources:
-        analysis_results[source.name] = {}
 
     print(f"{sources=}")
     print(f"{data.model_name=}")
@@ -400,6 +398,7 @@ def evaluate_detectors(
         print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
         roc_curves = {}
         roc_aucs = {}
+        analysis_results[variant] = {}
         for source in sources:
             variant_rows = rows_by_variant[source][variant]
             rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
@@ -438,7 +437,7 @@ def evaluate_detectors(
             print(
                 f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, roc_auc={roc_aucs[source]}"
             )
-            analysis_results[source.name][variant] = {
+            analysis_results[variant][source.name] = {
                 "pvalue_avg": pvalue_avg,
                 "stat_avg": stat_avg,
                 "power": power,
