@@ -26,6 +26,8 @@ from track_llm_apis.sampling.common import (
 from track_llm_apis.tinychange import TinyChange
 from track_llm_apis.util import slugify, trim_to_length
 
+logger = config.logger
+
 
 def get_logprobs_transformers(model, tokenizer, prompt, model_device):
     """Get log probabilities for the first generated token using model.generate() from transformers."""
@@ -352,6 +354,10 @@ def evaluate_detectors(
     }
 
     tokenizer = AutoTokenizer.from_pretrained(data.model_name)
+    if not hasattr(tokenizer, "pad_token") or tokenizer.pad_token is None:
+        logger.info(f"Setting pad token to eos token for {data.model_name}")
+        tokenizer.pad_token = tokenizer.eos_token
+
     start_time = time.time()
     # Get data on the false positive rate
     results_original = {
