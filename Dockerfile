@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     git \  
     # for plots using plotly and kaleido
     chromium \
+    # for tokens from other languages in plot legends
+    fonts-noto \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CODE_DIR=/app \
