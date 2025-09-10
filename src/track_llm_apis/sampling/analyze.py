@@ -211,6 +211,7 @@ def evaluate_detectors_on_variant(
     source: DataSource,
     rows1: dict[str, list[OutputRow]],
     rows2: dict[str, list[OutputRow]],
+    same: bool,
     prompt_length: dict[str, int],
     tokenizer: PreTrainedTokenizerBase,
     compute_pvalue: bool = True,
@@ -235,14 +236,21 @@ def evaluate_detectors_on_variant(
     n_output_tokens = []
     sample_pairs = []
     for _ in range(n_subsets):
-        rows1_subset = {p: random.sample(r, samples_per_prompt) for p, r in rows1.items()}
-        rows2_subset = {p: random.sample(r, samples_per_prompt) for p, r in rows2.items()}
-        for p in rows2_subset.keys():
-            for row in rows2_subset[p]:
-                for unchanged_row in rows1_subset[p]:
-                    assert row.text != unchanged_row.text, (
-                        "can't have the same text in both samples"
-                    )
+        if same:
+            assert rows1 == rows2
+            subset = {p: random.sample(rows, 2 * samples_per_prompt) for p, rows in rows1.items()}
+            rows1_subset = {p: subset[p][:samples_per_prompt] for p in rows1.keys()}
+            rows2_subset = {p: subset[p][samples_per_prompt:] for p in rows2.keys()}
+        else:
+            rows1_subset = {p: random.sample(rows, samples_per_prompt) for p, rows in rows1.items()}
+            rows2_subset = {p: random.sample(rows, samples_per_prompt) for p, rows in rows2.items()}
+        if source == DataSource.GAO2025:
+            for p in rows2_subset.keys():
+                for row in rows2_subset[p]:
+                    for unchanged_row in rows1_subset[p]:
+                        assert row.text != unchanged_row.text, (
+                            "can't have the same text in both samples"
+                        )
         sample_pairs.extend(gen_sample_pairs(source, rows2_subset, rows1_subset))
 
     for sample1, sample2 in sample_pairs:
@@ -373,8 +381,9 @@ def evaluate_detectors(
             source,
             unchanged_rows_by_prompt[source],
             unchanged_rows_by_prompt[source],
-            prompt_length,
-            tokenizer,
+            same=True,
+            prompt_length=prompt_length,
+            tokenizer=tokenizer,
             compute_pvalue=compute_pvalue,
             n_subsets_with_replacement=n_subsets_with_replacement,
             b=b,
@@ -398,8 +407,9 @@ def evaluate_detectors(
                 source,
                 unchanged_rows_by_prompt[source],
                 rows_by_prompt,
-                prompt_length,
-                tokenizer,
+                same=False,
+                prompt_length=prompt_length,
+                tokenizer=tokenizer,
                 compute_pvalue=compute_pvalue,
                 n_subsets_with_replacement=n_subsets_with_replacement,
                 b=b,
