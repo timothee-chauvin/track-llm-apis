@@ -19,17 +19,18 @@ RUN apt-get update && apt-get install -y \
     chromium \
     && rm -rf /var/lib/apt/lists/*
 
-ENV CODE_DIR=/app
+ENV CODE_DIR=/app \
+    UV_PROJECT_ENVIRONMENT=/venv \
+    UV_CACHE_DIR=/uv_cache \
+    UV_LINK_MODE=copy \
+    UV_LOCKED=1 \
+    UV_NO_DEV=1
 
 RUN mkdir -p $CODE_DIR && chmod -R 777 $CODE_DIR
-WORKDIR $CODE_DIR
-
-ENV UV_PROJECT_ENVIRONMENT=/venv \
-    UV_CACHE_DIR=/uv_cache \
-    # Copy from the cache instead of linking since it's a mounted volume
-    UV_LINK_MODE=copy
-
 RUN mkdir -p $UV_CACHE_DIR && chmod -R 777 $UV_CACHE_DIR
+RUN mkdir -p $UV_PROJECT_ENVIRONMENT && chmod -R 777 $UV_PROJECT_ENVIRONMENT
+
+WORKDIR $CODE_DIR
 
 # Install the project's dependencies using the lockfile and settings
 RUN --mount=type=cache,target=$UV_CACHE_DIR \
@@ -45,6 +46,6 @@ RUN --mount=type=cache,target=$UV_CACHE_DIR \
 
 RUN uv build
 
-RUN chmod -R 777 $UV_CACHE_DIR $UV_PROJECT_ENVIRONMENT
+RUN rm -rf $UV_CACHE_DIR
 
 ENTRYPOINT []
