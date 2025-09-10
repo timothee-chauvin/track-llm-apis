@@ -80,6 +80,7 @@ def get_db_data(
     after: datetime | None = None,
     before: datetime | None = None,
     grok_fix: bool = True,
+    prompt: str | None = None,
 ) -> dict[str, list[ResponseData]]:
     """Get data from the database.
 
@@ -88,6 +89,7 @@ def get_db_data(
         after: Only return data after this date.
         before: Only return data before this date.
         grok_fix: the Grok API sometimes returns non-sensical logprobs below -1e38. If True, we discard values below -1e38.
+        prompt: If provided, only return data for this specific prompt.
 
     Returns:
         A dict of table names to lists of ResponseData.
@@ -118,6 +120,8 @@ def get_db_data(
                 where_conditions.append("date > ?")
             if before:
                 where_conditions.append("date < ?")
+            if prompt:
+                where_conditions.append("prompt = ?")
 
             if where_conditions:
                 select_part += " WHERE " + " AND ".join(where_conditions)
@@ -132,6 +136,8 @@ def get_db_data(
                 params.append(after.isoformat())
             if before:
                 params.append(before.isoformat())
+            if prompt:
+                params.append(base64.b64encode(prompt.encode("utf-8")).decode("utf-8"))
 
         cursor.execute(query, params)
         rows = cursor.fetchall()
