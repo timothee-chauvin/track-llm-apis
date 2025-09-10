@@ -15,6 +15,8 @@ ENV TZ=UTC \
 RUN apt-get update && apt-get install -y \
     # for uv dependencies based on git repositories
     git \  
+    # for plots using plotly and kaleido
+    chromium \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CODE_DIR=/app
@@ -26,7 +28,7 @@ ENV UV_PROJECT_ENVIRONMENT=/venv \
     UV_CACHE_DIR=/uv_cache \
     # Copy from the cache instead of linking since it's a mounted volume
     UV_LINK_MODE=copy
-    
+
 RUN mkdir -p $UV_CACHE_DIR && chmod -R 777 $UV_CACHE_DIR
 
 # Install the project's dependencies using the lockfile and settings
@@ -45,5 +47,4 @@ RUN uv build
 
 RUN chmod -R 777 $UV_CACHE_DIR $UV_PROJECT_ENVIRONMENT
 
-# Reset the entrypoint, don't invoke `uv`
 ENTRYPOINT []
