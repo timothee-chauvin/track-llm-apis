@@ -172,6 +172,8 @@ def get_token_logprobs(
     Return a dict of all tokens found in `endpoint_data`, with the corresponding TokenLogprobs.
     For tokens that are not in the top_tokens for a given date, the logprob is set to either the
     minimum logprob for that date if missing_policy is "min", or None if missing_policy is "none".
+
+    Return: a dict {token: TokenLogprobs}
     """
     endpoint_data = [row for row in endpoint_data if row.prompt == prompt]
     all_tokens = set(token for row in endpoint_data for token in row.top_tokens)
