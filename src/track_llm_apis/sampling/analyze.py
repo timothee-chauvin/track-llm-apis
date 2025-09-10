@@ -209,12 +209,11 @@ def gen_sample_pairs(
 
 def evaluate_detectors_on_variant(
     source: DataSource,
-    unchanged_rows_by_prompt: dict[str, list[OutputRow]],
-    rows_by_prompt: dict[str, list[OutputRow]],
+    rows1: dict[str, list[OutputRow]],
+    rows2: dict[str, list[OutputRow]],
     prompt_length: dict[str, int],
     tokenizer: PreTrainedTokenizerBase,
     compute_pvalue: bool = True,
-    sample_with_replacement: bool = False,
     n_subsets_with_replacement: int = 200,
     b: int = 1000,
 ) -> TwoSampleTestResults:
@@ -229,29 +228,22 @@ def evaluate_detectors_on_variant(
             samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
             two_sample_test_fn = logprob_two_sample_test
 
-    if sample_with_replacement:
-        n_subsets = n_subsets_with_replacement
-    else:
-        n_subsets = config.sampling.variants_n_samples // samples_per_prompt
+    n_subsets = n_subsets_with_replacement
     stats = []
     pvalues = []
     n_input_tokens = []
     n_output_tokens = []
     sample_pairs = []
-    for i in range(n_subsets):
-        if sample_with_replacement:
-            rows_subset = {
-                p: random.sample(r, samples_per_prompt) for p, r in rows_by_prompt.items()
-            }
-            unchanged_rows_subset = {
-                p: random.sample(r, samples_per_prompt) for p, r in unchanged_rows_by_prompt.items()
-            }
-        else:
-            start = i * samples_per_prompt
-            end = (i + 1) * samples_per_prompt
-            rows_subset = {p: r[start:end] for p, r in rows_by_prompt.items()}
-            unchanged_rows_subset = {p: r[start:end] for p, r in unchanged_rows_by_prompt.items()}
-        sample_pairs.extend(gen_sample_pairs(source, rows_subset, unchanged_rows_subset))
+    for _ in range(n_subsets):
+        rows1_subset = {p: random.sample(r, samples_per_prompt) for p, r in rows1.items()}
+        rows2_subset = {p: random.sample(r, samples_per_prompt) for p, r in rows2.items()}
+        for p in rows2_subset.keys():
+            for row in rows2_subset[p]:
+                for unchanged_row in rows1_subset[p]:
+                    assert row.text != unchanged_row.text, (
+                        "can't have the same text in both samples"
+                    )
+        sample_pairs.extend(gen_sample_pairs(source, rows2_subset, rows1_subset))
 
     for sample1, sample2 in sample_pairs:
         result = two_sample_test_fn(
@@ -384,7 +376,6 @@ def evaluate_detectors(
             prompt_length,
             tokenizer,
             compute_pvalue=compute_pvalue,
-            sample_with_replacement=True,
             n_subsets_with_replacement=n_subsets_with_replacement,
             b=b,
         )
@@ -410,7 +401,6 @@ def evaluate_detectors(
                 prompt_length,
                 tokenizer,
                 compute_pvalue=compute_pvalue,
-                sample_with_replacement=True,
                 n_subsets_with_replacement=n_subsets_with_replacement,
                 b=b,
             )
