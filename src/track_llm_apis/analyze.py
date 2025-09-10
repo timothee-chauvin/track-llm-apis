@@ -76,13 +76,17 @@ class TokenLogprobs:
 
 
 def get_db_data(
-    tables: list[str] | None = None, after: datetime | None = None, grok_fix: bool = True
+    tables: list[str] | None = None,
+    after: datetime | None = None,
+    before: datetime | None = None,
+    grok_fix: bool = True,
 ) -> dict[str, list[ResponseData]]:
     """Get data from the database.
 
     Args:
         tables: List of table names to get data from. If None, all tables are returned.
         after: Only return data after this date.
+        before: Only return data before this date.
         grok_fix: the Grok API sometimes returns non-sensical logprobs below -1e38. If True, we discard values below -1e38.
 
     Returns:
@@ -108,15 +112,26 @@ def get_db_data(
             # Escape single quotes in table name for the string literal.
             escaped_table_name = table_name.replace("'", "''")
             select_part = f"SELECT '{escaped_table_name}' as table_name, date, prompt, top_tokens, logprobs FROM \"{table_name}\""
+
+            where_conditions = []
             if after:
-                select_part += " WHERE date > ?"
+                where_conditions.append("date > ?")
+            if before:
+                where_conditions.append("date < ?")
+
+            if where_conditions:
+                select_part += " WHERE " + " AND ".join(where_conditions)
+
             select_parts.append(select_part)
 
         query = " UNION ALL ".join(select_parts)
 
         params = []
-        if after:
-            params = [after.isoformat()] * len(table_names)
+        for _ in table_names:
+            if after:
+                params.append(after.isoformat())
+            if before:
+                params.append(before.isoformat())
 
         cursor.execute(query, params)
         rows = cursor.fetchall()
