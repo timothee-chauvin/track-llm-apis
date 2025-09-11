@@ -25,6 +25,7 @@ from track_llm_apis.util import (
     format_wikipedia_prompt,
     get_model_hash,
     patch_chat_template,
+    slugify,
     temporary_env,
     used_gpu_memory,
 )
@@ -239,8 +240,9 @@ async def main():
         tc_config.enable_random_noise = False
 
     model_name = config.sampling.model_name
+    model_slug = slugify(model_name, max_length=100, hash_length=0)
     prompts = config.prompts + config.prompts_extended
-    output_dir = config.sampling_data_dir / config.date
+    output_dir = config.sampling_data_dir / f"{config.date}_{model_slug}"
     os.makedirs(output_dir, exist_ok=True)
 
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(
