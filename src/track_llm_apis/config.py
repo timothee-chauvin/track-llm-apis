@@ -114,6 +114,7 @@ class LogprobConfig(BaseModel):
     temperature: float = 0.0
     # at the time of analysis, how many samples to use per p-value test
     n_samples_per_prompt: int = 10
+    default_prompt: str = "x"
     _other_prompts_dataset: Dataset | None = None
 
     @property

@@ -192,21 +192,6 @@ def gao2025_two_sample_test(
     return run_two_sample_test_torch(sample1, sample2, b=b, compute_pvalue=compute_pvalue)
 
 
-def gen_sample_pairs(
-    source: DataSource,
-    rows_subset: dict[str, list[OutputRow]],
-    unchanged_rows_subset: dict[str, list[OutputRow]],
-) -> list[tuple[dict[str, list[OutputRow]], dict[str, list[OutputRow]]]]:
-    match source:
-        case DataSource.GAO2025 | DataSource.MMLU:
-            return [(rows_subset, unchanged_rows_subset)]
-        case DataSource.US:
-            return [
-                ({prompt: rows_subset[prompt]}, {prompt: unchanged_rows_subset[prompt]})
-                for prompt in rows_subset.keys()
-            ]
-
-
 def evaluate_detectors_on_variant(
     source: DataSource,
     rows1: dict[str, list[OutputRow]],
@@ -235,6 +220,11 @@ def evaluate_detectors_on_variant(
     n_input_tokens = []
     n_output_tokens = []
     sample_pairs = []
+    if source == DataSource.US:
+        # Only keep the default prompt, discarding the others
+        dprompt = config.sampling.logprob.default_prompt
+        rows1 = {dprompt: rows1[dprompt]}
+        rows2 = {dprompt: rows2[dprompt]}
     for _ in range(n_subsets):
         if same:
             assert rows1 == rows2
@@ -244,14 +234,7 @@ def evaluate_detectors_on_variant(
         else:
             rows1_subset = {p: random.sample(rows, samples_per_prompt) for p, rows in rows1.items()}
             rows2_subset = {p: random.sample(rows, samples_per_prompt) for p, rows in rows2.items()}
-        if source == DataSource.GAO2025:
-            for p in rows2_subset.keys():
-                for row in rows2_subset[p]:
-                    for unchanged_row in rows1_subset[p]:
-                        assert row.text != unchanged_row.text, (
-                            "can't have the same text in both samples"
-                        )
-        sample_pairs.extend(gen_sample_pairs(source, rows2_subset, rows1_subset))
+        sample_pairs.append((rows1_subset, rows2_subset))
 
     for sample1, sample2 in sample_pairs:
         result = two_sample_test_fn(
@@ -347,6 +330,7 @@ def evaluate_detectors(
             "compute_pvalue": compute_pvalue,
             "n_subsets_with_replacement": n_subsets_with_replacement,
             "b": b,
+            "used_tokens": {source.name: None for source in sources},
         }
     }
 
@@ -437,13 +421,26 @@ def evaluate_detectors(
             print(
                 f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, roc_auc={roc_aucs[source]}"
             )
+            stats_original = sorted(results_original[source].stats)
+            stats_variant = sorted(results.stats)
+            if analysis_results["metadata"]["used_tokens"][source.name] is None:
+                analysis_results["metadata"]["used_tokens"][source.name] = {
+                    "input": input_tokens_avg,
+                    "output": output_tokens_avg,
+                }
             analysis_results[variant][source.name] = {
                 "pvalue_avg": pvalue_avg,
                 "stat_avg": stat_avg,
                 "power": power,
-                "input_tokens_avg": input_tokens_avg,
-                "output_tokens_avg": output_tokens_avg,
                 "roc_auc": roc_aucs[source],
+                "stats_original": {
+                    "min": stats_original[0],
+                    "max": stats_original[-1],
+                },
+                "stats_variant": {
+                    "min": stats_variant[0],
+                    "max": stats_variant[-1],
+                },
             }
         if plot_roc:
             plot_roc_curve(roc_curves, roc_aucs, data.model_name, variant)
