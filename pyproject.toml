@@ -12,6 +12,7 @@ dependencies = [
     "frozendict>=2.4.6",
     "frozenlist>=1.6.0",
     "jaxtyping>=0.3.2",
+    "kaleido>=1.1.0",
     "lightning>=2.5.2",
     "matplotlib>=3.10.3",
     "numpy>=2.2.6",
