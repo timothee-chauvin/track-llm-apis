@@ -2,6 +2,7 @@ import json
 import logging
 import tomllib
 from datetime import datetime
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Self
 
@@ -255,7 +256,7 @@ class Config(BaseSettings):
     def logger(self) -> logging.Logger:
         return logger
 
-    @property
+    @cached_property
     def chat_templates(self) -> dict[str, Any]:
         with open(get_assets_dir() / "chat_templates.toml", "rb") as f:
             return tomllib.load(f)
