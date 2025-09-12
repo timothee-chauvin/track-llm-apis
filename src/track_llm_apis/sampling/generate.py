@@ -149,7 +149,7 @@ def vllm_inference(
         max_tokens=max_tokens,
         temperature=temperature,
     )
-    outputs = llm.generate(prompts, sampling_params)
+    outputs = llm.generate(prompts, sampling_params, use_tqdm=config.sampling.vllm_use_tqdm)
     return [
         row
         for output in outputs

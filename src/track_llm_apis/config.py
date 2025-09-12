@@ -143,6 +143,7 @@ class SamplingConfig(BaseModel):
     original_model_n_samples: int = 1_000
     variants_n_samples: int = 1_000
     vllm_enable_sleep_mode: bool = False
+    vllm_use_tqdm: bool = True
 
     gao2025: Gao2025Config = Field(default_factory=Gao2025Config)
     mmlu: MMLUConfig = Field(default_factory=MMLUConfig)
