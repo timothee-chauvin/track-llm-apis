@@ -245,6 +245,7 @@ async def main():
     output_dir = config.sampling_data_dir / f"{config.date}_{model_slug}"
     os.makedirs(output_dir, exist_ok=True)
 
+    logger.info(f"Loading model {model_name}...")
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(
         config.sampling.device_config.original_model_device
     )
