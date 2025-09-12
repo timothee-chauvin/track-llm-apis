@@ -13,6 +13,8 @@ ENV TZ=UTC \
 
 # Dependencies
 RUN apt-get update && apt-get install -y \
+    # annoyingly, vLLM imports deepspeed, which imports triton (the OpenAI language and compiler), which autotunes itself, which requires compiling C code...
+    build-essential \
     # for uv dependencies based on git repositories
     git \  
     # for plots using plotly and kaleido
