@@ -241,11 +241,11 @@ class TwoSampleMultiTestResultROC(BaseModel):
             raise ValueError("pvalues is None, can't compute power")
         return sum(pvalue < alpha for pvalue in self.pvalues) / len(self.pvalues)
 
-    def roc_curve(self, orig: "TwoSampleMultiTestResultROC") -> tuple[np.ndarray, np.ndarray]:
+    def roc_curve(self, orig: "TwoSampleMultiTestResultROC") -> tuple[list[float], list[float]]:
         y_true = [0] * len(orig.stats) + [1] * len(self.stats)
         y_pred = orig.stats + self.stats
         fpr, tpr, _ = roc_curve(y_true, y_pred)
-        return fpr, tpr
+        return list(fpr), list(tpr)
 
     def roc_auc(self, orig: "TwoSampleMultiTestResultROC") -> float:
         y_true = [0] * len(orig.stats) + [1] * len(self.stats)
@@ -316,7 +316,7 @@ class TwoSampleMultiTestResultMultiROC(BaseModel):
 
     def roc_curves(
         self, origs: "TwoSampleMultiTestResultMultiROC"
-    ) -> list[tuple[np.ndarray, np.ndarray]]:
+    ) -> list[tuple[list[float], list[float]]]:
         return [result.roc_curve(orig) for orig, result in zip(origs.results, self.results)]
 
     def stat_ci(self, results_alpha: float) -> CIResult:

@@ -5,11 +5,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
+from pydantic import BaseModel, field_validator
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from track_llm_apis.config import config
@@ -273,13 +273,66 @@ def evaluate_detectors_on_variant(
     return multi_roc_result
 
 
+class PlotData(BaseModel):
+    model_name: str
+    variant: str | None
+    roc_curves: dict[DataSource, list[tuple[list[float], list[float]]]]
+    roc_auc_ci: dict[DataSource, CIResult]
+
+    @field_validator("roc_curves", mode="before")
+    @classmethod
+    def validate_roc_curves(cls, v):
+        if isinstance(v, dict) and v:
+            first_key = next(iter(v))
+            if isinstance(first_key, str):
+                return {DataSource(int(k)): v for k, v in v.items()}
+        return v
+
+    @field_validator("roc_auc_ci", mode="before")
+    @classmethod
+    def validate_roc_auc_ci(cls, v):
+        if isinstance(v, dict) and v:
+            first_key = next(iter(v))
+            if isinstance(first_key, str):
+                return {DataSource(int(k)): v for k, v in v.items()}
+        return v
+
+
+def get_plot_dir(data_directory: Path, model_name: str) -> Path:
+    model_slug = slugify(model_name, max_length=100, hash_length=0)
+    directory = config.plots_dir / "roc_curves" / data_directory.name / model_slug
+    os.makedirs(directory, exist_ok=True)
+    return directory
+
+
+def plot_roc_curve_with_fs_cache(plot_data: PlotData, data_directory: Path):
+    plot_dir = get_plot_dir(data_directory, plot_data.model_name)
+    variant_slug = slugify(_variant_preslug(plot_data.variant), max_length=200, hash_length=0)
+    data_path = plot_dir / f"{variant_slug}.json"
+    with open(data_path, "w") as f:
+        json.dump(plot_data.model_dump(mode="json"), f, indent=2)
+    plot_roc_curve(data_path)
+
+
+def _variant_preslug(variant: str | None) -> str:
+    if variant is None:
+        return "all"
+    variant_metadata = json.loads(variant)
+    variant_preslug = (
+        variant_metadata["type"]
+        + ","
+        + ",".join(f"{k}={v}" for k, v in variant_metadata.items() if k != "type")
+    )
+    return variant_preslug
+
+
 def plot_roc_curve(
-    roc_curves: dict[DataSource, list[tuple[np.ndarray, np.ndarray]]],
-    roc_auc_ci: dict[DataSource, CIResult],
-    model_name: str,
-    variant: str | None,
+    plot_data_path: Path,
 ):
-    sources = list(roc_curves.keys())
+    """From the path of a data file containing the necessary data, plot the ROC curves in the same directory,
+    with the same name except for the extension."""
+    plot_data = PlotData.model_validate_json(plot_data_path.read_text())
+    sources = list(plot_data.roc_curves.keys())
     fig = go.Figure()
 
     # Define colors for each data source
@@ -287,9 +340,9 @@ def plot_roc_curve(
 
     for i, source in enumerate(sources):
         color = colors[i % len(colors)]
-        display_name = f"{source.name} (AUC: {roc_auc_ci[source].avg:.4f})"
+        display_name = f"{source.name} (AUC: {plot_data.roc_auc_ci[source].avg:.4f})"
 
-        for j, (fpr, tpr) in enumerate(roc_curves[source]):
+        for j, (fpr, tpr) in enumerate(plot_data.roc_curves[source]):
             fig.add_trace(
                 go.Scatter(
                     x=fpr,
@@ -313,18 +366,10 @@ def plot_roc_curve(
             showlegend=False,
         )
     )
+    variant = plot_data.variant
+    title = f"ROC Curves on model {plot_data.model_name}"
     if variant:
-        variant_metadata = json.loads(variant)
-        variant_preslug = (
-            variant_metadata["type"]
-            + ","
-            + ",".join(f"{k}={v}" for k, v in variant_metadata.items() if k != "type")
-        )
-    else:
-        variant_preslug = "all"
-    title = f"ROC Curves on model {model_name}"
-    if variant:
-        title += f", on variant: {variant_preslug}"
+        title += f", on variant: {_variant_preslug(variant)}"
     else:
         title += " across all variants"
     fig.update_layout(
@@ -332,11 +377,9 @@ def plot_roc_curve(
         xaxis_title="False Positive Rate",
         yaxis_title="True Positive Rate",
     )
-    model_slug = slugify(model_name, max_length=100, hash_length=0)
-    variant_slug = slugify(variant_preslug, max_length=200, hash_length=0)
-    out_dir = config.plots_dir / "roc_curves" / model_slug
-    os.makedirs(out_dir, exist_ok=True)
-    fig.write_html(out_dir / f"{variant_slug}.html")
+    plot_dir = plot_data_path.parent
+    filename_base = plot_data_path.stem
+    fig.write_html(plot_dir / f"{filename_base}.html")
 
 
 def evaluate_detectors(
@@ -465,8 +508,17 @@ def evaluate_detectors(
                 },
             )
             print("\n".join(log_msg))
+
         if plot_roc:
-            plot_roc_curve(roc_curves, roc_auc_ci, data.model_name, variant)
+            plot_roc_curve_with_fs_cache(
+                PlotData(
+                    roc_curves=roc_curves,
+                    roc_auc_ci=roc_auc_ci,
+                    model_name=data.model_name,
+                    variant=variant,
+                ),
+                directory,
+            )
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
@@ -487,7 +539,15 @@ def evaluate_detectors(
     for source in sources:
         print(f"Overall ROC AUC for {source}: {overall_roc_auc_ci[source]}")
     if plot_roc:
-        plot_roc_curve(overall_roc_curves, overall_roc_auc_ci, data.model_name, None)
+        plot_roc_curve_with_fs_cache(
+            PlotData(
+                model_name=data.model_name,
+                variant=None,
+                roc_curves=overall_roc_curves,
+                roc_auc_ci=overall_roc_auc_ci,
+            ),
+            directory,
+        )
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
