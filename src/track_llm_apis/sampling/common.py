@@ -6,7 +6,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Self
 
+import numpy as np
 from pydantic import BaseModel, Field
+from sklearn.metrics import roc_auc_score, roc_curve
 from vllm import RequestOutput
 
 from track_llm_apis.util import fast_hash, slugify
@@ -211,12 +213,75 @@ class UncompressedOutput(BaseModel):
 
 
 class TwoSampleTestResult(BaseModel):
+    """Result of a single two-sample test, that returns a single statistic and a p-value."""
+
     pvalue: float | None = None
     statistic: float
 
 
-class TwoSampleTestResults(BaseModel):
+class TwoSampleMultiTestResultROC(BaseModel):
+    """Result of multiple two-sample tests, allowing to compute a single ROC curve."""
+
     stats: list[float]
     n_input_tokens: list[int]
     n_output_tokens: list[int]
     pvalues: list[float] | None = None
+
+    def power(self, alpha: float) -> float | None:
+        return (
+            sum(pvalue < alpha for pvalue in self.pvalues) / len(self.pvalues)
+            if self.pvalues
+            else None
+        )
+
+    def roc_curve(self, orig: "TwoSampleMultiTestResultROC") -> tuple[np.ndarray, np.ndarray]:
+        y_true = [0] * len(orig.stats) + [1] * len(self.stats)
+        y_pred = orig.stats + self.stats
+        fpr, tpr, _ = roc_curve(y_true, y_pred)
+        return fpr, tpr
+
+    def roc_auc(self, orig: "TwoSampleMultiTestResultROC") -> float:
+        y_true = [0] * len(orig.stats) + [1] * len(self.stats)
+        y_pred = orig.stats + self.stats
+        return roc_auc_score(y_true, y_pred)
+
+    @property
+    def stat_avg(self) -> float:
+        return sum(self.stats) / len(self.stats)
+
+    @property
+    def n_input_tokens_avg(self) -> float:
+        return sum(self.n_input_tokens) / len(self.n_input_tokens)
+
+    @property
+    def n_output_tokens_avg(self) -> float:
+        return sum(self.n_output_tokens) / len(self.n_output_tokens)
+
+    @property
+    def pvalue_avg(self) -> float | None:
+        return sum(self.pvalues) / len(self.pvalues) if self.pvalues else None
+
+    @property
+    def stats_min(self) -> float:
+        return min(self.stats)
+
+    @property
+    def stats_max(self) -> float:
+        return max(self.stats)
+
+    @staticmethod
+    def multivariant_roc(
+        orig: "TwoSampleMultiTestResultROC", variants: list["TwoSampleMultiTestResultROC"]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        y_true = [0] * len(orig.stats) + sum([[1] * len(variant.stats) for variant in variants], [])
+        y_pred = orig.stats + [stat for variant in variants for stat in variant.stats]
+        fpr, tpr, _ = roc_curve(y_true, y_pred)
+        return fpr, tpr
+
+    @staticmethod
+    def multivariant_roc_auc(
+        orig: "TwoSampleMultiTestResultROC", variants: list["TwoSampleMultiTestResultROC"]
+    ) -> float:
+        y_true = [0] * len(orig.stats) + sum([[1] * len(variant.stats) for variant in variants], [])
+        y_pred = orig.stats + [stat for variant in variants for stat in variant.stats]
+        return roc_auc_score(y_true, y_pred)

@@ -1,4 +1,3 @@
-import copy
 import json
 import os
 import random
@@ -10,7 +9,6 @@ import numpy as np
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score, roc_curve
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from track_llm_apis.config import config
@@ -21,7 +19,7 @@ from track_llm_apis.sampling.common import (
     CompressedOutput,
     DataSource,
     OutputRow,
-    TwoSampleTestResults,
+    TwoSampleMultiTestResultROC,
     UncompressedOutput,
 )
 from track_llm_apis.tinychange import TinyChange
@@ -201,9 +199,9 @@ def evaluate_detectors_on_variant(
     tokenizer: PreTrainedTokenizerBase | None = None,
     logprob_prompt: str | None = None,
     compute_pvalue: bool = True,
-    n_subsets_with_replacement: int = 200,
+    n_tests_per_roc: int = 200,
     b: int = 1000,
-) -> TwoSampleTestResults:
+) -> TwoSampleMultiTestResultROC:
     match source:
         case DataSource.GAO2025:
             samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
@@ -215,7 +213,6 @@ def evaluate_detectors_on_variant(
             samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
             two_sample_test_fn = logprob_two_sample_test
 
-    n_subsets = n_subsets_with_replacement
     stats = []
     pvalues = []
     n_input_tokens = []
@@ -227,7 +224,7 @@ def evaluate_detectors_on_variant(
             logprob_prompt = config.sampling.logprob.default_prompt
         rows1 = {logprob_prompt: rows1[logprob_prompt]}
         rows2 = {logprob_prompt: rows2[logprob_prompt]}
-    for _ in range(n_subsets):
+    for _ in range(n_tests_per_roc):
         if same:
             assert rows1 == rows2
             subset = {p: random.sample(rows, 2 * samples_per_prompt) for p, rows in rows1.items()}
@@ -254,7 +251,7 @@ def evaluate_detectors_on_variant(
             + sum(r.text[1] for rows in sample2.values() for r in rows)
         )
 
-    return TwoSampleTestResults(
+    return TwoSampleMultiTestResultROC(
         stats=stats,
         pvalues=pvalues if compute_pvalue else None,
         n_input_tokens=n_input_tokens,
@@ -263,7 +260,7 @@ def evaluate_detectors_on_variant(
 
 
 def plot_roc_curve(
-    roc_curves: dict[DataSource, tuple[np.ndarray, np.ndarray, np.ndarray]],
+    roc_curves: dict[DataSource, tuple[np.ndarray, np.ndarray]],
     aucs: dict[DataSource, float],
     model_name: str,
     variant: str | None,
@@ -271,7 +268,7 @@ def plot_roc_curve(
     sources = list(roc_curves.keys())
     fig = go.Figure()
     for source in sources:
-        fpr, tpr, _ = roc_curves[source]
+        fpr, tpr = roc_curves[source]
         auc = aucs[source]
         display_name = f"{source.name} (AUC: {auc:.4f})"
         fig.add_trace(go.Scatter(x=fpr, y=tpr, name=display_name))
@@ -321,16 +318,22 @@ def evaluate_detectors(
     alpha: float,
     compute_pvalue: bool = False,
     plot_roc: bool = False,
-    n_subsets_with_replacement: int = 200,
+    n_tests_per_roc: int = 200,
     b: int = 1000,
 ):
+    if DataSource.GAO2025 in sources:
+        tokenizer = AutoTokenizer.from_pretrained(data.model_name)
+        if not hasattr(tokenizer, "pad_token") or tokenizer.pad_token is None:
+            logger.info(f"Setting pad token to eos token for {data.model_name}")
+            tokenizer.pad_token = tokenizer.eos_token
+
     analysis_results = {
         "metadata": {
             "model_name": data.model_name,
             "sources": [source.name for source in sources],
             "alpha": alpha,
             "compute_pvalue": compute_pvalue,
-            "n_subsets_with_replacement": n_subsets_with_replacement,
+            "n_tests_per_roc": n_tests_per_roc,
             "b": b,
             "used_tokens": {source.name: None for source in sources},
         }
@@ -355,11 +358,6 @@ def evaluate_detectors(
         source: UncompressedOutput.rows_by_prompt(unchanged_rows[source]) for source in sources
     }
 
-    tokenizer = AutoTokenizer.from_pretrained(data.model_name)
-    if not hasattr(tokenizer, "pad_token") or tokenizer.pad_token is None:
-        logger.info(f"Setting pad token to eos token for {data.model_name}")
-        tokenizer.pad_token = tokenizer.eos_token
-
     start_time = time.time()
     # Get data on the false positive rate
     results_original = {
@@ -371,15 +369,12 @@ def evaluate_detectors(
             prompt_length=prompt_length,
             tokenizer=tokenizer,
             compute_pvalue=compute_pvalue,
-            n_subsets_with_replacement=n_subsets_with_replacement,
+            n_tests_per_roc=n_tests_per_roc,
             b=b,
         )
         for source in sources
     }
-    y_true_orig = {source: [0] * len(results_original[source].stats) for source in sources}
-    y_pred_orig = {source: results_original[source].stats for source in sources}
-    y_true = copy.deepcopy(y_true_orig)
-    y_pred = copy.deepcopy(y_pred_orig)
+    variant_results = {variant: {} for variant in variants}
     for variant_idx, variant in enumerate(variants):
         print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
         roc_curves = {}
@@ -397,34 +392,20 @@ def evaluate_detectors(
                 prompt_length=prompt_length,
                 tokenizer=tokenizer,
                 compute_pvalue=compute_pvalue,
-                n_subsets_with_replacement=n_subsets_with_replacement,
+                n_tests_per_roc=n_tests_per_roc,
                 b=b,
             )
-            variant_true = [1] * len(results.stats)
-            variant_pred = results.stats
-            y_true[source].extend(variant_true)
-            y_pred[source].extend(variant_pred)
-            if plot_roc:
-                roc_curves[source] = roc_curve(
-                    y_true_orig[source] + variant_true, y_pred_orig[source] + variant_pred
-                )
-            roc_aucs[source] = roc_auc_score(
-                y_true_orig[source] + variant_true, y_pred_orig[source] + variant_pred
-            )
-            stat_avg = sum(results.stats) / len(results.stats)
-            pvalue_avg = sum(results.pvalues) / len(results.pvalues) if results.pvalues else None
-            input_tokens_avg = sum(results.n_input_tokens) / len(results.n_input_tokens)
-            output_tokens_avg = sum(results.n_output_tokens) / len(results.n_output_tokens)
-            power = (
-                sum(pvalue < alpha for pvalue in results.pvalues) / len(results.pvalues)
-                if results.pvalues
-                else None
-            )
+            variant_results[variant][source] = results
+            stat_avg = results.stat_avg
+            pvalue_avg = results.pvalue_avg
+            input_tokens_avg = results.n_input_tokens_avg
+            output_tokens_avg = results.n_output_tokens_avg
+            roc_curves[source] = results.roc_curve(results_original[source])
+            roc_aucs[source] = results.roc_auc(results_original[source])
+            power = results.power(alpha)
             print(
                 f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, roc_auc={roc_aucs[source]}"
             )
-            stats_original = sorted(results_original[source].stats)
-            stats_variant = sorted(results.stats)
             if analysis_results["metadata"]["used_tokens"][source.name] is None:
                 analysis_results["metadata"]["used_tokens"][source.name] = {
                     "input": input_tokens_avg,
@@ -436,12 +417,12 @@ def evaluate_detectors(
                 "power": power,
                 "roc_auc": roc_aucs[source],
                 "stats_original": {
-                    "min": stats_original[0],
-                    "max": stats_original[-1],
+                    "min": results_original[source].stats_min,
+                    "max": results_original[source].stats_max,
                 },
                 "stats_variant": {
-                    "min": stats_variant[0],
-                    "max": stats_variant[-1],
+                    "min": results.stats_min,
+                    "max": results.stats_max,
                 },
             }
         if plot_roc:
@@ -449,8 +430,18 @@ def evaluate_detectors(
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
-    overall_roc_curves = {source: roc_curve(y_true[source], y_pred[source]) for source in sources}
-    overall_roc_aucs = {source: roc_auc_score(y_true[source], y_pred[source]) for source in sources}
+    overall_roc_curves = {
+        source: TwoSampleMultiTestResultROC.multivariant_roc(
+            results_original[source], [results[source] for results in variant_results.values()]
+        )
+        for source in sources
+    }
+    overall_roc_aucs = {
+        source: TwoSampleMultiTestResultROC.multivariant_roc_auc(
+            results_original[source], [results[source] for results in variant_results.values()]
+        )
+        for source in sources
+    }
     for source in sources:
         print(f"Overall ROC AUC for {source}: {overall_roc_aucs[source]}")
     if plot_roc:
@@ -479,6 +470,6 @@ if __name__ == "__main__":
             alpha=0.05,
             compute_pvalue=False,
             plot_roc=False,
-            n_subsets_with_replacement=20,
+            n_tests_per_roc=20,
             b=1000,
         )
