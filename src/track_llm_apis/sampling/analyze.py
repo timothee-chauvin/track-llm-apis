@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import plotly.express as px
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
@@ -16,9 +17,11 @@ from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sa
 from track_llm_apis.sampling.analyze_logprobs import logprob_two_sample_test
 from track_llm_apis.sampling.analyze_mmlu import mmlu_two_sample_test
 from track_llm_apis.sampling.common import (
+    CIResult,
     CompressedOutput,
     DataSource,
     OutputRow,
+    TwoSampleMultiTestResultMultiROC,
     TwoSampleMultiTestResultROC,
     UncompressedOutput,
 )
@@ -200,8 +203,9 @@ def evaluate_detectors_on_variant(
     logprob_prompt: str | None = None,
     compute_pvalue: bool = True,
     n_tests_per_roc: int = 200,
+    n_rocs: int = 100,
     b: int = 1000,
-) -> TwoSampleMultiTestResultROC:
+) -> TwoSampleMultiTestResultMultiROC:
     match source:
         case DataSource.GAO2025:
             samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
@@ -213,65 +217,89 @@ def evaluate_detectors_on_variant(
             samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
             two_sample_test_fn = logprob_two_sample_test
 
-    stats = []
-    pvalues = []
-    n_input_tokens = []
-    n_output_tokens = []
-    sample_pairs = []
-    if source == DataSource.US:
-        # Only keep the provided or default prompt, discarding the others
-        if logprob_prompt is None:
-            logprob_prompt = config.sampling.logprob.default_prompt
-        rows1 = {logprob_prompt: rows1[logprob_prompt]}
-        rows2 = {logprob_prompt: rows2[logprob_prompt]}
-    for _ in range(n_tests_per_roc):
-        if same:
-            assert rows1 == rows2
-            subset = {p: random.sample(rows, 2 * samples_per_prompt) for p, rows in rows1.items()}
-            rows1_subset = {p: subset[p][:samples_per_prompt] for p in rows1.keys()}
-            rows2_subset = {p: subset[p][samples_per_prompt:] for p in rows2.keys()}
-        else:
-            rows1_subset = {p: random.sample(rows, samples_per_prompt) for p, rows in rows1.items()}
-            rows2_subset = {p: random.sample(rows, samples_per_prompt) for p, rows in rows2.items()}
-        sample_pairs.append((rows1_subset, rows2_subset))
+    multi_roc_result = TwoSampleMultiTestResultMultiROC(results=[])
+    for _ in range(n_rocs):
+        stats = []
+        pvalues = []
+        n_input_tokens = []
+        n_output_tokens = []
+        sample_pairs = []
+        if source == DataSource.US:
+            # Only keep the provided or default prompt, discarding the others
+            if logprob_prompt is None:
+                logprob_prompt = config.sampling.logprob.default_prompt
+            rows1 = {logprob_prompt: rows1[logprob_prompt]}
+            rows2 = {logprob_prompt: rows2[logprob_prompt]}
+        for _ in range(n_tests_per_roc):
+            if same:
+                assert rows1 == rows2
+                subset = {
+                    p: random.sample(rows, 2 * samples_per_prompt) for p, rows in rows1.items()
+                }
+                rows1_subset = {p: subset[p][:samples_per_prompt] for p in rows1.keys()}
+                rows2_subset = {p: subset[p][samples_per_prompt:] for p in rows2.keys()}
+            else:
+                rows1_subset = {
+                    p: random.sample(rows, samples_per_prompt) for p, rows in rows1.items()
+                }
+                rows2_subset = {
+                    p: random.sample(rows, samples_per_prompt) for p, rows in rows2.items()
+                }
+            sample_pairs.append((rows1_subset, rows2_subset))
 
-    for sample1, sample2 in sample_pairs:
-        result = two_sample_test_fn(
-            sample1, sample2, b=b, compute_pvalue=compute_pvalue, tokenizer=tokenizer
+        for sample1, sample2 in sample_pairs:
+            result = two_sample_test_fn(
+                sample1, sample2, b=b, compute_pvalue=compute_pvalue, tokenizer=tokenizer
+            )
+            stats.append(result.statistic)
+            if compute_pvalue:
+                pvalues.append(result.pvalue)
+            n_input_tokens.append(
+                sum(prompt_length[p] * len(r) for p, r in sample1.items())
+                + sum(prompt_length[p] * len(r) for p, r in sample2.items())
+            )
+            n_output_tokens.append(
+                sum(r.text[1] for rows in sample1.values() for r in rows)
+                + sum(r.text[1] for rows in sample2.values() for r in rows)
+            )
+        multi_roc_result.results.append(
+            TwoSampleMultiTestResultROC(
+                stats=stats,
+                pvalues=pvalues if compute_pvalue else None,
+                n_input_tokens=n_input_tokens,
+                n_output_tokens=n_output_tokens,
+            )
         )
-        stats.append(result.statistic)
-        if compute_pvalue:
-            pvalues.append(result.pvalue)
-        n_input_tokens.append(
-            sum(prompt_length[p] * len(r) for p, r in sample1.items())
-            + sum(prompt_length[p] * len(r) for p, r in sample2.items())
-        )
-        n_output_tokens.append(
-            sum(r.text[1] for rows in sample1.values() for r in rows)
-            + sum(r.text[1] for rows in sample2.values() for r in rows)
-        )
-
-    return TwoSampleMultiTestResultROC(
-        stats=stats,
-        pvalues=pvalues if compute_pvalue else None,
-        n_input_tokens=n_input_tokens,
-        n_output_tokens=n_output_tokens,
-    )
+    return multi_roc_result
 
 
 def plot_roc_curve(
-    roc_curves: dict[DataSource, tuple[np.ndarray, np.ndarray]],
-    aucs: dict[DataSource, float],
+    roc_curves: dict[DataSource, list[tuple[np.ndarray, np.ndarray]]],
+    roc_auc_ci: dict[DataSource, CIResult],
     model_name: str,
     variant: str | None,
 ):
     sources = list(roc_curves.keys())
     fig = go.Figure()
-    for source in sources:
-        fpr, tpr = roc_curves[source]
-        auc = aucs[source]
-        display_name = f"{source.name} (AUC: {auc:.4f})"
-        fig.add_trace(go.Scatter(x=fpr, y=tpr, name=display_name))
+
+    # Define colors for each data source
+    colors = px.colors.qualitative.Plotly
+
+    for i, source in enumerate(sources):
+        color = colors[i % len(colors)]
+        display_name = f"{source.name} (AUC: {roc_auc_ci[source].avg:.4f})"
+
+        for j, (fpr, tpr) in enumerate(roc_curves[source]):
+            fig.add_trace(
+                go.Scatter(
+                    x=fpr,
+                    y=tpr,
+                    name=display_name,
+                    line=dict(color=color),
+                    showlegend=(j == 0),  # Only show legend for first curve of each source
+                    legendgroup=source.name,  # Group all curves from same source
+                )
+            )
 
     # Random chance diagonal
     fig.add_trace(
@@ -315,10 +343,12 @@ def evaluate_detectors(
     directory: Path,
     data: CompressedOutput,
     sources: list[DataSource],
-    alpha: float,
+    detector_alpha: float,
+    results_alpha: float,
     compute_pvalue: bool = False,
     plot_roc: bool = False,
     n_tests_per_roc: int = 200,
+    n_rocs: int = 100,
     b: int = 1000,
 ):
     if DataSource.GAO2025 in sources:
@@ -331,9 +361,11 @@ def evaluate_detectors(
         "metadata": {
             "model_name": data.model_name,
             "sources": [source.name for source in sources],
-            "alpha": alpha,
+            "detector_alpha": detector_alpha,
+            "results_alpha": results_alpha,
             "compute_pvalue": compute_pvalue,
             "n_tests_per_roc": n_tests_per_roc,
+            "n_rocs": n_rocs,
             "b": b,
             "used_tokens": {source.name: None for source in sources},
         }
@@ -370,6 +402,7 @@ def evaluate_detectors(
             tokenizer=tokenizer,
             compute_pvalue=compute_pvalue,
             n_tests_per_roc=n_tests_per_roc,
+            n_rocs=n_rocs,
             b=b,
         )
         for source in sources
@@ -378,7 +411,7 @@ def evaluate_detectors(
     for variant_idx, variant in enumerate(variants):
         print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
         roc_curves = {}
-        roc_aucs = {}
+        roc_auc_ci = {}
         analysis_results[variant] = {}
         for source in sources:
             variant_rows = rows_by_variant[source][variant]
@@ -393,59 +426,68 @@ def evaluate_detectors(
                 tokenizer=tokenizer,
                 compute_pvalue=compute_pvalue,
                 n_tests_per_roc=n_tests_per_roc,
+                n_rocs=n_rocs,
                 b=b,
             )
             variant_results[variant][source] = results
-            stat_avg = results.stat_avg
-            pvalue_avg = results.pvalue_avg
-            input_tokens_avg = results.n_input_tokens_avg
-            output_tokens_avg = results.n_output_tokens_avg
-            roc_curves[source] = results.roc_curve(results_original[source])
-            roc_aucs[source] = results.roc_auc(results_original[source])
-            power = results.power(alpha)
-            print(
-                f"  * {source}: {pvalue_avg=}, {stat_avg=}, {power=}, {input_tokens_avg=}, {output_tokens_avg=}, roc_auc={roc_aucs[source]}"
-            )
-            if analysis_results["metadata"]["used_tokens"][source.name] is None:
-                analysis_results["metadata"]["used_tokens"][source.name] = {
-                    "input": input_tokens_avg,
-                    "output": output_tokens_avg,
-                }
+
+            stat_ci = results.stat_ci(results_alpha)
+            roc_auc_ci[source] = results.roc_auc_ci(results_original[source], results_alpha)
             analysis_results[variant][source.name] = {
-                "pvalue_avg": pvalue_avg,
-                "stat_avg": stat_avg,
-                "power": power,
-                "roc_auc": roc_aucs[source],
-                "stats_original": {
-                    "min": results_original[source].stats_min,
-                    "max": results_original[source].stats_max,
-                },
-                "stats_variant": {
-                    "min": results.stats_min,
-                    "max": results.stats_max,
-                },
+                "stat_ci": stat_ci.model_dump(mode="json"),
+                "roc_auc_ci": roc_auc_ci[source].model_dump(mode="json"),
             }
+            log_msg = [f"  * {source}:"]
+            log_msg.append(f"    - stat: {stat_ci}")
+            log_msg.append(f"    - roc_auc: {roc_auc_ci[source]}")
+
+            if compute_pvalue:
+                pvalue_ci = results.pvalue_ci(results_alpha)
+                power = results.power_ci(detector_alpha, results_alpha)
+                analysis_results[variant][source.name] |= {
+                    "pvalue_ci": pvalue_ci.model_dump(mode="json"),
+                    "power_ci": power.model_dump(mode="json"),
+                }
+                log_msg.append(f"    - pvalue: {pvalue_ci}")
+                log_msg.append(f"    - power: {power}")
+
+            log_msg.append(
+                f"    - input tokens / output tokens: {results.n_input_tokens_avg} / {results.n_output_tokens_avg}"
+            )
+            if plot_roc:
+                roc_curves[source] = results.roc_curves(results_original[source])
+
+            analysis_results["metadata"]["used_tokens"].setdefault(
+                source.name,
+                {
+                    "input": results.n_input_tokens_avg,
+                    "output": results.n_output_tokens_avg,
+                },
+            )
+            print("\n".join(log_msg))
         if plot_roc:
-            plot_roc_curve(roc_curves, roc_aucs, data.model_name, variant)
+            plot_roc_curve(roc_curves, roc_auc_ci, data.model_name, variant)
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
     overall_roc_curves = {
-        source: TwoSampleMultiTestResultROC.multivariant_roc(
+        source: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
             results_original[source], [results[source] for results in variant_results.values()]
         )
         for source in sources
     }
-    overall_roc_aucs = {
-        source: TwoSampleMultiTestResultROC.multivariant_roc_auc(
-            results_original[source], [results[source] for results in variant_results.values()]
+    overall_roc_auc_ci = {
+        source: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
+            results_original[source],
+            [results[source] for results in variant_results.values()],
+            results_alpha,
         )
         for source in sources
     }
     for source in sources:
-        print(f"Overall ROC AUC for {source}: {overall_roc_aucs[source]}")
+        print(f"Overall ROC AUC for {source}: {overall_roc_auc_ci[source]}")
     if plot_roc:
-        plot_roc_curve(overall_roc_curves, overall_roc_aucs, data.model_name, None)
+        plot_roc_curve(overall_roc_curves, overall_roc_auc_ci, data.model_name, None)
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
@@ -467,9 +509,11 @@ if __name__ == "__main__":
             directory=output_dir,
             data=compressed_output,
             sources=[DataSource.US, DataSource.MMLU, DataSource.GAO2025],
-            alpha=0.05,
+            detector_alpha=0.05,
+            results_alpha=0.05,
             compute_pvalue=False,
             plot_roc=False,
             n_tests_per_roc=20,
+            n_rocs=20,
             b=1000,
         )
