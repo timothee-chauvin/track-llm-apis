@@ -198,7 +198,8 @@ def evaluate_detectors_on_variant(
     rows2: dict[str, list[OutputRow]],
     same: bool,
     prompt_length: dict[str, int],
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: PreTrainedTokenizerBase | None = None,
+    logprob_prompt: str | None = None,
     compute_pvalue: bool = True,
     n_subsets_with_replacement: int = 200,
     b: int = 1000,
@@ -221,10 +222,11 @@ def evaluate_detectors_on_variant(
     n_output_tokens = []
     sample_pairs = []
     if source == DataSource.US:
-        # Only keep the default prompt, discarding the others
-        dprompt = config.sampling.logprob.default_prompt
-        rows1 = {dprompt: rows1[dprompt]}
-        rows2 = {dprompt: rows2[dprompt]}
+        # Only keep the provided or default prompt, discarding the others
+        if logprob_prompt is None:
+            logprob_prompt = config.sampling.logprob.default_prompt
+        rows1 = {logprob_prompt: rows1[logprob_prompt]}
+        rows2 = {logprob_prompt: rows2[logprob_prompt]}
     for _ in range(n_subsets):
         if same:
             assert rows1 == rows2
