@@ -306,7 +306,8 @@ def get_plot_dir(data_directory: Path, model_name: str) -> Path:
 
 
 def plot_roc_curve_with_fs_cache(plot_data: PlotData, data_directory: Path):
-    plot_dir = get_plot_dir(data_directory, plot_data.model_name)
+    plot_dir = get_plot_dir(data_directory, plot_data.model_name) / "data"
+    os.makedirs(plot_dir, exist_ok=True)
     variant_slug = slugify(_variant_preslug(plot_data.variant), max_length=200, hash_length=0)
     data_path = plot_dir / f"{variant_slug}.json"
     with open(data_path, "w") as f:
@@ -329,7 +330,7 @@ def _variant_preslug(variant: str | None) -> str:
 def plot_roc_curve(
     plot_data_path: Path,
 ):
-    """From the path of a data file containing the necessary data, plot the ROC curves in the same directory,
+    """From the path of a data file containing the necessary data, plot the ROC curves in the parent directory,
     with the same name except for the extension."""
     plot_data = PlotData.model_validate_json(plot_data_path.read_text())
     sources = list(plot_data.roc_curves.keys())
@@ -377,7 +378,7 @@ def plot_roc_curve(
         xaxis_title="False Positive Rate",
         yaxis_title="True Positive Rate",
     )
-    plot_dir = plot_data_path.parent
+    plot_dir = plot_data_path.parent.parent
     filename_base = plot_data_path.stem
     fig.write_html(plot_dir / f"{filename_base}.html")
 
