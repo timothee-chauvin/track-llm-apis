@@ -676,7 +676,7 @@ def ablation_influence_of_prompt(
                 ),
                 get_plot_dir(directory, data.model_name) / "ablation_prompt" / "data",
             )
-        with open(directory / "ablation_prompt.json", "w") as f:
+        with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
     multivariant_roc_curves = {
@@ -729,8 +729,8 @@ if __name__ == "__main__":
             results_alpha=0.05,
             compute_pvalue=False,
             plot_roc=False,
-            n_tests_per_roc=20,
-            n_rocs=20,
+            n_tests_per_roc=400,
+            n_rocs=10,
             b=1000,
         )
         ablation_influence_of_prompt(
