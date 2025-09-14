@@ -378,6 +378,8 @@ def plot_roc_curve(
     else:
         title += " across all variants"
     fig.update_layout(
+        font_family="Spectral",
+        template="plotly_white",
         title=title,
         xaxis_title="False Positive Rate",
         yaxis_title="True Positive Rate",
