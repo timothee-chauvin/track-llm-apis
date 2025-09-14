@@ -206,6 +206,10 @@ def evaluate_detectors_on_variant(
     n_rocs: int = 100,
     b: int = 1000,
 ) -> TwoSampleMultiTestResultMultiROC:
+    """
+    Args:
+      rows1, rows2: dictionary of prompts to lists of rows
+    """
     match source:
         case DataSource.GAO2025:
             samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
@@ -279,18 +283,9 @@ class PlotData(BaseModel):
     roc_curves: dict[DataSource, list[tuple[list[float], list[float]]]]
     roc_auc_ci: dict[DataSource, CIResult]
 
-    @field_validator("roc_curves", mode="before")
+    @field_validator("roc_curves", "roc_auc_ci", mode="before")
     @classmethod
     def validate_roc_curves(cls, v):
-        if isinstance(v, dict) and v:
-            first_key = next(iter(v))
-            if isinstance(first_key, str):
-                return {DataSource(int(k)): v for k, v in v.items()}
-        return v
-
-    @field_validator("roc_auc_ci", mode="before")
-    @classmethod
-    def validate_roc_auc_ci(cls, v):
         if isinstance(v, dict) and v:
             first_key = next(iter(v))
             if isinstance(first_key, str):
@@ -305,11 +300,10 @@ def get_plot_dir(data_directory: Path, model_name: str) -> Path:
     return directory
 
 
-def plot_roc_curve_with_fs_cache(plot_data: PlotData, data_directory: Path):
-    plot_dir = get_plot_dir(data_directory, plot_data.model_name) / "data"
-    os.makedirs(plot_dir, exist_ok=True)
+def plot_roc_curve_with_fs_cache(plot_data: PlotData, out_dir: Path):
+    os.makedirs(out_dir, exist_ok=True)
     variant_slug = slugify(_variant_preslug(plot_data.variant), max_length=200, hash_length=0)
-    data_path = plot_dir / f"{variant_slug}.json"
+    data_path = out_dir / f"{variant_slug}.json"
     with open(data_path, "w") as f:
         json.dump(plot_data.model_dump(mode="json"), f, indent=2)
     plot_roc_curve(data_path)
@@ -498,6 +492,8 @@ def evaluate_detectors(
             log_msg.append(
                 f"    - input tokens / output tokens: {results.n_input_tokens_avg} / {results.n_output_tokens_avg}"
             )
+            print("\n".join(log_msg))
+
             if plot_roc:
                 roc_curves[source] = results.roc_curves(results_original[source])
 
@@ -508,7 +504,6 @@ def evaluate_detectors(
                     "output": results.n_output_tokens_avg,
                 },
             )
-            print("\n".join(log_msg))
 
         if plot_roc:
             plot_roc_curve_with_fs_cache(
@@ -518,7 +513,7 @@ def evaluate_detectors(
                     model_name=data.model_name,
                     variant=variant,
                 ),
-                directory,
+                get_plot_dir(directory, data.model_name) / "data" / "baselines",
             )
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
@@ -547,7 +542,7 @@ def evaluate_detectors(
                 roc_curves=overall_roc_curves,
                 roc_auc_ci=overall_roc_auc_ci,
             ),
-            directory,
+            get_plot_dir(directory, data.model_name) / "data" / "baselines",
         )
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
