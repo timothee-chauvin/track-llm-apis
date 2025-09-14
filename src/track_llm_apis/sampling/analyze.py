@@ -541,7 +541,7 @@ def evaluate_detectors(
                 ),
                 get_baselines_data_dir(directory),
             )
-        with open(directory / "analysis.json", "w") as f:
+        with open(directory / "baseline_analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
     multivariant_roc_curves = {
@@ -585,7 +585,7 @@ def evaluate_detectors(
             ),
             get_baselines_data_dir(directory),
         )
-    with open(directory / "analysis.json", "w") as f:
+    with open(directory / "baseline_analysis.json", "w") as f:
         json.dump(analysis_results, f, indent=2)
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
@@ -703,7 +703,7 @@ def ablation_influence_of_prompt(
                 ),
                 get_ablation_prompt_data_dir(directory),
             )
-        with open(directory / "analysis.json", "w") as f:
+        with open(directory / "prompt_ablation_analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
     multivariant_roc_curves = {
@@ -748,7 +748,7 @@ def ablation_influence_of_prompt(
             ),
             get_ablation_prompt_data_dir(directory),
         )
-    with open(directory / "analysis.json", "w") as f:
+    with open(directory / "prompt_ablation_analysis.json", "w") as f:
         json.dump(analysis_results, f, indent=2)
 
 
