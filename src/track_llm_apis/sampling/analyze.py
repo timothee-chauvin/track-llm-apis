@@ -531,13 +531,13 @@ def evaluate_detectors(
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
-    overall_roc_curves = {
+    multivariant_roc_curves = {
         source: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
             results_original[source], [results[source] for results in variant_results.values()]
         )
         for source in sources
     }
-    overall_roc_auc_ci = {
+    multivariant_roc_auc_ci = {
         source: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
             results_original[source],
             [results[source] for results in variant_results.values()],
@@ -546,15 +546,18 @@ def evaluate_detectors(
         for source in sources
     }
     for source in sources:
-        print(f"Overall ROC AUC for {source}: {overall_roc_auc_ci[source]}")
+        analysis_results["multivariant"][source.name] = {
+            "roc_auc_ci": multivariant_roc_auc_ci[source].model_dump(mode="json"),
+        }
+        print(f"Multivariant ROC AUC for {source}: {multivariant_roc_auc_ci[source]}")
     if plot_roc:
         plot_roc_curve_with_fs_cache(
             PlotData(
                 experiment="baseline",
                 model_name=data.model_name,
                 variant=None,
-                roc_curves=overall_roc_curves,
-                roc_auc_ci=overall_roc_auc_ci,
+                roc_curves=multivariant_roc_curves,
+                roc_auc_ci=multivariant_roc_auc_ci,
             ),
             get_plot_dir(directory, data.model_name) / "baselines" / "data",
         )
@@ -676,13 +679,13 @@ def ablation_influence_of_prompt(
         with open(directory / "ablation_prompt.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
 
-    overall_roc_curves = {
+    multivariant_roc_curves = {
         prompt: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
             results_original[prompt], [results[prompt] for results in variant_results.values()]
         )
         for prompt in prompts
     }
-    overall_roc_auc_ci = {
+    multivariant_roc_auc_ci = {
         prompt: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
             results_original[prompt],
             [results[prompt] for results in variant_results.values()],
@@ -691,15 +694,15 @@ def ablation_influence_of_prompt(
         for prompt in prompts
     }
     for prompt in prompts:
-        print(f"Overall ROC AUC for {repr(prompt)}: {overall_roc_auc_ci[prompt]}")
+        print(f"Multivariant ROC AUC for {repr(prompt)}: {multivariant_roc_auc_ci[prompt]}")
     if plot_roc:
         plot_roc_curve_with_fs_cache(
             PlotData(
                 experiment="ablation_prompt",
                 model_name=data.model_name,
                 variant=None,
-                roc_curves=overall_roc_curves,
-                roc_auc_ci=overall_roc_auc_ci,
+                roc_curves=multivariant_roc_curves,
+                roc_auc_ci=multivariant_roc_auc_ci,
             ),
             get_plot_dir(directory, data.model_name) / "ablation_prompt" / "data",
         )
