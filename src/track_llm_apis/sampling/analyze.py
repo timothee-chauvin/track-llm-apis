@@ -3,7 +3,7 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import plotly.express as px
 import plotly.graph_objects as go
@@ -278,18 +278,20 @@ def evaluate_detectors_on_variant(
 
 
 class PlotData(BaseModel):
+    experiment: Literal["baseline", "ablation_prompt"]
     model_name: str
     variant: str | None
-    roc_curves: dict[DataSource, list[tuple[list[float], list[float]]]]
-    roc_auc_ci: dict[DataSource, CIResult]
+    roc_curves: dict[DataSource | str, list[tuple[list[float], list[float]]]]
+    roc_auc_ci: dict[DataSource | str, CIResult]
 
     @field_validator("roc_curves", "roc_auc_ci", mode="before")
     @classmethod
-    def validate_roc_curves(cls, v):
-        if isinstance(v, dict) and v:
-            first_key = next(iter(v))
-            if isinstance(first_key, str):
-                return {DataSource(int(k)): v for k, v in v.items()}
+    def validate_roc_curves(cls, v, info):
+        if info.data.get("experiment") == "baseline":
+            if isinstance(v, dict) and v:
+                first_key = next(iter(v))
+                if isinstance(first_key, str):
+                    return {DataSource(int(k)): v for k, v in v.items()}
         return v
 
 
@@ -327,25 +329,33 @@ def plot_roc_curve(
     """From the path of a data file containing the necessary data, plot the ROC curves in the parent directory,
     with the same name except for the extension."""
     plot_data = PlotData.model_validate_json(plot_data_path.read_text())
-    sources = list(plot_data.roc_curves.keys())
+    conditions = list(plot_data.roc_curves.keys())
     fig = go.Figure()
 
     # Define colors for each data source
     colors = px.colors.qualitative.Plotly
 
-    for i, source in enumerate(sources):
-        color = colors[i % len(colors)]
-        display_name = f"{source.name} (AUC: {plot_data.roc_auc_ci[source].avg:.4f})"
+    for i, condition in enumerate(conditions):
+        match plot_data.experiment:
+            case "baseline":
+                # Conditions are DataSource objects
+                condition_name = condition.name
+            case "ablation_prompt":
+                # Conditions are prompts
+                condition_name = repr(condition)
 
-        for j, (fpr, tpr) in enumerate(plot_data.roc_curves[source]):
+        color = colors[i % len(colors)]
+        display_name = f"{condition_name} (AUC: {plot_data.roc_auc_ci[condition].avg:.4f})"
+
+        for j, (fpr, tpr) in enumerate(plot_data.roc_curves[condition]):
             fig.add_trace(
                 go.Scatter(
                     x=fpr,
                     y=tpr,
                     name=display_name,
                     line=dict(color=color),
-                    showlegend=(j == 0),  # Only show legend for first curve of each source
-                    legendgroup=source.name,  # Group all curves from same source
+                    showlegend=(j == 0),  # Only show legend for first curve of each condition
+                    legendgroup=condition_name,  # Group all curves from same condition
                 )
             )
 
@@ -508,12 +518,13 @@ def evaluate_detectors(
         if plot_roc:
             plot_roc_curve_with_fs_cache(
                 PlotData(
+                    experiment="baseline",
                     roc_curves=roc_curves,
                     roc_auc_ci=roc_auc_ci,
                     model_name=data.model_name,
                     variant=variant,
                 ),
-                get_plot_dir(directory, data.model_name) / "data" / "baselines",
+                get_plot_dir(directory, data.model_name) / "baselines" / "data",
             )
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
@@ -537,15 +548,159 @@ def evaluate_detectors(
     if plot_roc:
         plot_roc_curve_with_fs_cache(
             PlotData(
+                experiment="baseline",
                 model_name=data.model_name,
                 variant=None,
                 roc_curves=overall_roc_curves,
                 roc_auc_ci=overall_roc_auc_ci,
             ),
-            get_plot_dir(directory, data.model_name) / "data" / "baselines",
+            get_plot_dir(directory, data.model_name) / "baselines" / "data",
         )
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
+
+
+def ablation_influence_of_prompt(
+    directory: Path,
+    data: CompressedOutput,
+    detector_alpha: float,
+    results_alpha: float,
+    compute_pvalue: bool = False,
+    plot_roc: bool = False,
+    n_tests_per_roc: int = 200,
+    n_rocs: int = 100,
+    b: int = 1000,
+):
+    """Test the influence of the prompt choice on detection performance for the logprob method."""
+    source = DataSource.US
+    rows_by_variant = UncompressedOutput.from_compressed_output(
+        data, keep_datasource=source
+    ).rows_by_variant()
+    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
+    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
+
+    prompt_length = {
+        prompt: tokens
+        for prompt, tokens in data.references_dict["prompt"]
+        if prompt in unchanged_rows_by_prompt
+    }
+    prompts = list(prompt_length.keys())
+    analysis_results = {
+        "metadata": {
+            "model_name": data.model_name,
+            "detector_alpha": detector_alpha,
+            "results_alpha": results_alpha,
+            "compute_pvalue": compute_pvalue,
+            "n_tests_per_roc": n_tests_per_roc,
+            "n_rocs": n_rocs,
+            "b": b,
+            "used_tokens": prompt_length,
+        }
+    }
+    variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
+    results_original = {
+        prompt: evaluate_detectors_on_variant(
+            source,
+            unchanged_rows_by_prompt,
+            unchanged_rows_by_prompt,
+            same=True,
+            prompt_length=prompt_length,
+            logprob_prompt=prompt,
+            compute_pvalue=compute_pvalue,
+            n_tests_per_roc=n_tests_per_roc,
+            n_rocs=n_rocs,
+            b=b,
+        )
+        for prompt in prompts
+    }
+    variant_results = {variant: {} for variant in variants}
+    for variant_idx, variant in enumerate(variants):
+        print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
+        roc_curves = {}
+        roc_auc_ci = {}
+        analysis_results[variant] = {}
+        variant_rows = rows_by_variant[variant]
+        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
+        for prompt in prompts:
+            assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
+            results = evaluate_detectors_on_variant(
+                source,
+                unchanged_rows_by_prompt,
+                rows_by_prompt,
+                same=False,
+                prompt_length=prompt_length,
+                logprob_prompt=prompt,
+                compute_pvalue=compute_pvalue,
+                n_tests_per_roc=n_tests_per_roc,
+                n_rocs=n_rocs,
+                b=b,
+            )
+            variant_results[variant][prompt] = results
+            stat_ci = results.stat_ci(results_alpha)
+            roc_auc_ci[prompt] = results.roc_auc_ci(results_original[prompt], results_alpha)
+            analysis_results[variant][prompt] = {
+                "stat_ci": stat_ci.model_dump(mode="json"),
+                "roc_auc_ci": roc_auc_ci[prompt].model_dump(mode="json"),
+            }
+            log_msg = [f"  * {repr(prompt)}:"]
+            log_msg.append(f"    - stat: {stat_ci}")
+            log_msg.append(f"    - roc_auc: {roc_auc_ci[prompt]}")
+            if compute_pvalue:
+                pvalue_ci = results.pvalue_ci(results_alpha)
+                power = results.power_ci(detector_alpha, results_alpha)
+                analysis_results[variant][prompt] |= {
+                    "pvalue_ci": pvalue_ci.model_dump(mode="json"),
+                    "power_ci": power.model_dump(mode="json"),
+                }
+                log_msg.append(f"    - pvalue: {pvalue_ci}")
+                log_msg.append(f"    - power: {power}")
+            log_msg.append(
+                f"    - input tokens / output tokens: {results.n_input_tokens_avg} / {results.n_output_tokens_avg}"
+            )
+            print("\n".join(log_msg))
+            if plot_roc:
+                roc_curves[prompt] = results.roc_curves(results_original[prompt])
+        if plot_roc:
+            plot_roc_curve_with_fs_cache(
+                PlotData(
+                    experiment="ablation_prompt",
+                    roc_curves=roc_curves,
+                    roc_auc_ci=roc_auc_ci,
+                    model_name=data.model_name,
+                    variant=variant,
+                ),
+                get_plot_dir(directory, data.model_name) / "ablation_prompt" / "data",
+            )
+        with open(directory / "ablation_prompt.json", "w") as f:
+            json.dump(analysis_results, f, indent=2)
+
+    overall_roc_curves = {
+        prompt: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
+            results_original[prompt], [results[prompt] for results in variant_results.values()]
+        )
+        for prompt in prompts
+    }
+    overall_roc_auc_ci = {
+        prompt: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
+            results_original[prompt],
+            [results[prompt] for results in variant_results.values()],
+            results_alpha,
+        )
+        for prompt in prompts
+    }
+    for prompt in prompts:
+        print(f"Overall ROC AUC for {repr(prompt)}: {overall_roc_auc_ci[prompt]}")
+    if plot_roc:
+        plot_roc_curve_with_fs_cache(
+            PlotData(
+                experiment="ablation_prompt",
+                model_name=data.model_name,
+                variant=None,
+                roc_curves=overall_roc_curves,
+                roc_auc_ci=overall_roc_auc_ci,
+            ),
+            get_plot_dir(directory, data.model_name) / "ablation_prompt" / "data",
+        )
 
 
 if __name__ == "__main__":
@@ -571,5 +726,16 @@ if __name__ == "__main__":
             plot_roc=False,
             n_tests_per_roc=20,
             n_rocs=20,
+            b=1000,
+        )
+        ablation_influence_of_prompt(
+            directory=output_dir,
+            data=compressed_output,
+            detector_alpha=0.05,
+            results_alpha=0.05,
+            compute_pvalue=False,
+            plot_roc=True,
+            n_tests_per_roc=400,
+            n_rocs=10,
             b=1000,
         )
