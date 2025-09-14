@@ -189,8 +189,6 @@ class Config(BaseSettings):
         env_prefix="TRACKLLM__",
         # e.g. specify the model name: TRACKLLM__SAMPLING__MODEL_NAME=...
         env_nested_delimiter="__",
-        env_file=".env.config",
-        env_file_encoding="utf-8",
         case_sensitive=False,
     )
 
