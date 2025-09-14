@@ -742,38 +742,36 @@ def ablation_influence_of_prompt(
 
 
 if __name__ == "__main__":
-    output_dirs = [
-        config.sampling_data_dir / "keep" / "2025-09-07_13-15-56",
-        config.sampling_data_dir / "keep" / "2025-09-07_15-28-14",
-        config.sampling_data_dir / "keep" / "2025-09-08_14-14-47",
-    ]
+    analysis_config = config.analysis
 
-    for output_dir in output_dirs:
-        compressed_output = CompressedOutput.from_json(output_dir)
-        print(compressed_output.model_name)
-        print(f"number of rows: {len(compressed_output.rows)}")
-        for ref in compressed_output.references:
-            print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
+    output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
+    compressed_output = CompressedOutput.from_json(output_dir)
+    print(compressed_output.model_name)
+    print(f"number of rows: {len(compressed_output.rows)}")
+    for ref in compressed_output.references:
+        print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
+    if analysis_config.experiment == "baseline":
         evaluate_detectors(
             directory=output_dir,
             data=compressed_output,
             sources=[DataSource.US, DataSource.MMLU, DataSource.GAO2025],
-            detector_alpha=0.05,
-            results_alpha=0.05,
-            compute_pvalue=False,
-            plot_roc=False,
-            n_tests_per_roc=400,
-            n_rocs=10,
-            b=1000,
+            detector_alpha=analysis_config.detector_alpha,
+            results_alpha=analysis_config.results_alpha,
+            compute_pvalue=analysis_config.compute_pvalue,
+            plot_roc=analysis_config.plot_roc,
+            n_tests_per_roc=analysis_config.n_tests_per_roc,
+            n_rocs=analysis_config.n_rocs,
+            b=analysis_config.b,
         )
+    elif analysis_config.experiment == "ablation_prompt":
         ablation_influence_of_prompt(
             directory=output_dir,
             data=compressed_output,
-            detector_alpha=0.05,
-            results_alpha=0.05,
-            compute_pvalue=False,
-            plot_roc=True,
-            n_tests_per_roc=400,
-            n_rocs=10,
-            b=1000,
+            detector_alpha=analysis_config.detector_alpha,
+            results_alpha=analysis_config.results_alpha,
+            compute_pvalue=analysis_config.compute_pvalue,
+            plot_roc=analysis_config.plot_roc,
+            n_tests_per_roc=analysis_config.n_tests_per_roc,
+            n_rocs=analysis_config.n_rocs,
+            b=analysis_config.b,
         )

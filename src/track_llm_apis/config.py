@@ -4,7 +4,7 @@ import tomllib
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import torch
 from datasets import Dataset, load_dataset
@@ -23,6 +23,15 @@ logger = logging.getLogger("track-llm-apis")
 
 class AnalysisConfig(BaseSettings):
     device: str | None = "cuda" if torch.cuda.is_available() else None
+    experiment: Literal["baseline", "ablation_prompt"]
+    sampling_dirname: str
+    detector_alpha: float = 0.05
+    results_alpha: float = 0.05
+    compute_pvalue: bool = False
+    plot_roc: bool = False
+    n_tests_per_roc: int = 100
+    n_rocs: int = 10
+    b: int = 1000
 
 
 class DeviceConfig(BaseModel):
