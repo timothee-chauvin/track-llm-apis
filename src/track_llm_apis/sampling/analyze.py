@@ -295,9 +295,20 @@ class PlotData(BaseModel):
         return v
 
 
-def get_plot_dir(data_directory: Path, model_name: str) -> Path:
-    model_slug = slugify(model_name, max_length=100, hash_length=0)
-    directory = config.plots_dir / "roc_curves" / data_directory.name / model_slug
+def get_plot_dir(sampling_directory: Path) -> Path:
+    directory = config.plots_dir / "roc_curves" / sampling_directory.name
+    os.makedirs(directory, exist_ok=True)
+    return directory
+
+
+def get_ablation_prompt_data_dir(sampling_directory: Path) -> Path:
+    directory = get_plot_dir(sampling_directory) / "ablation_prompt" / "data"
+    os.makedirs(directory, exist_ok=True)
+    return directory
+
+
+def get_baselines_data_dir(sampling_directory: Path) -> Path:
+    directory = get_plot_dir(sampling_directory) / "baselines" / "data"
     os.makedirs(directory, exist_ok=True)
     return directory
 
@@ -528,7 +539,7 @@ def evaluate_detectors(
                     model_name=data.model_name,
                     variant=variant,
                 ),
-                get_plot_dir(directory, data.model_name) / "baselines" / "data",
+                get_baselines_data_dir(directory),
             )
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
@@ -572,7 +583,7 @@ def evaluate_detectors(
                 roc_curves=multivariant_roc_curves,
                 roc_auc_ci=multivariant_roc_auc_ci,
             ),
-            get_plot_dir(directory, data.model_name) / "baselines" / "data",
+            get_baselines_data_dir(directory),
         )
     with open(directory / "analysis.json", "w") as f:
         json.dump(analysis_results, f, indent=2)
@@ -690,7 +701,7 @@ def ablation_influence_of_prompt(
                     model_name=data.model_name,
                     variant=variant,
                 ),
-                get_plot_dir(directory, data.model_name) / "ablation_prompt" / "data",
+                get_ablation_prompt_data_dir(directory),
             )
         with open(directory / "analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
@@ -735,7 +746,7 @@ def ablation_influence_of_prompt(
                 roc_curves=multivariant_roc_curves,
                 roc_auc_ci=multivariant_roc_auc_ci,
             ),
-            get_plot_dir(directory, data.model_name) / "ablation_prompt" / "data",
+            get_ablation_prompt_data_dir(directory),
         )
     with open(directory / "analysis.json", "w") as f:
         json.dump(analysis_results, f, indent=2)
