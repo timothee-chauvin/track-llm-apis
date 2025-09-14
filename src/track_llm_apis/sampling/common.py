@@ -363,3 +363,18 @@ class TwoSampleMultiTestResultMultiROC(BaseModel):
             ],
             results_alpha,
         )
+
+    @staticmethod
+    def roc_auc_avg_ci(
+        origs: "TwoSampleMultiTestResultMultiROC",
+        all_variants: list["TwoSampleMultiTestResultMultiROC"],
+        results_alpha: float,
+    ) -> CIResult:
+        """Return the average ROC AUC across all variants as a CI. It is computed by computing an average ROC AUC across variants for each run, then computing a CI on that list."""
+        averages = []
+        for i in range(len(all_variants[0].results)):
+            averages.append(
+                sum([variants.results[i].roc_auc(origs.results[i]) for variants in all_variants])
+                / len(all_variants)
+            )
+        return TwoSampleMultiTestResultMultiROC._ci(averages, results_alpha)

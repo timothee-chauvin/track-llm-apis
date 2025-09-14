@@ -104,7 +104,7 @@ def plot_analysis_results():
         with open(analysis_dir / "analysis.json") as f:
             analysis_data = json.load(f)
             sources = analysis_data["metadata"]["sources"]
-        variant_descriptions = [k for k in analysis_data.keys() if k != "metadata"]
+        variant_descriptions = [k for k in analysis_data.keys() if k not in ["metadata", "all"]]
         for scale_name, scale_info in difficulty_scales.items():
             variant_description_subset = []
             for k in variant_descriptions:

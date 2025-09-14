@@ -457,11 +457,12 @@ def evaluate_detectors(
         )
         for source in sources
     }
-    variant_results = {variant: {} for variant in variants}
+    variant_results = {}
     for variant_idx, variant in enumerate(variants):
         print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
         roc_curves = {}
         roc_auc_ci = {}
+        variant_results[variant] = {}
         analysis_results[variant] = {}
         for source in sources:
             variant_rows = rows_by_variant[source][variant]
@@ -545,11 +546,22 @@ def evaluate_detectors(
         )
         for source in sources
     }
+    avg_roc_auc_ci = {
+        source: TwoSampleMultiTestResultMultiROC.roc_auc_avg_ci(
+            results_original[source],
+            [results[source] for results in variant_results.values()],
+            results_alpha,
+        )
+        for source in sources
+    }
+    analysis_results["all"] = {}
     for source in sources:
-        analysis_results["multivariant"][source.name] = {
-            "roc_auc_ci": multivariant_roc_auc_ci[source].model_dump(mode="json"),
+        analysis_results["all"][source.name] = {
+            "multivariant_roc_auc_ci": multivariant_roc_auc_ci[source].model_dump(mode="json"),
+            "avg_roc_auc_ci": avg_roc_auc_ci[source].model_dump(mode="json"),
         }
         print(f"Multivariant ROC AUC for {source}: {multivariant_roc_auc_ci[source]}")
+        print(f"Average ROC AUC for {source}: {avg_roc_auc_ci[source]}")
     if plot_roc:
         plot_roc_curve_with_fs_cache(
             PlotData(
@@ -561,6 +573,8 @@ def evaluate_detectors(
             ),
             get_plot_dir(directory, data.model_name) / "baselines" / "data",
         )
+    with open(directory / "analysis.json", "w") as f:
+        json.dump(analysis_results, f, indent=2)
     end_time = time.time()
     print(f"Time taken: {(end_time - start_time):.2f} seconds")
 
@@ -618,11 +632,12 @@ def ablation_influence_of_prompt(
         )
         for prompt in prompts
     }
-    variant_results = {variant: {} for variant in variants}
+    variant_results = {}
     for variant_idx, variant in enumerate(variants):
         print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
         roc_curves = {}
         roc_auc_ci = {}
+        variant_results[variant] = {}
         analysis_results[variant] = {}
         variant_rows = rows_by_variant[variant]
         rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
@@ -693,8 +708,23 @@ def ablation_influence_of_prompt(
         )
         for prompt in prompts
     }
+
+    avg_roc_auc_ci = {
+        prompt: TwoSampleMultiTestResultMultiROC.roc_auc_avg_ci(
+            results_original[prompt],
+            [results[prompt] for results in variant_results.values()],
+            results_alpha,
+        )
+        for prompt in prompts
+    }
+    analysis_results["all"] = {}
     for prompt in prompts:
+        analysis_results["all"][repr(prompt)] = {
+            "multivariant_roc_auc_ci": multivariant_roc_auc_ci[prompt].model_dump(mode="json"),
+            "avg_roc_auc_ci": avg_roc_auc_ci[prompt].model_dump(mode="json"),
+        }
         print(f"Multivariant ROC AUC for {repr(prompt)}: {multivariant_roc_auc_ci[prompt]}")
+        print(f"Average ROC AUC for {repr(prompt)}: {avg_roc_auc_ci[prompt]}")
     if plot_roc:
         plot_roc_curve_with_fs_cache(
             PlotData(
@@ -706,6 +736,8 @@ def ablation_influence_of_prompt(
             ),
             get_plot_dir(directory, data.model_name) / "ablation_prompt" / "data",
         )
+    with open(directory / "analysis.json", "w") as f:
+        json.dump(analysis_results, f, indent=2)
 
 
 if __name__ == "__main__":
