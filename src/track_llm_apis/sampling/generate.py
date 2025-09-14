@@ -109,7 +109,7 @@ def init_vllm(model, tokenizer, vllm_device: str) -> LLM:
         with temporary_env("CUDA_VISIBLE_DEVICES", visible_devices):
             # Load into vLLM
             available_memory_fraction = available_gpu_memory_fraction()
-            vllm_memory = 0.2 * available_memory_fraction
+            vllm_memory = 0.5 * available_memory_fraction
             while True:
                 try:
                     llm = LLM(

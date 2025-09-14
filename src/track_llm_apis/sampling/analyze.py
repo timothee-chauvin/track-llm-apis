@@ -387,6 +387,7 @@ def plot_roc_curve(
     plot_dir = plot_data_path.parent.parent
     filename_base = plot_data_path.stem
     fig.write_html(plot_dir / f"{filename_base}.html")
+    logger.info(f"Saved ROC curve to {plot_dir / f'{filename_base}.html'}")
 
 
 def evaluate_detectors(
