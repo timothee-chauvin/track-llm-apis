@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import torch
@@ -752,15 +753,73 @@ def ablation_influence_of_prompt(
         json.dump(analysis_results, f, indent=2)
 
 
+def ablation_influence_of_prompt_plot():
+    """Build a line plot of average ROC AUC per model across prompts,
+    with error bars from confidence intervals.
+    Expects one `prompt_ablation_analysis.json` per sampling dir.
+    """
+    rows = []
+    sampling_dirs = [
+        config.sampling_data_dir / "keep" / dirname for dirname in config.analysis.sampling_dirnames
+    ]
+
+    for sampling_dir in sampling_dirs:
+        p = Path(sampling_dir) / "prompt_ablation_analysis.json"
+        with open(p) as f:
+            analysis = json.load(f)
+
+        model = analysis["metadata"]["model_name"]
+        for prompt, pa in analysis["all"].items():
+            avg = pa["avg_roc_auc_ci"]["avg"]
+            lower = pa["avg_roc_auc_ci"]["lower"]
+            upper = pa["avg_roc_auc_ci"]["upper"]
+
+            rows.append(
+                {
+                    "prompt": prompt,
+                    "model": model,
+                    "auc": avg,
+                    "err_low": avg - lower,
+                    "err_high": upper - avg,
+                }
+            )
+
+    df = pd.DataFrame(rows)
+
+    fig = px.line(
+        df,
+        x="model",
+        y="auc",
+        color="prompt",  # one line per prompt
+        markers=True,
+        error_y="err_high",
+        error_y_minus="err_low",
+        labels={"model": "Model", "auc": "Average ROC AUC", "prompt": "Prompt"},
+    )
+
+    fig.update_layout(
+        title="Average ROC AUC per Model across Prompts",
+        yaxis=dict(range=[0, 1]),
+        legend_title="Prompt",
+        margin=dict(l=10, r=10, t=40, b=40),
+    )
+
+    fig.write_html(config.plots_dir / "prompt_ablation_analysis.html")
+    logger.info(
+        f"Prompt ablation analysis plot saved to {config.plots_dir / 'prompt_ablation_analysis.html'}"
+    )
+
+
 if __name__ == "__main__":
     analysis_config = config.analysis
 
-    output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
-    compressed_output = CompressedOutput.from_json(output_dir)
-    print(compressed_output.model_name)
-    print(f"number of rows: {len(compressed_output.rows)}")
-    for ref in compressed_output.references:
-        print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
+    if analysis_config.experiment in ["baseline", "ablation_prompt"]:
+        output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
+        compressed_output = CompressedOutput.from_json(output_dir)
+        print(compressed_output.model_name)
+        print(f"number of rows: {len(compressed_output.rows)}")
+        for ref in compressed_output.references:
+            print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
     if analysis_config.experiment == "baseline":
         evaluate_detectors(
             directory=output_dir,
@@ -786,3 +845,5 @@ if __name__ == "__main__":
             n_rocs=analysis_config.n_rocs,
             b=analysis_config.b,
         )
+    elif analysis_config.experiment == "ablation_prompt_plot":
+        ablation_influence_of_prompt_plot()

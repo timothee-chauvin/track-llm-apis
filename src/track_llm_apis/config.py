@@ -23,8 +23,11 @@ logger = logging.getLogger("track-llm-apis")
 
 class AnalysisConfig(BaseSettings):
     device: str | None = "cuda" if torch.cuda.is_available() else None
-    experiment: Literal["baseline", "ablation_prompt"]
-    sampling_dirname: str
+    experiment: Literal["baseline", "ablation_prompt", "ablation_prompt_plot"]
+    # For baseline, ablation_prompt
+    sampling_dirname: str | None = None
+    # For ablation_prompt_plot
+    sampling_dirnames: list[str] | None = None
     detector_alpha: float = 0.05
     results_alpha: float = 0.05
     compute_pvalue: bool = False
