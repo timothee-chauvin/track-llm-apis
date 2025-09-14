@@ -21,14 +21,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
 
 
-class CusumAnalysisConfig(BaseModel):
-    warmup_period: int = 100
-    threshold_probability: float = 1e-5
-    ema_factor: float = 0.9
-
-
-class AnalysisConfig(BaseModel):
-    cusum: CusumAnalysisConfig = Field(default_factory=CusumAnalysisConfig)
+class AnalysisConfig(BaseSettings):
     device: str | None = "cuda" if torch.cuda.is_available() else None
 
 

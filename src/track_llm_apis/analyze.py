@@ -21,7 +21,7 @@ import plotly.tools as tls
 import statsmodels.api as sm
 from plotly.subplots import make_subplots
 from scipy import stats
-from scipy.stats import linregress, norm, shapiro
+from scipy.stats import linregress, shapiro
 from tqdm import tqdm
 
 from track_llm_apis.config import config
@@ -435,7 +435,6 @@ def plot_prob_histograms(after: datetime | None = None):
 def plot_top_token_logprobs_over_time(
     after: datetime | None = None,
     prompt: str | None = None,
-    with_cusum: bool = False,
     tables: list[str] | None = None,
 ):
     """Plot logprobs of top tokens over time for each prompt in each table.
@@ -443,7 +442,6 @@ def plot_top_token_logprobs_over_time(
     Args:
         after: Only plot data after this date.
         prompt: Only plot data for this prompt.
-        with_cusum: If True, plot the CUSUM change points (if any) detected for each token.
         tables: Only plot data for these tables.
     """
     data = get_db_data(after=after, tables=tables)
@@ -493,43 +491,6 @@ def plot_top_token_logprobs_over_time(
                     )
                 )
 
-            if with_cusum:
-                colorway = fig.layout.template.layout.colorway
-                detector = ProbCUSUM_Detector(
-                    warmup_period=analysis_config.cusum.warmup_period,
-                    threshold_probability=analysis_config.cusum.threshold_probability,
-                    ema_factor=analysis_config.cusum.ema_factor,
-                )
-                for i, token in enumerate(sorted_tokens):
-                    token_logprobs = all_token_logprobs[token]
-                    try:
-                        _, change_points = detector.detect_change_points(token_logprobs)
-                        if change_points:
-                            token_color = colorway[i % len(colorway)]
-                            for cp_date in change_points:
-                                fig.add_vline(
-                                    x=cp_date,
-                                    line_width=1,
-                                    line_dash="dash",
-                                    line_color=token_color,
-                                )
-                                fig.add_annotation(
-                                    x=cp_date,
-                                    y=0.98,
-                                    yref="paper",
-                                    text=f'"{token}"',
-                                    showarrow=False,
-                                    xanchor="left",
-                                    yanchor="top",
-                                    textangle=-90,
-                                    font=dict(size=10, color=token_color),
-                                )
-                    except ValueError as e:
-                        logger.debug(
-                            f"CUSUM not run for token '{token}' in plot for {table_name} "
-                            f"(prompt: {repr(p)}): {e}"
-                        )
-
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
             # Truncate prompt for title if it's too long
@@ -547,12 +508,6 @@ def plot_top_token_logprobs_over_time(
             stub = table_name.replace("/", "_").replace("#", "_")
             filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
             fig_dir = prompt_dir
-            if with_cusum:
-                fig_dir = (
-                    fig_dir
-                    / "cusum"
-                    / f"{analysis_config.cusum.warmup_period}_{analysis_config.cusum.threshold_probability:.1e}_ema={analysis_config.cusum.ema_factor}"
-                )
             os.makedirs(fig_dir, exist_ok=True)
             fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
             fig.write_html(fig_path)
@@ -826,268 +781,6 @@ def create_random_qq_plots(n_samples: int = 100):
     logger.info(f"Combined Q-Q plots saved as {num_pages} pages to {qq_plots_dir}")
 
 
-class ProbCUSUM_Detector:
-    # adapted from https://github.com/giobbu/CUSUM
-    """
-    A class to detect change points in sequential data using the Probabilistic Cumulative Sum (CUSUM) algorithm.
-
-    Example:
-    ```
-    detector = ProbCUMSUM_Detector(warmup_period=10, threshold_probability=0.001)
-    data = [10.2, 11.5, 12.6, 12.8, 12.9, 13.2, 12.7, 12.5, 12.3, 12.9, 25.0, 12.2, 11.8, 10.5, 10.1]
-    probabilities, change_points = detector.detect_change_points(data)
-    detector.plot_change_points(data, change_points, probabilities)
-    ```
-    """
-
-    def __init__(self, warmup_period=10, threshold_probability=0.001, ema_factor=1):
-        """
-        Initializes the Probabilistic CUSUM Detector with the specified parameters.
-
-        Parameters:
-        - warmup_period (int): The number of initial observations before starting to detect change points. Default is 10.
-        - threshold_probability (float): The threshold probability below which a change point is detected. Default is 0.001.
-        - ema_factor (float): The exponential moving average factor for the running sum. Default is 1.
-        """
-
-        if not isinstance(warmup_period, int) or warmup_period < 10:
-            raise ValueError("warmup_period must be equal or greater than 10.")
-        if (
-            not isinstance(threshold_probability, float)
-            or threshold_probability <= 0
-            or threshold_probability >= 1
-        ):
-            raise ValueError("threshold_probability must be a float between 0 and 1.")
-
-        self.warmup_period = warmup_period
-        self.threshold_probability = threshold_probability
-        self.ema_factor = ema_factor
-        self.running_sum = 0  # Initialize running sum of standardized observations
-        self._reset()
-
-    def predict_next(self, observation):
-        """
-        Predicts the probability of a change point in the next observation.
-
-        Parameters:
-        - observation (float): The next observation in the sequence.
-
-        Returns:
-        - probability (float): The probability of a change point in the next observation.
-        - is_changepoint (bool): True if a change point is detected, False otherwise.
-        """
-        self._update_data(observation)
-        if self.current_t == self.warmup_period:
-            self._init_params()
-        if self.current_t > self.warmup_period:
-            probability, is_changepoint = self._detect_changepoint()
-            if is_changepoint:
-                self._reset()
-            return (1 - probability), is_changepoint
-        else:
-            return 0, False
-
-    def _reset(self) -> None:
-        """
-        Resets the internal state of the detector.
-        """
-        self.current_t = 0
-        self.observations = []
-        self.mean_observation = None
-        self.std_dev_observation = None
-        self.running_sum = 0  # Reset running sum
-
-    def _update_data(self, observation) -> None:
-        """
-        Updates the internal state with a new observation.
-
-        Parameters:
-        - observation (float): The new observation to be added.
-        """
-        self.current_t += 1
-        self.observations.append(observation)
-
-    def _init_params(self) -> None:
-        """
-        Initializes the mean and standard deviation of observations.
-        """
-
-        if len(self.observations) < 2:
-            raise ValueError("At least two observations are needed to initialize parameters.")
-
-        self.mean_observation = np.nanmean(np.array(self.observations))
-        self.std_dev_observation = np.nanstd(np.array(self.observations))
-
-    def _detect_changepoint(self):
-        """
-        Detects a change point using the CUSUM algorithm.
-
-        Returns:
-        - probability (float): The probability of a change point.
-        - is_changepoint (bool): True if a change point is detected, False otherwise.
-        """
-        self.running_sum *= self.ema_factor
-        self.running_sum += self.observations[-1] - self.mean_observation
-
-        standardized_sum = self.running_sum / (self.std_dev_observation * self.current_t**0.5)
-        probability = float(self._calculate_probability(standardized_sum))
-        # print(
-        #     f"t={self.current_t} mean={self.mean_observation:.3f} std={self.std_dev_observation:.3f} new diff={self.observations[-1] - self.mean_observation:.3f} running_sum={self.running_sum:.3f} standardized_sum={standardized_sum:.3f} Probability: {probability:.3e}"
-        # )
-        # if probability < self.threshold_probability:
-        #     print("=" * 100)
-        #     print(f"CHANGEPOINT DETECTED! t={self.current_t} Probability: {probability}")
-        #     print("=" * 100)
-        return probability, probability < self.threshold_probability
-
-    def _calculate_probability(self, standardized_sum) -> bool:
-        """
-        Calculates the probability (p-value) of a change point.
-
-        Parameters:
-        - standardized_sum (float): The standardized sum of observations.
-
-        Returns:
-        - probability (float): The probability of a change point.
-        * low probability indicates a change point (reject the null hypothesis).
-        * high probability indicates no change point (not able to reject the null hypothesis).
-        """
-        probability = 2 * norm.sf(np.abs(standardized_sum))
-        return probability
-
-    def detect_change_points(self, token_logprobs: TokenLogprobs):
-        """
-        Detects change points in the given data using the CUSUM detector.
-
-        Parameters:
-        - token_logprobs: TokenLogprobs
-            TokenLogprobs object containing logprobs and dates to be analyzed.
-
-        Returns:
-        - probabilities: numpy array
-            Probability values for each data point.
-        - change_points: list[datetime]
-            Detected change points dates.
-        """
-        data = np.array(
-            [p if p is not None else float("nan") for p in token_logprobs.logprobs], dtype=float
-        )
-        dates = token_logprobs.dates
-
-        if len(data) < self.warmup_period:
-            raise ValueError("Data length must be greater than or equal to warmup_period.")
-
-        self._reset()
-        results = [
-            self.predict_next(point) if not math.isnan(point) else (0, False) for point in data
-        ]
-        probabilities = np.array([result[0] for result in results])
-        is_drift = np.array([result[1] for result in results])
-        change_point_indices = np.where(is_drift)[0]
-
-        change_point_dates = [dates[i] for i in change_point_indices]
-
-        return probabilities, change_point_dates
-
-    def plot_change_points(
-        self,
-        token_logprobs: TokenLogprobs,
-        change_points: list[datetime],
-        probabilities: np.ndarray,
-        title: str | None = None,
-    ):
-        """
-        Plots data with detected change points and probabilities.
-
-        Parameters:
-        - token_logprobs: TokenLogprobs
-            TokenLogprobs object containing dates and logprobs.
-        - change_points: list
-            List of detected change points (datetimes).
-        - probabilities: np.ndarray
-            List of probabilities associated with each data point.
-        """
-        data = np.array([p if p is not None else np.nan for p in token_logprobs.logprobs])
-        dates = token_logprobs.dates
-
-        plt.figure(figsize=(20, 8))
-        # Plot the data
-        plt.subplot(2, 1, 1)
-        plt.plot(dates, data, color="blue", label="Data", linestyle="--")
-
-        if len(change_points) != 0:
-            for cp in change_points:
-                plt.axvline(
-                    cp,
-                    color="red",
-                    linestyle="dashed",
-                    lw=2,
-                    label="Change Points" if cp == change_points[0] else None,
-                )
-        plt.xlabel("Time")
-        plt.ylabel("Value")
-        plt.title(title or "Sequential Probabilistic CUSUM Change Point Detection")
-        plt.legend()
-        plt.grid(True)
-        # Plot the probabilities
-        plt.subplot(2, 1, 2)
-        plt.axhline(
-            (1 - self.threshold_probability), color="red", alpha=0.5, linestyle="dashed", lw=2
-        )
-        plt.plot(dates, probabilities, color="gray", alpha=0.5, label="Alert Probability")
-        if len(change_points) != 0:
-            for cp in change_points:
-                plt.axvline(
-                    cp,
-                    color="red",
-                    alpha=0.5,
-                    linestyle="dashed",
-                    lw=2,
-                    label="Change Points" if cp == change_points[0] else None,
-                )
-        plt.xlabel("Time")
-        plt.ylabel("Alert Probability")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig(
-            config.plots_dir / f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_change_points.png"
-        )
-        plt.close()
-
-
-def run_cusum(warmup_period: int, threshold_probability: float):
-    data = get_db_data()
-    count_no_change = 0
-    count_change = 0
-    for table_name, endpoint_data in tqdm(data.items()):
-        prompts = set([response.prompt for response in endpoint_data])
-        for prompt in list(prompts)[:1]:
-            logprobs_by_token = get_token_logprobs(endpoint_data, prompt, missing_policy="min")
-            for token, token_logprobs in list(logprobs_by_token.items())[:1]:
-                if len(token_logprobs.logprobs) < warmup_period:
-                    continue
-                detector = ProbCUSUM_Detector(
-                    warmup_period=warmup_period, threshold_probability=threshold_probability
-                )
-                probs, change_points = detector.detect_change_points(token_logprobs)
-                if change_points:
-                    print(
-                        f"Endpoint: {table_name} Token: {repr(token)} Prompt: {repr(prompt)} Change points: {change_points}"
-                    )
-                    count_change += 1
-                    detector.plot_change_points(
-                        token_logprobs,
-                        change_points,
-                        probs,
-                        title=f"{table_name} prompt={repr(prompt)} token={repr(token)}",
-                    )
-                else:
-                    count_no_change += 1
-        print(f"Count no change: {count_no_change}")
-        print(f"Count change: {count_change}")
-
-
 if __name__ == "__main__":
     random.seed(1)
     # equivalence_classes()
@@ -1098,8 +791,7 @@ if __name__ == "__main__":
     # plot_top_token_logprobs_over_time()
     # test_normality_shapiro()
     # create_random_qq_plots()
-    # run_cusum(warmup_period=100, threshold_probability=1e-5)
     # plot_top_token_logprobs_over_time(
-    #     with_cusum=True, prompt="\x06P\x1dz\x13ZTq", tables=["openai#gpt-4.1-nano"]
+    #     prompt="\x06P\x1dz\x13ZTq", tables=["openai#gpt-4.1-nano"]
     # )
-    plot_top_token_logprobs_over_time(with_cusum=True)
+    plot_top_token_logprobs_over_time()
