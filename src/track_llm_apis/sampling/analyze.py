@@ -440,6 +440,7 @@ def evaluate_detectors(
     prompts = data.references_dict["prompt"]
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
 
+    logger.info("Getting rows by variant...")
     rows_by_variant = {
         source: UncompressedOutput.from_compressed_output(
             data, keep_datasource=source
@@ -815,6 +816,7 @@ if __name__ == "__main__":
 
     if analysis_config.experiment in ["baseline", "ablation_prompt"]:
         output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
+        logger.info(f"Obtaining data from {output_dir}...")
         compressed_output = CompressedOutput.from_json(output_dir)
         print(compressed_output.model_name)
         print(f"number of rows: {len(compressed_output.rows)}")
