@@ -7,7 +7,7 @@ from jaxtyping import Float
 from torch import Tensor
 
 from track_llm_apis.config import config
-from track_llm_apis.sampling.common import OutputRow, TwoSampleTestResult
+from track_llm_apis.sampling.common import CompressedOutputRow, TwoSampleTestResult
 
 
 def frozenlist(li: list) -> FrozenList:
@@ -55,8 +55,8 @@ def get_seen_tokens(
 
 
 def logprob_two_sample_test(
-    sample1: dict[str, list[OutputRow]],
-    sample2: dict[str, list[OutputRow]],
+    sample1: dict[str, list[CompressedOutputRow]],
+    sample2: dict[str, list[CompressedOutputRow]],
     b: int = 1000,
     compute_pvalue: bool = True,
     **kwargs,

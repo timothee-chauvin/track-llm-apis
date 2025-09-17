@@ -5,7 +5,7 @@ from jaxtyping import Bool, Float
 from torch import Tensor
 
 from track_llm_apis.config import config
-from track_llm_apis.sampling.common import OutputRow, TwoSampleTestResult
+from track_llm_apis.sampling.common import CompressedOutputRow, TwoSampleTestResult
 from track_llm_apis.util import mmlu_answer_to_choice, mmlu_prompt_to_question
 
 
@@ -18,8 +18,8 @@ def is_correct(prompt: str, text: str) -> bool:
 
 
 def mmlu_two_sample_test(
-    rows_subset: dict[str, list[OutputRow]],
-    unchanged_rows_subset: dict[str, list[OutputRow]],
+    rows_subset: dict[str, list[CompressedOutputRow]],
+    unchanged_rows_subset: dict[str, list[CompressedOutputRow]],
     b: int = 1000,
     compute_pvalue: bool = True,
     **kwargs,

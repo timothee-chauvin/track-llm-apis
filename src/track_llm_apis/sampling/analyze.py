@@ -20,11 +20,10 @@ from track_llm_apis.sampling.analyze_mmlu import mmlu_two_sample_test
 from track_llm_apis.sampling.common import (
     CIResult,
     CompressedOutput,
+    CompressedOutputRow,
     DataSource,
-    OutputRow,
     TwoSampleMultiTestResultMultiROC,
     TwoSampleMultiTestResultROC,
-    UncompressedOutput,
 )
 from track_llm_apis.tinychange import TinyChange
 from track_llm_apis.util import slugify, trim_to_length
@@ -162,7 +161,7 @@ def plot_logprobs_over_time(
 
 
 def prompt_rows_dict_to_completion_sample(
-    prompt_rows_dict: dict[str, list[OutputRow]], tokenizer: PreTrainedTokenizerBase
+    prompt_rows_dict: dict[str, list[CompressedOutputRow]], tokenizer: PreTrainedTokenizerBase
 ) -> CompletionSample:
     prompts_list = []
     completions_list = []
@@ -183,8 +182,8 @@ def prompt_rows_dict_to_completion_sample(
 
 
 def gao2025_two_sample_test(
-    rows_subset: dict[str, list[OutputRow]],
-    unchanged_rows_subset: dict[str, list[OutputRow]],
+    rows_subset: dict[str, list[CompressedOutputRow]],
+    unchanged_rows_subset: dict[str, list[CompressedOutputRow]],
     tokenizer: PreTrainedTokenizerBase,
     compute_pvalue: bool = True,
     b: int = 1000,
@@ -196,8 +195,8 @@ def gao2025_two_sample_test(
 
 def evaluate_detectors_on_variant(
     source: DataSource,
-    rows1: dict[str, list[OutputRow]],
-    rows2: dict[str, list[OutputRow]],
+    rows1: dict[str, list[CompressedOutputRow]],
+    rows2: dict[str, list[CompressedOutputRow]],
     same: bool,
     prompt_length: dict[str, int],
     tokenizer: PreTrainedTokenizerBase | None = None,
@@ -436,22 +435,21 @@ def evaluate_detectors(
 
     print(f"{sources=}")
     print(f"{data.model_name=}")
-    variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
-    prompts = data.references_dict["prompt"]
+    variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
+    prompts = list(data.references.prompts.keys())
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
 
+    logger.info("Splitting data by source...")
+    data_by_source = {source: data.filter(keep_datasource=source) for source in sources}
+
     logger.info("Getting rows by variant...")
-    rows_by_variant = {
-        source: UncompressedOutput.from_compressed_output(
-            data, keep_datasource=source
-        ).rows_by_variant()
-        for source in sources
-    }
+    rows_by_variant = {source: data_by_source[source].get_rows_by_variant() for source in sources}
     unchanged_rows = {
         source: rows_by_variant[source][TinyChange.unchanged_str()] for source in sources
     }
     unchanged_rows_by_prompt = {
-        source: UncompressedOutput.rows_by_prompt(unchanged_rows[source]) for source in sources
+        source: data_by_source[source].get_rows_by_prompt(unchanged_rows[source])
+        for source in sources
     }
 
     start_time = time.time()
@@ -473,14 +471,14 @@ def evaluate_detectors(
     }
     variant_results = {}
     for variant_idx, variant in enumerate(variants):
-        print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
+        logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
         roc_curves = {}
         roc_auc_ci = {}
         variant_results[variant] = {}
         analysis_results[variant] = {}
         for source in sources:
             variant_rows = rows_by_variant[source][variant]
-            rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
+            rows_by_prompt = data_by_source[source].get_rows_by_prompt(variant_rows)
             assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt[source].keys())
             results = evaluate_detectors_on_variant(
                 source,
@@ -606,15 +604,14 @@ def ablation_influence_of_prompt(
 ):
     """Test the influence of the prompt choice on detection performance for the logprob method."""
     source = DataSource.US
-    rows_by_variant = UncompressedOutput.from_compressed_output(
-        data, keep_datasource=source
-    ).rows_by_variant()
+    filtered_data = data.filter(keep_datasource=source)
+    rows_by_variant = filtered_data.get_rows_by_variant()
     unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
-    unchanged_rows_by_prompt = UncompressedOutput.rows_by_prompt(unchanged_rows)
+    unchanged_rows_by_prompt = filtered_data.get_rows_by_prompt(unchanged_rows)
 
     prompt_length = {
         prompt: tokens
-        for prompt, tokens in data.references_dict["prompt"]
+        for prompt, tokens in filtered_data.references.prompts.keys()
         if prompt in unchanged_rows_by_prompt
     }
     prompts = list(prompt_length.keys())
@@ -630,7 +627,7 @@ def ablation_influence_of_prompt(
             "used_tokens": prompt_length,
         }
     }
-    variants = [v for v in data.references_dict["variant"] if v != TinyChange.unchanged_str()]
+    variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
     results_original = {
         prompt: evaluate_detectors_on_variant(
             source,
@@ -654,7 +651,7 @@ def ablation_influence_of_prompt(
         variant_results[variant] = {}
         analysis_results[variant] = {}
         variant_rows = rows_by_variant[variant]
-        rows_by_prompt = UncompressedOutput.rows_by_prompt(variant_rows)
+        rows_by_prompt = filtered_data.get_rows_by_prompt(variant_rows)
         for prompt in prompts:
             assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
             results = evaluate_detectors_on_variant(
@@ -817,11 +814,12 @@ if __name__ == "__main__":
     if analysis_config.experiment in ["baseline", "ablation_prompt"]:
         output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
         logger.info(f"Obtaining data from {output_dir}...")
-        compressed_output = CompressedOutput.from_json(output_dir)
+        compressed_output = CompressedOutput.from_json_dir(output_dir)
         print(compressed_output.model_name)
         print(f"number of rows: {len(compressed_output.rows)}")
-        for ref in compressed_output.references:
-            print(f"length of field '{ref.row_attr}': {len(ref.elems)}")
+        for ref_attr in compressed_output.references.__dict__.keys():
+            ref = getattr(compressed_output.references, ref_attr)
+            print(f"length of field '{ref_attr}': {len(ref)}")
     if analysis_config.experiment == "baseline":
         evaluate_detectors(
             directory=output_dir,

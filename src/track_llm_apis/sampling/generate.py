@@ -16,7 +16,7 @@ from vllm import LLM, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
 
 from track_llm_apis.config import DeviceConfig, config
-from track_llm_apis.sampling.common import CompressedOutput, DataSource, OutputRow
+from track_llm_apis.sampling.common import CompressedOutput, DataSource
 from track_llm_apis.tinychange import TinyChange, TinyChangeConfig
 from track_llm_apis.util import (
     available_gpu_memory_fraction,
@@ -143,18 +143,16 @@ def vllm_inference(
     temperature: float | int,
     variant: str,
     source: DataSource,
-) -> list[OutputRow]:
+    compressed_output: CompressedOutput,
+):
     sampling_params = SamplingParams(
         n=n_samples,
         max_tokens=max_tokens,
         temperature=temperature,
     )
     outputs = llm.generate(prompts, sampling_params, use_tqdm=config.sampling.vllm_use_tqdm)
-    return [
-        row
-        for output in outputs
-        for row in OutputRow.from_request_output(output, variant=variant, source=source)
-    ]
+    for output in outputs:
+        compressed_output.add_batch_from_request_output(output, variant=variant, source=source)
 
 
 def vllm_inference_random_traffic(
@@ -168,9 +166,10 @@ def vllm_inference_random_traffic(
     logprobs_topk: int,
     variant: str,
     source: DataSource,
-) -> list[OutputRow]:
+    compressed_output: CompressedOutput,
+):
     """
-    Return `n_samples` completions for the first `max_tokens` inference tokens of a list of prompts mixed with random traffic.
+    Add `n_samples` completions for the first `max_tokens` inference tokens of a list of prompts mixed with random traffic to the compressed output.
 
     Args:
         llm: initialized vLLM model
@@ -181,6 +180,7 @@ def vllm_inference_random_traffic(
         max_tokens: Number of output tokens to generate
         temperature: Sampling temperature
         logprobs_topk: Number of logprobs to return per token position
+        compressed_output: Compressed output to add the completions to
     """
     if max_tokens > 1:
         raise NotImplementedError("max_tokens > 1 not implemented wrt saving (see OutputRow)")
@@ -190,7 +190,6 @@ def vllm_inference_random_traffic(
         temperature=temperature,
         logprobs=logprobs_topk,
     )
-    results = []
     # Generate a new random batch for each sample.
     for _ in range(n_samples):
         # choices: with replacement (traffic prompts can be repeated).
@@ -207,12 +206,9 @@ def vllm_inference_random_traffic(
         outputs = llm.generate(batch_prompts, sampling_params)
         for i, prompt in enumerate(prompts):
             prompt_position = prompt_positions[i]
-            results.extend(
-                OutputRow.from_request_output(
-                    outputs[prompt_position], variant=variant, source=source
-                )
+            compressed_output.add_batch_from_request_output(
+                outputs[prompt_position], variant=variant, source=source
             )
-    return results
 
 
 async def main():
@@ -319,7 +315,7 @@ async def main():
             load_model_to_vllm(llm, variant.model)
 
             # Model Equality Testing: Which Model Is This API Serving?
-            results = vllm_inference(
+            vllm_inference(
                 llm=llm,
                 prompts=[format_wikipedia_prompt(item) for item in wikipedia],
                 n_samples=n_samples,
@@ -327,13 +323,11 @@ async def main():
                 temperature=gao2025_config.temperature,
                 variant=variant_name,
                 source=DataSource.GAO2025,
+                compressed_output=compressed_output,
             )
 
-            for row in results:
-                compressed_output.add_row(row)
-
             # MMLU
-            results = vllm_inference(
+            vllm_inference(
                 llm=llm,
                 prompts=[format_mmlu_prompt(cast(dict, item)) for item in mmlu],
                 n_samples=n_samples,
@@ -341,13 +335,11 @@ async def main():
                 temperature=mmlu_config.temperature,
                 variant=variant_name,
                 source=DataSource.MMLU,
+                compressed_output=compressed_output,
             )
 
-            for row in results:
-                compressed_output.add_row(row)
-
             # Our prompts
-            results = vllm_inference_random_traffic(
+            vllm_inference_random_traffic(
                 llm=llm,
                 prompts=prompts,
                 other_prompts=logprob_config.other_prompts,
@@ -358,14 +350,13 @@ async def main():
                 logprobs_topk=logprob_config.topk,
                 variant=variant_name,
                 source=DataSource.US,
+                compressed_output=compressed_output,
             )
             inference_time = time.time() - inference_start
             inference_time_str = str(timedelta(seconds=inference_time))
             total_inference_time += inference_time
             total_inference_time_str = str(timedelta(seconds=total_inference_time))
             logger.info(f"Inference time: {inference_time_str}")
-            for row in results:
-                compressed_output.add_row(row)
 
             # Free up model weights and KV cache from vLLM memory
             if config.sampling.vllm_enable_sleep_mode:

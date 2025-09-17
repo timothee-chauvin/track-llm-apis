@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Any, Self
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sklearn.metrics import roc_auc_score, roc_curve
 from vllm import RequestOutput
 
-from track_llm_apis.util import fast_hash, slugify
+from track_llm_apis.config import config
+from track_llm_apis.util import slugify
+
+logger = config.logger
 
 
 class DataSource(Enum):
@@ -20,26 +23,173 @@ class DataSource(Enum):
     GAO2025 = 2
 
 
-class OutputRow(BaseModel):
-    variant: str
-    source: DataSource
-    # (prompt, input_tokens)
-    prompt: tuple[str, int]
-    # (text, output_tokens)
-    text: tuple[str, int]
-    logprobs: list[dict[int, float]] | None = None
+class References:
+    def __init__(self):
+        # Dictionaries mapping element => index of the element in the dictionary
+        # which preserves insertion order
+        self.variants: dict[str, int] = {}
+        # (prompt, input_tokens)
+        self.prompts: dict[tuple[str, int], int] = {}
+        # (text, output_tokens)
+        self.texts: dict[tuple[str, int], int] = {}
+        self.logprobs: dict[str, int] = {}
+        # Cache for the ordered keys of the dictionaries, for lookup by index
+        self._cache = {}
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "variants": list(self.variants.keys()),
+            "prompts": list(self.prompts.keys()),
+            "texts": list(self.texts.keys()),
+            "logprobs": list(self.logprobs.keys()),
+        }
 
     @classmethod
-    def from_request_output(
-        cls, request_output: RequestOutput, variant: str, source: DataSource
-    ) -> list["OutputRow"]:
+    def from_json(cls, json_data: dict[str, Any]) -> Self:
+        instance = cls.__new__(cls)
+        instance.variants = {variant: i for i, variant in enumerate(json_data["variants"])}
+        instance.prompts = {prompt: i for i, prompt in enumerate(json_data["prompts"])}
+        instance.texts = {text: i for i, text in enumerate(json_data["texts"])}
+        instance.logprobs = {logprobs: i for i, logprobs in enumerate(json_data["logprobs"])}
+        instance._cache = {}
+        return instance
+
+    def _get_keys(self, attr_name: str) -> list[Any]:
+        if attr_name not in self._cache:
+            self._cache[attr_name] = list(getattr(self, attr_name).keys())
+        return self._cache[attr_name]
+
+    def _invalidate_cache(self, attr_name: str):
+        self._cache.pop(attr_name, None)
+
+    def get_variant(self, variant_idx: int) -> str:
+        return self._get_keys("variants")[variant_idx]
+
+    def get_prompt(self, prompt_idx: int) -> tuple[str, int]:
+        return self._get_keys("prompts")[prompt_idx]
+
+    def get_text(self, text_idx: int) -> tuple[str, int]:
+        return self._get_keys("texts")[text_idx]
+
+    def get_logprobs(self, logprobs_idx: int) -> list[dict[int, float]]:
+        raw = json.loads(self._get_keys("logprobs")[logprobs_idx])
+        return [{int(k): v for k, v in lp.items()} for lp in raw]
+
+    def add_variant(self, variant: str) -> int:
+        if variant not in self.variants:
+            self.variants[variant] = len(self.variants)
+            self._invalidate_cache("variants")
+        return self.variants[variant]
+
+    def add_prompt(self, prompt: tuple[str, int]) -> int:
+        if prompt not in self.prompts:
+            self.prompts[prompt] = len(self.prompts)
+            self._invalidate_cache("prompts")
+        return self.prompts[prompt]
+
+    def add_text(self, text: tuple[str, int]) -> int:
+        if text not in self.texts:
+            self.texts[text] = len(self.texts)
+            self._invalidate_cache("texts")
+        return self.texts[text]
+
+    def add_logprobs(self, logprobs: list[dict[int, float]]) -> int:
+        logprobs_str = json.dumps(logprobs)
+        if logprobs_str not in self.logprobs:
+            self.logprobs[logprobs_str] = len(self.logprobs)
+            self._invalidate_cache("logprobs")
+        return self.logprobs[logprobs_str]
+
+
+class CompressedOutputRow:
+    def __init__(
+        self,
+        references: References,
+        source: int,
+        variant_idx: int,
+        prompt_idx: int,
+        text_idx: int,
+        logprobs_idx: int | None = None,
+    ):
+        """Initialization from indices"""
+        self.references = references
+        self.source = source
+        self.variant_idx = variant_idx
+        self.prompt_idx = prompt_idx
+        self.text_idx = text_idx
+        self.logprobs_idx = logprobs_idx
+
+    @classmethod
+    def from_values(
+        cls,
+        references: References,
+        source: int,
+        variant: str,
+        prompt: tuple[str, int],
+        text: tuple[str, int],
+        logprobs: list[dict[int, float]] | None = None,
+    ):
+        """Initialization from values, adding to the references if necessary."""
+        instance = cls.__new__(cls)
+        instance.references = references
+        instance.source = source
+        instance.variant_idx = references.add_variant(variant)
+        instance.prompt_idx = references.add_prompt(prompt)
+        instance.text_idx = references.add_text(text)
+        instance.logprobs_idx = references.add_logprobs(logprobs) if logprobs is not None else None
+        return instance
+
+    def to_json(self) -> tuple[int, int, int, int, int | None]:
+        return (self.source, self.variant_idx, self.prompt_idx, self.text_idx, self.logprobs_idx)
+
+    @classmethod
+    def from_json(cls, references: References, json_data: Sequence[int | None]) -> Self:
+        """This function assumes that the references are already up-to-date."""
+        return cls(
+            references=references,
+            source=json_data[0],
+            variant_idx=json_data[1],
+            prompt_idx=json_data[2],
+            text_idx=json_data[3],
+            logprobs_idx=json_data[4],
+        )
+
+    @property
+    def variant(self) -> str:
+        return self.references.get_variant(self.variant_idx)
+
+    @property
+    def prompt(self) -> tuple[str, int]:
+        return self.references.get_prompt(self.prompt_idx)
+
+    @property
+    def text(self) -> tuple[str, int]:
+        return self.references.get_text(self.text_idx)
+
+    @property
+    def logprobs(self) -> list[dict[int, float]] | None:
+        if self.logprobs_idx is None:
+            return None
+        return self.references.get_logprobs(self.logprobs_idx)
+
+
+class CompressedOutput:
+    def __init__(self, model_name: str, gpus: list[str] | None = None):
+        self.model_name: str = model_name
+        # GPUs used during sampling
+        self.gpus: list[str] | None = gpus
+        self.rows: list[CompressedOutputRow] = []
+        self.references: References = References()
+
+    def add_batch_from_request_output(
+        self, request_output: RequestOutput, variant: str, source: DataSource
+    ):
         prompt_length = (
             len(request_output.prompt_token_ids)
             if request_output.prompt_token_ids is not None
             else 0
         )
         prompt = (request_output.prompt or "", prompt_length)
-        rows = []
         for output in request_output.outputs:
             if output.logprobs is None:
                 logprobs_dicts = None
@@ -47,106 +197,78 @@ class OutputRow(BaseModel):
                 logprobs_dicts = [
                     {int(k): v.logprob for k, v in logprobs.items()} for logprobs in output.logprobs
                 ]
-            rows.append(
-                cls(
-                    variant=variant,
+            self.rows.append(
+                CompressedOutputRow.from_values(
+                    references=self.references,
                     source=source,
+                    variant=variant,
                     prompt=prompt,
                     text=(output.text, len(output.token_ids)),
                     logprobs=logprobs_dicts,
                 )
             )
-        return rows
 
-
-class CompressedOutputRow(BaseModel):
-    source: int
-    variant_idx: int
-    prompt_idx: int
-    text_idx: int
-    logprobs_idx: int | None = None
-
-    def to_json(self) -> tuple[int, int, int, int, int | None]:
-        return (self.source, self.variant_idx, self.prompt_idx, self.text_idx, self.logprobs_idx)
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "model_name": self.model_name,
+            "gpus": self.gpus,
+            "rows": [row.to_json() for row in self.rows],
+            "references": self.references.to_json(),
+        }
 
     @classmethod
-    def from_json(cls, json_data: Sequence[int | None]) -> Self:
-        return cls(**dict(zip(cls.__annotations__, json_data)))
+    def from_json(cls, json_data: dict[str, Any]) -> Self:
+        if not hasattr(json_data, "version"):
+            # v0
+            logger.info("Loading compressed output v0...")
+            return cls._from_json_v0(json_data)
+        if json_data["version"] == 1:
+            logger.info("Loading compressed output v1...")
+            return cls._from_json_v1(json_data)
+        raise ValueError(f"Unknown version: {json_data['version']}")
 
+    @classmethod
+    def _from_json_v0(cls, json_data: dict[str, Any]) -> Self:
+        json_references = json_data["references"]
+        references = References.__new__(References)
+        references.variants = {variant: i for i, variant in enumerate(json_references["variant"])}
+        references.prompts = {
+            tuple(prompt): i for i, prompt in enumerate(json_references["prompt"])
+        }
+        references.texts = {tuple(text): i for i, text in enumerate(json_references["text"])}
+        references.logprobs = {
+            json.dumps(logprobs): i for i, logprobs in enumerate(json_references["logprobs"])
+        }
+        references._cache = {}
 
-class Reference(BaseModel):
-    row_attr: str
-    elems: list[Any] = Field(default_factory=list)
-    hash_to_idx: dict[str, int] = Field(default_factory=dict)
+        result = cls.__new__(cls)
+        result.model_name = json_data["model_name"]
+        result.gpus = json_data.get("gpus", None)
+        result.rows = [CompressedOutputRow.from_json(references, row) for row in json_data["rows"]]
+        result.references = references
+        return result
 
-    _ROW_ATTR_TO_COMPRESSED_ROW_ATTR = {
-        "variant": "variant_idx",
-        "prompt": "prompt_idx",
-        "text": "text_idx",
-        "logprobs": "logprobs_idx",
-    }
-
-    @property
-    def compressed_row_attr(self) -> str:
-        return self._ROW_ATTR_TO_COMPRESSED_ROW_ATTR[self.row_attr]
-
-
-class CompressedOutput(BaseModel):
-    model_name: str
-    # GPUs used during sampling
-    gpus: list[str] | None = None
-    rows: list[CompressedOutputRow] = Field(default_factory=list)
-    references: list[Reference] = Field(
-        default_factory=lambda: [
-            Reference(row_attr="variant"),
-            Reference(row_attr="prompt"),
-            Reference(row_attr="text"),
-            Reference(row_attr="logprobs"),
-        ]
-    )
-
-    @property
-    def references_dict(self) -> dict[str, list[Any]]:
-        return {ref.row_attr: ref.elems for ref in self.references}
-
-    def add_row(self, row: OutputRow):
-        compressed_row_kwargs = {"source": row.source.value}
-        for ref in self.references:
-            elem = row.__getattribute__(ref.row_attr)
-            if elem is None:
-                assert ref.row_attr == "logprobs"  # only logprobs can be None
-                compressed_row_kwargs[ref.compressed_row_attr] = None
-                continue
-
-            if isinstance(elem, str):
-                elem_hash = fast_hash(elem)
-            else:
-                elem_hash = fast_hash(json.dumps(elem))
-            elem_hash = fast_hash(str(elem))
-            elem_idx = ref.hash_to_idx.get(elem_hash, None)
-            if elem_idx is None:
-                # This element isn't stored yet
-                elem_idx = len(ref.elems)
-                ref.elems.append(elem)
-                ref.hash_to_idx[elem_hash] = elem_idx
-            compressed_row_kwargs[ref.compressed_row_attr] = elem_idx
-
-        self.rows.append(CompressedOutputRow(**compressed_row_kwargs))
+    @classmethod
+    def _from_json_v1(cls, json_data: dict[str, Any]) -> Self:
+        references = References.from_json(json_data["references"])
+        result = cls.__new__(cls)
+        result.model_name = json_data["model_name"]
+        result.gpus = json_data.get("gpus", None)
+        result.rows = [CompressedOutputRow.from_json(references, row) for row in json_data["rows"]]
+        result.references = references
+        return result
 
     def dump_json(self, output_dir: Path):
         output_dir.mkdir(parents=True, exist_ok=True)
         json_filename = f"{slugify(self.model_name, max_length=200, hash_length=0)}.json.gz"
         json_path = output_dir / json_filename
-        json_dict = {
-            "model_name": self.model_name,
-            "rows": [row.to_json() for row in self.rows],
-            "references": {ref.row_attr: ref.elems for ref in self.references},
-        }
+        json_dict = self.to_json()
         with gzip.open(json_path, "wt") as f:
             json.dump(json_dict, f, separators=(",", ":"), ensure_ascii=False)
 
     @classmethod
-    def from_json(cls, json_dir: Path) -> Self:
+    def from_json_dir(cls, json_dir: Path) -> Self:
         # Find the only .json.gz file in the directory
         json_paths = list(json_dir.glob("*.json.gz"))
         if len(json_paths) != 1:
@@ -154,58 +276,33 @@ class CompressedOutput(BaseModel):
         json_path = json_paths[0]
         with gzip.open(json_path, "rt") as f:
             json_dict = json.load(f)
-        return cls(
-            model_name=json_dict["model_name"],
-            rows=[CompressedOutputRow.from_json(row) for row in json_dict["rows"]],
-            references=[
-                Reference(row_attr=name, elems=elems)
-                for name, elems in json_dict["references"].items()
-            ],
-        )
+        return cls.from_json(json_dict)
 
-
-class UncompressedOutput(BaseModel):
-    model_name: str
-    rows: list[OutputRow] = Field(default_factory=list)
-
-    @staticmethod
-    def from_compressed_output(
-        compressed_output: CompressedOutput, keep_datasource: DataSource | None
-    ) -> Self:
-        rows = []
-        _indices = {
-            "variant": 0,
-            "prompt": 1,
-            "text": 2,
-            "logprobs": 3,
-        }
-        for row in compressed_output.rows:
-            if keep_datasource is not None and row.source != keep_datasource.value:
-                continue
-            variant = compressed_output.references[_indices["variant"]].elems[row.variant_idx]
-            prompt = compressed_output.references[_indices["prompt"]].elems[row.prompt_idx]
-            text = compressed_output.references[_indices["text"]].elems[row.text_idx]
-            if row.logprobs_idx is None:
-                logprobs = None
-            else:
-                logprobs = compressed_output.references[_indices["logprobs"]].elems[
-                    row.logprobs_idx
-                ]
-            rows.append(
-                OutputRow(
-                    variant=variant, source=row.source, prompt=prompt, text=text, logprobs=logprobs
+    def filter(self, keep_datasource: DataSource) -> Self:
+        """Return a new CompressedOutput with only the rows for the given datasource."""
+        new_compressed_output = self.__class__(model_name=self.model_name, gpus=self.gpus)
+        for row in self.rows:
+            if row.source == keep_datasource.value:
+                new_compressed_output.rows.append(
+                    CompressedOutputRow.from_values(
+                        references=new_compressed_output.references,
+                        source=row.source,
+                        variant=row.variant,
+                        prompt=row.prompt,
+                        text=row.text,
+                        logprobs=row.logprobs,
+                    )
                 )
-            )
-        return UncompressedOutput(model_name=compressed_output.model_name, rows=rows)
+        return new_compressed_output
 
-    def rows_by_variant(self) -> dict[str, list[OutputRow]]:
+    def get_rows_by_variant(self) -> dict[str, list[CompressedOutputRow]]:
         rows_by_variant = defaultdict(list)
         for row in self.rows:
             rows_by_variant[row.variant].append(row)
-        return rows_by_variant
+        return dict(rows_by_variant)
 
     @staticmethod
-    def rows_by_prompt(rows: list[OutputRow]) -> dict[str, list[OutputRow]]:
+    def get_rows_by_prompt(rows: list[CompressedOutputRow]) -> dict[str, list[CompressedOutputRow]]:
         rows_by_prompt = defaultdict(list)
         for row in rows:
             rows_by_prompt[row.prompt[0]].append(row)
