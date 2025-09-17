@@ -440,7 +440,7 @@ def evaluate_detectors(
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
 
     logger.info("Splitting data by source...")
-    data_by_source = {source: data.filter(keep_datasource=source) for source in sources}
+    data_by_source = {source: data.filter(datasource=source) for source in sources}
 
     logger.info("Getting rows by variant...")
     rows_by_variant = {source: data_by_source[source].get_rows_by_variant() for source in sources}
@@ -604,7 +604,7 @@ def ablation_influence_of_prompt(
 ):
     """Test the influence of the prompt choice on detection performance for the logprob method."""
     source = DataSource.US
-    filtered_data = data.filter(keep_datasource=source)
+    filtered_data = data.filter(datasource=source)
     rows_by_variant = filtered_data.get_rows_by_variant()
     unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
     unchanged_rows_by_prompt = filtered_data.get_rows_by_prompt(unchanged_rows)

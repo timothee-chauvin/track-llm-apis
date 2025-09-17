@@ -278,22 +278,32 @@ class CompressedOutput:
             json_dict = json.load(f)
         return cls.from_json(json_dict)
 
-    def filter(self, keep_datasource: DataSource) -> Self:
-        """Return a new CompressedOutput with only the rows for the given datasource."""
-        new_compressed_output = self.__class__(model_name=self.model_name, gpus=self.gpus)
-        for row in self.rows:
-            if row.source == keep_datasource.value:
-                new_compressed_output.rows.append(
-                    CompressedOutputRow.from_values(
-                        references=new_compressed_output.references,
-                        source=row.source,
-                        variant=row.variant,
-                        prompt=row.prompt,
-                        text=row.text,
-                        logprobs=row.logprobs,
+    def filter(self, datasource: DataSource, keep_references: bool = True) -> Self:
+        """Return a new CompressedOutput with only the rows for the given datasource.
+        If keep_references is True, the References object will be kept in the new CompressedOutput, and potentially shared by multiple CompressedOutput objects. Filtering will be faster.
+        """
+        if keep_references:
+            new_compressed_output = self.__class__(model_name=self.model_name, gpus=self.gpus)
+            new_compressed_output.references = self.references
+            for row in self.rows:
+                if row.source == datasource.value:
+                    new_compressed_output.rows.append(row)
+            return new_compressed_output
+        else:
+            new_compressed_output = self.__class__(model_name=self.model_name, gpus=self.gpus)
+            for row in self.rows:
+                if row.source == datasource.value:
+                    new_compressed_output.rows.append(
+                        CompressedOutputRow.from_values(
+                            references=new_compressed_output.references,
+                            source=row.source,
+                            variant=row.variant,
+                            prompt=row.prompt,
+                            text=row.text,
+                            logprobs=row.logprobs,
+                        )
                     )
-                )
-        return new_compressed_output
+            return new_compressed_output
 
     def get_rows_by_variant(self) -> dict[str, list[CompressedOutputRow]]:
         rows_by_variant = defaultdict(list)
