@@ -56,15 +56,15 @@ def compute_kl_divergence(original_logprobs, variant_logprobs):
 
 
 def print_logprobs_summary(logprobs, tokenizer, model_name):
-    """Print summary of top logprobs for a model."""
+    """logger.info summary of top logprobs for a model."""
     top_10_logprobs, top_10_indices = torch.topk(logprobs, 10)
 
-    print(f"\nTop 10 tokens for {model_name}:")
+    logger.info(f"\nTop 10 tokens for {model_name}:")
     for i in range(10):
         token_id = top_10_indices[i].item()
         token = tokenizer.decode(token_id)
         logprob = top_10_logprobs[i].item()
-        print(f"Rank {i + 1}: '{token}' (ID: {token_id}) - Log prob: {logprob:g}")
+        logger.info(f"Rank {i + 1}: '{token}' (ID: {token_id}) - Log prob: {logprob:g}")
 
 
 def print_logprobs(model, tokenizer, prompt, model_device):
@@ -85,17 +85,17 @@ def print_logprobs(model, tokenizer, prompt, model_device):
         first_token_logprobs = torch.log_softmax(first_token_logits, dim=-1)
         top_10_logprobs, top_10_indices = torch.topk(first_token_logprobs[0], 10)
 
-        print("Top 10 tokens and their log probabilities:")
+        logger.info("Top 10 tokens and their log probabilities:")
         for i in range(10):
             token_id = top_10_indices[i].item()
             token = tokenizer.decode(token_id)
             logprob = top_10_logprobs[i].item()
-            print(f"Rank {i + 1}: '{token}' (ID: {token_id}) - Log prob: {logprob:g}")
+            logger.info(f"Rank {i + 1}: '{token}' (ID: {token_id}) - Log prob: {logprob:g}")
 
-        # Also print the actually generated token for reference
+        # Also logger.info the actually generated token for reference
         generated_token_id = outputs.sequences[0, -1].item()
         generated_token = tokenizer.decode(generated_token_id)
-        print(f"\nActually generated token: '{generated_token}' (ID: {generated_token_id})")
+        logger.info(f"\nActually generated token: '{generated_token}' (ID: {generated_token_id})")
 
 
 def plot_logprobs_over_time(
@@ -433,8 +433,8 @@ def evaluate_detectors(
         }
     }
 
-    print(f"{sources=}")
-    print(f"{data.model_name=}")
+    logger.info(f"{sources=}")
+    logger.info(f"{data.model_name=}")
     variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
     prompts = list(data.references.prompts.keys())
     prompt_length = {prompt: tokens for prompt, tokens in prompts}
@@ -517,7 +517,7 @@ def evaluate_detectors(
             log_msg.append(
                 f"    - input tokens / output tokens: {results.n_input_tokens_avg} / {results.n_output_tokens_avg}"
             )
-            print("\n".join(log_msg))
+            logger.info("\n".join(log_msg))
 
             if plot_roc:
                 roc_curves[source] = results.roc_curves(results_original[source])
@@ -572,8 +572,8 @@ def evaluate_detectors(
             "multivariant_roc_auc_ci": multivariant_roc_auc_ci[source].model_dump(mode="json"),
             "avg_roc_auc_ci": avg_roc_auc_ci[source].model_dump(mode="json"),
         }
-        print(f"Multivariant ROC AUC for {source}: {multivariant_roc_auc_ci[source]}")
-        print(f"Average ROC AUC for {source}: {avg_roc_auc_ci[source]}")
+        logger.info(f"Multivariant ROC AUC for {source}: {multivariant_roc_auc_ci[source]}")
+        logger.info(f"Average ROC AUC for {source}: {avg_roc_auc_ci[source]}")
     if plot_roc:
         plot_roc_curve_with_fs_cache(
             PlotData(
@@ -588,7 +588,7 @@ def evaluate_detectors(
     with open(directory / "baseline_analysis.json", "w") as f:
         json.dump(analysis_results, f, indent=2)
     end_time = time.time()
-    print(f"Time taken: {(end_time - start_time):.2f} seconds")
+    logger.info(f"Time taken: {(end_time - start_time):.2f} seconds")
 
 
 def ablation_influence_of_prompt(
@@ -645,7 +645,7 @@ def ablation_influence_of_prompt(
     }
     variant_results = {}
     for variant_idx, variant in enumerate(variants):
-        print(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
+        logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
         roc_curves = {}
         roc_auc_ci = {}
         variant_results[variant] = {}
@@ -688,7 +688,7 @@ def ablation_influence_of_prompt(
             log_msg.append(
                 f"    - input tokens / output tokens: {results.n_input_tokens_avg} / {results.n_output_tokens_avg}"
             )
-            print("\n".join(log_msg))
+            logger.info("\n".join(log_msg))
             if plot_roc:
                 roc_curves[prompt] = results.roc_curves(results_original[prompt])
         if plot_roc:
@@ -734,8 +734,8 @@ def ablation_influence_of_prompt(
             "multivariant_roc_auc_ci": multivariant_roc_auc_ci[prompt].model_dump(mode="json"),
             "avg_roc_auc_ci": avg_roc_auc_ci[prompt].model_dump(mode="json"),
         }
-        print(f"Multivariant ROC AUC for {repr(prompt)}: {multivariant_roc_auc_ci[prompt]}")
-        print(f"Average ROC AUC for {repr(prompt)}: {avg_roc_auc_ci[prompt]}")
+        logger.info(f"Multivariant ROC AUC for {repr(prompt)}: {multivariant_roc_auc_ci[prompt]}")
+        logger.info(f"Average ROC AUC for {repr(prompt)}: {avg_roc_auc_ci[prompt]}")
     if plot_roc:
         plot_roc_curve_with_fs_cache(
             PlotData(
@@ -815,11 +815,11 @@ if __name__ == "__main__":
         output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
         logger.info(f"Obtaining data from {output_dir}...")
         compressed_output = CompressedOutput.from_json_dir(output_dir)
-        print(compressed_output.model_name)
-        print(f"number of rows: {len(compressed_output.rows)}")
+        logger.info(compressed_output.model_name)
+        logger.info(f"number of rows: {len(compressed_output.rows)}")
         for ref_attr in compressed_output.references.__dict__.keys():
             ref = getattr(compressed_output.references, ref_attr)
-            print(f"length of field '{ref_attr}': {len(ref)}")
+            logger.info(f"length of field '{ref_attr}': {len(ref)}")
     if analysis_config.experiment == "baseline":
         evaluate_detectors(
             directory=output_dir,
