@@ -1,5 +1,6 @@
 import gzip
 import json
+import os
 from collections import defaultdict
 from collections.abc import Sequence
 from enum import Enum
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Any, Self
 
 import numpy as np
+import orjson
+import rapidgzip
 from pydantic import BaseModel
 from sklearn.metrics import roc_auc_score, roc_curve
 from vllm import RequestOutput
@@ -274,8 +277,8 @@ class CompressedOutput:
         if len(json_paths) != 1:
             raise ValueError(f"Expected 1 .json.gz file in {json_dir}, got {len(json_paths)}")
         json_path = json_paths[0]
-        with gzip.open(json_path, "rt") as f:
-            json_dict = json.load(f)
+        with rapidgzip.open(json_path, parallelization=os.cpu_count()) as f:
+            json_dict = orjson.loads(f.read())
         return cls.from_json(json_dict)
 
     def filter(self, datasource: DataSource, keep_references: bool = True) -> Self:

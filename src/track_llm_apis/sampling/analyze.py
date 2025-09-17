@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+import orjson
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -325,7 +326,7 @@ def plot_roc_curve_with_fs_cache(plot_data: PlotData, out_dir: Path):
 def _variant_preslug(variant: str | None) -> str:
     if variant is None:
         return "all"
-    variant_metadata = json.loads(variant)
+    variant_metadata = orjson.loads(variant)
     variant_preslug = (
         variant_metadata["type"]
         + ","
@@ -764,7 +765,7 @@ def ablation_influence_of_prompt_plot():
     for sampling_dir in sampling_dirs:
         p = Path(sampling_dir) / "prompt_ablation_analysis.json"
         with open(p) as f:
-            analysis = json.load(f)
+            analysis = orjson.loads(f.read())
 
         model = analysis["metadata"]["model_name"]
         for prompt, pa in analysis["all"].items():

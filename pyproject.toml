@@ -18,10 +18,12 @@ dependencies = [
     "numpy>=2.2.6",
     "nvidia-modelopt[hf]>=0.33.0",
     "openai>=1.78.1",
+    "orjson>=3.11.3",
     "peft>=0.16.0",
     "plotly>=6.1.0",
     "pydantic-settings>=2.10.1",
     "python-dotenv>=1.1.0",
+    "rapidgzip>=0.15.2",
     "requests>=2.32.3",
     "scikit-learn>=1.7.1",
     # due to a bug https://github.com/statsmodels/statsmodels/issues/9584

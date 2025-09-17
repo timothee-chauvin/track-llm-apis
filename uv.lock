@@ -2957,6 +2957,47 @@ wheels = [
 ]
 
 [[package]]
+name = "rapidgzip"
+version = "0.15.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/50/b9bb77eaf841f2fbd8123d9677815d4ef53b53c4c189c5f789c78ef2d05e/rapidgzip-0.15.2.tar.gz", hash = "sha256:fa3f90f17ce185a99514df54b5316bdfa593e98f3eebbb12da301eb25d6dedcd", size = 1257053 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/72/de/033b98f2631aa6a5f9af7d0394e558299f21fe4cb4ae3e92930a2ecfd8d9/rapidgzip-0.15.2-cp311-cp311-macosx_13_0_arm64.whl", hash = "sha256:fb65bbfa0440b95a8891cc4e6987ec435355199908e123e3f4b1c395dd9ce7d0", size = 915159 },
+    { url = "https://files.pythonhosted.org/packages/45/b3/22d57052e3f1ffc1dc9d30e232cf3176df28b5a945d2dc1fcedeb6a21b4b/rapidgzip-0.15.2-cp311-cp311-macosx_13_0_x86_64.whl", hash = "sha256:343f722afa39d68d1201d505b36db000477b73a3800aa02a564942281afc77c9", size = 974459 },
+    { url = "https://files.pythonhosted.org/packages/c8/0a/32f80ad85ce740dc895e226f2957edb71ed0a33d6bc5e9aa17f5808c3daf/rapidgzip-0.15.2-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0630420a373af0b65a9e3038ad9737fdefcf08a39bc49dd0973e4f3b1a68b0f1", size = 8219690 },
+    { url = "https://files.pythonhosted.org/packages/41/71/ebb5cf3c18b19521b7dc731f86d41e7ad939bb7665d0c6cfeec60d7e7ae7/rapidgzip-0.15.2-cp311-cp311-manylinux_2_26_i686.manylinux_2_28_i686.whl", hash = "sha256:f1c213aa24963d60199021e57c15addfb4386c49943067f37c5dba32ee94b701", size = 8190307 },
+    { url = "https://files.pythonhosted.org/packages/49/91/351b5ceffdc719b8ed3aac2035a1f9ecf596113192d1ee126e13bc43c78f/rapidgzip-0.15.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ebaf844358675f8cfb295f1dd7bf7ea4dbb1693d6e9ff95ffea409fa24d33a70", size = 8496105 },
+    { url = "https://files.pythonhosted.org/packages/99/6b/cad0daafc2e0356caffa667c32c0a2613fea5b1718e8d89fadcbb429cd01/rapidgzip-0.15.2-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:13d625c2299c402f6c5e431d723e1bb862cd5bee37c977b83311f65e9f0a5eff", size = 8839709 },
+    { url = "https://files.pythonhosted.org/packages/dd/c3/7e37602d1a6c388864624571948e1fad926925b5164fa0afaaa87a3cbfb7/rapidgzip-0.15.2-cp311-cp311-musllinux_1_2_i686.whl", hash = "sha256:587478fae34e5ee5ff7fed4e9e4690f965e36824f957f15ca257770c07cad24e", size = 9058412 },
+    { url = "https://files.pythonhosted.org/packages/50/d9/56e0d07d57a9159c6b8cf9cc9931cdcf04786bb962bf636f79281c945ef1/rapidgzip-0.15.2-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:da9dabe46dd59761b5b121c0ce0bbb3f19254570a11abb59bf882f7828969999", size = 9179110 },
+    { url = "https://files.pythonhosted.org/packages/7a/c7/fed035002147c5b83edc4316e4ddb457efea93450fc90823692d70871ec0/rapidgzip-0.15.2-cp311-cp311-win_amd64.whl", hash = "sha256:e2906857aab16460a05e34c71dc8a1be4fa05f7339ec6f869752fe22334f28a5", size = 835830 },
+    { url = "https://files.pythonhosted.org/packages/9c/2e/919cd12ed907505e499c129b6ddb5f9055ad7ce9fe3cd8ab45abd322bb1d/rapidgzip-0.15.2-cp312-cp312-macosx_13_0_arm64.whl", hash = "sha256:16403dbb8d806cdf4670d0a25ffecd65938e89afefb1c20903b7a5076d37c0e4", size = 914907 },
+    { url = "https://files.pythonhosted.org/packages/86/c6/faf7aff9493cead16b22adbcc5bf3f075326b0f4172f3a4f65e24c6554a5/rapidgzip-0.15.2-cp312-cp312-macosx_13_0_x86_64.whl", hash = "sha256:59ce5d5d2c56710269ca9d51d171833fc765a8ce3afc98a79843b2e314e69429", size = 975251 },
+    { url = "https://files.pythonhosted.org/packages/7c/0e/34f2caf0e98ba50717d5efbff3319b70afd3509f3d2644c8d3c982d44544/rapidgzip-0.15.2-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:96711dbe1ca05ece953ebc5f99525bf67fb69fd162523bc1b16c18d879e3a5e5", size = 8215927 },
+    { url = "https://files.pythonhosted.org/packages/c9/08/f59ac2091db178231e3f718cdff48e41b8f325cce40d19089b50bbb50101/rapidgzip-0.15.2-cp312-cp312-manylinux_2_26_i686.manylinux_2_28_i686.whl", hash = "sha256:d4aae3af6c6b3fe832e212477c2c092712fb2bc28f53bfcfa73ef4f3818b15cd", size = 8195838 },
+    { url = "https://files.pythonhosted.org/packages/4b/88/bc64e178e8cf363c6883b4afe126ddb0837c99299ecbc9fffca33a52f21b/rapidgzip-0.15.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2bfc48e811a22672812dab6c0c4f649c0f40ba688eede6f4d248a458ae60083e", size = 8519200 },
+    { url = "https://files.pythonhosted.org/packages/c2/ea/f6d8e7d65e8b8e78f3374131ad8eac44d863585770e5d964b305ac593cdb/rapidgzip-0.15.2-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:8a4aa28357f4ba10e352aca8dd450e178a12ac49e72830ba29659a3ff198ca94", size = 8826105 },
+    { url = "https://files.pythonhosted.org/packages/c1/e1/b8fbac22021ed95b579cc5ba17e1a9a5e2dee06424930bf514e9f59d384e/rapidgzip-0.15.2-cp312-cp312-musllinux_1_2_i686.whl", hash = "sha256:32daabf471eeb50cf0d0b3c53f4b9e141f765958d32de46e8a8591365d941f7b", size = 9061866 },
+    { url = "https://files.pythonhosted.org/packages/01/d8/8a559f27e34e1a96d02fd4bdd8f9347f27ffd086e55bafd88ccfedb3b0f1/rapidgzip-0.15.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:d70c23461a44099349ce2858e037f06ff8783ddb0fee0e0d5839e77221cf594f", size = 9204021 },
+    { url = "https://files.pythonhosted.org/packages/26/f6/d2dd1003aad1b194db168c069e118d4e2634e1b7f9b9ba058be9baef9398/rapidgzip-0.15.2-cp312-cp312-win_amd64.whl", hash = "sha256:5b5d02a7efcb27363680e86e9ae11b2f847945611f8a2666468b3883035eb503", size = 835349 },
+    { url = "https://files.pythonhosted.org/packages/02/46/35ecd08aae784b65e2528ff18364119ce28565070ced17caabd786f0d2c5/rapidgzip-0.15.2-cp313-cp313-macosx_13_0_arm64.whl", hash = "sha256:60f43816d274044f4d9e61936703ddf3b0a9b2817e972e38721b9799c333ecee", size = 913992 },
+    { url = "https://files.pythonhosted.org/packages/f9/18/d94d5079d6624510aa104cb7e71bd130d32b08286a3a53d97b8fadeee999/rapidgzip-0.15.2-cp313-cp313-macosx_13_0_x86_64.whl", hash = "sha256:19accf9c6b21619627374555d761efdd99636d92ac77b914f6990a23af28aff2", size = 973704 },
+    { url = "https://files.pythonhosted.org/packages/d9/de/5e303df2ab480f746c60a7386dd2d36562c0112cfc2543ade09bfb93a6f1/rapidgzip-0.15.2-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:491a30aacd7a6804036fd8b4acc3d16b32fc189d65457a82b6a415cc120caeb7", size = 8212676 },
+    { url = "https://files.pythonhosted.org/packages/f9/49/7fc36f68c8a08045412728ec2aecf9522886d65dcfb8fe82494ccb9c3bc1/rapidgzip-0.15.2-cp313-cp313-manylinux_2_26_i686.manylinux_2_28_i686.whl", hash = "sha256:7cabbfcc414fd37b208a375b8939138c49a34d3887803d19fae4db0bced074d0", size = 8192268 },
+    { url = "https://files.pythonhosted.org/packages/77/e2/aae1af57963950c0bdd36df2dee753013914ba4fef902aa7ff36a88e0ccd/rapidgzip-0.15.2-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ea0fd3e1f2ba751e531f6e6823369988c4ce63e87e5dfbbe8b6a0a93d6b8e885", size = 8517344 },
+    { url = "https://files.pythonhosted.org/packages/fe/5a/1c5284edc869f2ab065d3e36524c4221c3f28ebf8895e132b998fd4ce4de/rapidgzip-0.15.2-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:beff593d6479675f69c0f1aaacb43f8d4a47140302af7229da796fedc487e410", size = 8819288 },
+    { url = "https://files.pythonhosted.org/packages/87/7e/651361a7787ff57c5e5e730c7b5eec3cd5e387947cfab2b4dacc321d1c9f/rapidgzip-0.15.2-cp313-cp313-musllinux_1_2_i686.whl", hash = "sha256:c46c0ce437095670f39a736d69e4f45f302dec668a29938e5885a2a975d9f87e", size = 9066512 },
+    { url = "https://files.pythonhosted.org/packages/cf/de/cc9fc3640d275d4c02e1b94669497ba88a08ff55ee0bf4e2e6881fdc6948/rapidgzip-0.15.2-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:317150ee23b455a2c52265f02422af5639554bf3b73390861948a1c68a0f220b", size = 9195931 },
+    { url = "https://files.pythonhosted.org/packages/e1/6f/2bd183b4fbb409539ae56f636281d89ffe133e78d3e04b724a290a9b7289/rapidgzip-0.15.2-cp313-cp313-win_amd64.whl", hash = "sha256:e7834e86d86e196d3c2e6f0fe298b2c0e6c2d0aa4c9771669fc50df954211ab6", size = 835298 },
+    { url = "https://files.pythonhosted.org/packages/b2/7d/c715eedfab5610393a0cd34a5a0958158a4e1b8108a302b1a9d414d9e729/rapidgzip-0.15.2-pp311-pypy311_pp73-macosx_13_0_arm64.whl", hash = "sha256:24cf955b07cf96ecb95efdd45c144140b429e7a1ba3eb178c2463527b0516858", size = 879380 },
+    { url = "https://files.pythonhosted.org/packages/8c/1b/6e68477f694f466dcac21e2ebcd3287f9ec67f5685b462f56045e909094f/rapidgzip-0.15.2-pp311-pypy311_pp73-macosx_13_0_x86_64.whl", hash = "sha256:7c1ba58243da366e935539fd7d5a298bb19ea6bf207bc89bbffb19409dc52ddc", size = 945623 },
+    { url = "https://files.pythonhosted.org/packages/0c/22/d93e69db507a9ee86f602a1878177a5e9f66e81b05b94490c484c2a4bf81/rapidgzip-0.15.2-pp311-pypy311_pp73-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:760020d4e906afc53bd4c72cec998d772fc5543c6999b34ecc83f81c44574ed3", size = 1143903 },
+    { url = "https://files.pythonhosted.org/packages/99/47/68e40fff4a0d27be7712ceb925e1d398ae2511d7af0b48026baa8b6d0799/rapidgzip-0.15.2-pp311-pypy311_pp73-manylinux_2_26_i686.manylinux_2_28_i686.whl", hash = "sha256:b3fb17b4075d8da4977816de8c92b25084d46d6eaff87e1a35377a33779c325b", size = 1246924 },
+    { url = "https://files.pythonhosted.org/packages/7b/8a/32fceb012828ccd1f74fd53b64ad8c3a1d79ff34a59c21bf8ef29fa07e4e/rapidgzip-0.15.2-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:972729a385400480817b37bbb18e52c4c52d33b0569b333037c9472c7b0ab1c3", size = 1232056 },
+    { url = "https://files.pythonhosted.org/packages/7f/c5/8dd52b4194e41a1ddc893ab79bbae0cf56be8908056d6487a46206d7494a/rapidgzip-0.15.2-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:fbb088e1d83d8a5d5f550c2e074cae8c8f29ce80a46fc630f9de0f418eb8a9f1", size = 829351 },
+]
+
+[[package]]
 name = "ray"
 version = "2.48.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3867,10 +3908,12 @@ dependencies = [
     { name = "numpy" },
     { name = "nvidia-modelopt", extra = ["hf"] },
     { name = "openai" },
+    { name = "orjson" },
     { name = "peft" },
     { name = "plotly" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
+    { name = "rapidgzip" },
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "scipy" },
@@ -3907,10 +3950,12 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "nvidia-modelopt", extras = ["hf"], specifier = ">=0.33.0" },
     { name = "openai", specifier = ">=1.78.1" },
+    { name = "orjson", specifier = ">=3.11.3" },
     { name = "peft", specifier = ">=0.16.0" },
     { name = "plotly", specifier = ">=6.1.0" },
     { name = "pydantic-settings", specifier = ">=2.10.1" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "rapidgzip", specifier = ">=0.15.2" },
     { name = "requests", specifier = ">=2.32.3" },
     { name = "scikit-learn", specifier = ">=1.7.1" },
     { name = "scipy", specifier = "<=1.15.3" },

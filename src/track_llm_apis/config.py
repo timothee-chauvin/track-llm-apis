@@ -6,6 +6,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal, Self
 
+import orjson
 import torch
 from datasets import Dataset, load_dataset
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
@@ -99,7 +100,7 @@ class MMLUConfig(BaseModel):
         cache_path = config.data_dir / "mmlu_answers.json"
         try:
             with open(cache_path) as f:
-                return json.load(f)
+                return orjson.loads(f.read())
         except FileNotFoundError:
             # Download the dataset and create the cache file
             answers = {}
