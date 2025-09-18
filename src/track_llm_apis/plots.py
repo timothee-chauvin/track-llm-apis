@@ -67,11 +67,16 @@ def plot_logprob_time_series():
 
 
 def plot_analysis_results():
-    analysis_dirs = [
-        config.sampling_data_dir / "keep" / "2025-09-07_13-15-56",
-        config.sampling_data_dir / "keep" / "2025-09-07_15-28-14",
-        config.sampling_data_dir / "keep" / "2025-09-08_14-14-47",
+    dirnames = [
+        "2025-09-14_20-54-37_google2fgemma-3-270m-it",
+        "2025-09-14_20-54-44_Qwen2fQwen2.5-0.5B-Instruct",
+        "2025-09-14_20-54-45_allenai2fOLMo-2-1124-7B-Instruct",
+        "2025-09-14_20-54-45_mistralai2fMistral-7B-Instruct-v0.3",
+        "2025-09-14_20-54-46_google2fgemma-3-1b-it",
+        "2025-09-14_20-54-46_microsoft2fPhi-3-mini-4k-instruct",
+        "2025-09-14_20-54-47_meta-llama2fLlama-3.1-8B-Instruct",
     ]
+    analysis_dirs = [config.sampling_data_dir / "keep" / d for d in dirnames]
     difficulty_scales = {
         "finetune_no_lora": {
             "title": "finetuning, no LoRA",
@@ -101,7 +106,7 @@ def plot_analysis_results():
     }
 
     for analysis_dir in analysis_dirs:
-        with open(analysis_dir / "analysis.json") as f:
+        with open(analysis_dir / "baseline_analysis.json") as f:
             analysis_data = json.load(f)
             sources = analysis_data["metadata"]["sources"]
         variant_descriptions = [k for k in analysis_data.keys() if k not in ["metadata", "all"]]
@@ -117,15 +122,33 @@ def plot_analysis_results():
             )
             xaxis_values = [json.loads(k)[scale_attr] for k in variant_description_subset]
             print(xaxis_values)
-            roc_auc = {source: [] for source in sources}
+            roc_auc_avg = {source: [] for source in sources}
+            roc_auc_err_high = {source: [] for source in sources}
+            roc_auc_err_low = {source: [] for source in sources}
             for k in variant_description_subset:
                 results = analysis_data[k]
                 for source in sources:
-                    roc_auc[source].append(results[source]["roc_auc"])
+                    lower = results[source]["roc_auc_ci"]["lower"]
+                    avg = results[source]["roc_auc_ci"]["avg"]
+                    upper = results[source]["roc_auc_ci"]["upper"]
+                    roc_auc_avg[source].append(avg)
+                    roc_auc_err_high[source].append(upper - avg)
+                    roc_auc_err_low[source].append(avg - lower)
 
             fig = go.Figure()
             for source in sources:
-                fig.add_trace(go.Scatter(x=xaxis_values, y=roc_auc[source], name=source))
+                fig.add_trace(
+                    go.Scatter(
+                        x=xaxis_values,
+                        y=roc_auc_avg[source],
+                        name=source,
+                        error_y=dict(
+                            type="data",
+                            array=roc_auc_err_high[source],
+                            arrayminus=roc_auc_err_low[source],
+                        ),
+                    )
+                )
 
             # Add horizontal line for random guessing
             fig.add_hline(
