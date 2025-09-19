@@ -94,7 +94,7 @@ def get_db_data(
     Returns:
         A dict of table names to lists of ResponseData.
     """
-    logger.info("Getting db data...")
+    logger.info(f"Getting db data from {config.db_path}...")
     conn = sqlite3.connect(config.db_path)
     cursor = conn.cursor()
     try:
