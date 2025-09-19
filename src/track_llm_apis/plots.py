@@ -66,7 +66,7 @@ def plot_logprob_time_series():
     fig.write_image(fig_path)
 
 
-def plot_analysis_results():
+def plot_difficulty_scale_auc():
     dirnames = [
         "2025-09-14_20-54-37_google2fgemma-3-270m-it",
         "2025-09-14_20-54-44_Qwen2fQwen2.5-0.5B-Instruct",
@@ -183,4 +183,4 @@ def plot_analysis_results():
 
 if __name__ == "__main__":
     # plot_logprob_time_series()
-    plot_analysis_results()
+    plot_difficulty_scale_auc()
