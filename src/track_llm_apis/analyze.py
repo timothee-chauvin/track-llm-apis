@@ -81,6 +81,7 @@ def get_db_data(
     before: datetime | None = None,
     grok_fix: bool = True,
     prompt: str | None = None,
+    sort_by_date: bool = False,
 ) -> dict[str, list[ResponseData]]:
     """Get data from the database.
 
@@ -90,6 +91,7 @@ def get_db_data(
         before: Only return data before this date.
         grok_fix: the Grok API sometimes returns non-sensical logprobs below -1e38. If True, we discard values below -1e38.
         prompt: If provided, only return data for this specific prompt.
+        sort_by_date: If True, sort the data within each table by date.
 
     Returns:
         A dict of table names to lists of ResponseData.
@@ -157,6 +159,9 @@ def get_db_data(
                     logprobs=logprobs,
                 )
             )
+        if sort_by_date:
+            for table_name in results:
+                results[table_name].sort(key=lambda x: x.date)
         return dict(results)
     except sqlite3.Error as e:
         config.logger.error(f"An error occurred during database analysis: {e}")
@@ -444,11 +449,11 @@ def plot_top_token_logprobs_over_time(
         prompt: Only plot data for this prompt.
         tables: Only plot data for these tables.
     """
-    data = get_db_data(after=after, tables=tables)
+    data = get_db_data(after=after, tables=tables, prompt=prompt, sort_by_date=True)
     time_series_dir = config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
 
-    n_plots = sum(len(set(row.prompt for row in rows)) for rows in data.values())
+    n_plots = sum(len(set(row.prompt for row in table_rows)) for table_rows in data.values())
 
     pbar = tqdm(total=n_plots)
     for table_name in data.keys():
