@@ -5,7 +5,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import numpy as np
 import orjson
@@ -18,6 +18,11 @@ from track_llm_apis.config import config
 from track_llm_apis.util import slugify
 
 logger = config.logger
+
+# Type aliases for clarity
+Condition = str
+Variant = str
+ROCCurve = tuple[list[float], list[float]]
 
 
 class DataSource(Enum):
@@ -272,12 +277,15 @@ class CompressedOutput:
 
     @classmethod
     def from_json_dir(cls, json_dir: Path) -> Self:
+        logger.info(f"Searching for a .json.gz file in {json_dir}...")
         # Find the only .json.gz file in the directory
         json_paths = list(json_dir.glob("*.json.gz"))
         if len(json_paths) != 1:
             raise ValueError(f"Expected 1 .json.gz file in {json_dir}, got {len(json_paths)}")
         json_path = json_paths[0]
+        logger.info(f"Decompressing {json_path}...")
         with rapidgzip.open(json_path, parallelization=os.cpu_count()) as f:
+            logger.info("Loading JSON data from contents of the file...")
             json_dict = orjson.loads(f.read())
         return cls.from_json(json_dict)
 
@@ -338,26 +346,26 @@ class TwoSampleTestResult(BaseModel):
     statistic: float
 
 
-class TwoSampleMultiTestResultROC(BaseModel):
-    """Result of multiple two-sample tests, allowing to compute a single ROC curve."""
+class TwoSampleMultiTestResult(BaseModel):
+    """Result of multiple two-sample tests on the same variant."""
 
     stats: list[float]
-    n_input_tokens: list[int]
-    n_output_tokens: list[int]
     pvalues: list[float] | None = None
+    input_token_avg: float
+    output_token_avg: float
 
-    def power(self, alpha: float) -> float:
+    def power(self, alpha: float) -> list[float]:
         if self.pvalues is None:
             raise ValueError("pvalues is None, can't compute power")
         return sum(pvalue < alpha for pvalue in self.pvalues) / len(self.pvalues)
 
-    def roc_curve(self, orig: "TwoSampleMultiTestResultROC") -> tuple[list[float], list[float]]:
+    def roc_curve(self, orig: "TwoSampleMultiTestResult") -> ROCCurve:
         y_true = [0] * len(orig.stats) + [1] * len(self.stats)
         y_pred = orig.stats + self.stats
         fpr, tpr, _ = roc_curve(y_true, y_pred)
         return list(fpr), list(tpr)
 
-    def roc_auc(self, orig: "TwoSampleMultiTestResultROC") -> float:
+    def roc_auc(self, orig: "TwoSampleMultiTestResult") -> float:
         y_true = [0] * len(orig.stats) + [1] * len(self.stats)
         y_pred = orig.stats + self.stats
         return roc_auc_score(y_true, y_pred)
@@ -367,14 +375,6 @@ class TwoSampleMultiTestResultROC(BaseModel):
         return sum(self.stats) / len(self.stats)
 
     @property
-    def n_input_tokens_avg(self) -> float:
-        return sum(self.n_input_tokens) / len(self.n_input_tokens)
-
-    @property
-    def n_output_tokens_avg(self) -> float:
-        return sum(self.n_output_tokens) / len(self.n_output_tokens)
-
-    @property
     def pvalue_avg(self) -> float:
         if self.pvalues is None:
             raise ValueError("pvalues is None, can't compute pvalue_avg")
@@ -382,7 +382,7 @@ class TwoSampleMultiTestResultROC(BaseModel):
 
     @staticmethod
     def multivariant_roc(
-        orig: "TwoSampleMultiTestResultROC", variants: list["TwoSampleMultiTestResultROC"]
+        orig: "TwoSampleMultiTestResult", variants: list["TwoSampleMultiTestResult"]
     ) -> tuple[np.ndarray, np.ndarray]:
         y_true = [0] * len(orig.stats) + sum([[1] * len(variant.stats) for variant in variants], [])
         y_pred = orig.stats + [stat for variant in variants for stat in variant.stats]
@@ -391,100 +391,136 @@ class TwoSampleMultiTestResultROC(BaseModel):
 
     @staticmethod
     def multivariant_roc_auc(
-        orig: "TwoSampleMultiTestResultROC", variants: list["TwoSampleMultiTestResultROC"]
+        orig: "TwoSampleMultiTestResult", variants: list["TwoSampleMultiTestResult"]
     ) -> float:
         y_true = [0] * len(orig.stats) + sum([[1] * len(variant.stats) for variant in variants], [])
         y_pred = orig.stats + [stat for variant in variants for stat in variant.stats]
         return roc_auc_score(y_true, y_pred)
 
 
-class TwoSampleMultiTestResultMultiROC(BaseModel):
-    """Result of multiple sets of multiple two-sample tests, allowing to compute multiple ROC curves."""
+# class TwoSampleMultiTestResultMultiROC(BaseModel):
+#     """Result of multiple sets of multiple two-sample tests on the same variant, allowing to compute multiple ROC curves."""
 
-    results: list["TwoSampleMultiTestResultROC"]
+#     results: list["TwoSampleMultiTestResultROC"]
 
-    @staticmethod
-    def _ci(values: list[float | None], results_alpha: float) -> CIResult:
-        if any(value is None for value in values):
-            return CIResult(
-                lower=None,
-                avg=None,
-                upper=None,
-            )
-        values = sorted(values)
-        return CIResult(
-            lower=values[int(results_alpha * len(values))],
-            avg=sum(values) / len(values),
-            upper=values[int((1 - results_alpha) * len(values))],
-        )
+#     @staticmethod
+#     def _ci(values: list[float | None], results_alpha: float) -> CIResult:
+#         if any(value is None for value in values):
+#             return CIResult(
+#                 lower=None,
+#                 avg=None,
+#                 upper=None,
+#             )
+#         values = sorted(values)
+#         return CIResult(
+#             lower=values[int(results_alpha * len(values))],
+#             avg=sum(values) / len(values),
+#             upper=values[int((1 - results_alpha) * len(values))],
+#         )
 
-    def roc_auc_ci(
-        self, origs: "TwoSampleMultiTestResultMultiROC", results_alpha: float
-    ) -> CIResult:
-        roc_aucs = [result.roc_auc(orig) for orig, result in zip(origs.results, self.results)]
-        return self._ci(roc_aucs, results_alpha)
+#     def roc_auc_ci(
+#         self, origs: "TwoSampleMultiTestResultMultiROC", results_alpha: float
+#     ) -> CIResult:
+#         roc_aucs = [result.roc_auc(orig) for orig, result in zip(origs.results, self.results)]
+#         return self._ci(roc_aucs, results_alpha)
 
-    def roc_curves(
-        self, origs: "TwoSampleMultiTestResultMultiROC"
-    ) -> list[tuple[list[float], list[float]]]:
-        return [result.roc_curve(orig) for orig, result in zip(origs.results, self.results)]
+#     def roc_curves(self, origs: "TwoSampleMultiTestResultMultiROC") -> list[ROCCurve]:
+#         return [result.roc_curve(orig) for orig, result in zip(origs.results, self.results)]
 
-    def stat_ci(self, results_alpha: float) -> CIResult:
-        return self._ci([result.stat_avg for result in self.results], results_alpha)
+#     def stat_ci(self, results_alpha: float) -> CIResult:
+#         return self._ci([result.stat_avg for result in self.results], results_alpha)
 
-    def pvalue_ci(self, results_alpha: float) -> CIResult:
-        return self._ci([result.pvalue_avg for result in self.results], results_alpha)
+#     def pvalue_ci(self, results_alpha: float) -> CIResult:
+#         return self._ci([result.pvalue_avg for result in self.results], results_alpha)
 
-    def power_ci(self, detector_alpha: float, results_alpha: float) -> CIResult:
-        return self._ci([result.power(detector_alpha) for result in self.results], results_alpha)
+#     def power_ci(self, detector_alpha: float, results_alpha: float) -> CIResult:
+#         return self._ci([result.power(detector_alpha) for result in self.results], results_alpha)
+
+#     @staticmethod
+#     def multivariant_rocs(
+#         origs: "TwoSampleMultiTestResultMultiROC",
+#         all_variants: list["TwoSampleMultiTestResultMultiROC"],
+#     ) -> list[tuple[np.ndarray, np.ndarray]]:
+#         return [
+#             TwoSampleMultiTestResultROC.multivariant_roc(orig, variants)
+#             for orig, variants in zip(
+#                 origs.results, [variants.results for variants in all_variants]
+#             )
+#         ]
+
+#     @staticmethod
+#     def multivariant_roc_auc_ci(
+#         origs: "TwoSampleMultiTestResultMultiROC",
+#         all_variants: list["TwoSampleMultiTestResultMultiROC"],
+#         results_alpha: float,
+#     ) -> CIResult:
+#         return TwoSampleMultiTestResultMultiROC._ci(
+#             [
+#                 TwoSampleMultiTestResultROC.multivariant_roc_auc(orig, variants)
+#                 for orig, variants in zip(
+#                     origs.results, [variants.results for variants in all_variants]
+#                 )
+#             ],
+#             results_alpha,
+#         )
+
+#     @staticmethod
+#     def roc_auc_avg_ci(
+#         origs: "TwoSampleMultiTestResultMultiROC",
+#         all_variants: list["TwoSampleMultiTestResultMultiROC"],
+#         results_alpha: float,
+#         return_values: bool = False,
+#     ) -> CIResult:
+#         """Return the average ROC AUC across all variants as a CI.
+
+#         Suppose there are V variants, each containing S sets of two-sample tests (i.e. 1 TwoSampleMultiTestResultMultiRoc object, S TwoSampleMultiTestResultROC objects).
+#         We compute S average ROC AUCs: for s in [1, ..., S], compute the average ROC AUC across V variants at set index s.
+#         We then compute a CI on the list of S average ROC AUCs.
+
+#         If return_values is True, return a tuple: (the CI, the list of S average ROC AUCs).
+#         """
+#         averages = []
+#         S = len(all_variants[0].results)
+#         for s in range(S):
+#             averages.append(
+#                 sum([variants.results[s].roc_auc(origs.results[s]) for variants in all_variants])
+#                 / len(all_variants)
+#             )
+#         if return_values:
+#             return TwoSampleMultiTestResultMultiROC._ci(averages, results_alpha), averages
+#         else:
+#             return TwoSampleMultiTestResultMultiROC._ci(averages, results_alpha)
+
+
+class AnalysisResult(BaseModel):
+    experiment: Literal["baseline", "ablation_prompt"]
+    model_name: str
+    n_tests: int
+    pvalue_b: int
+
+    original: dict[Condition, TwoSampleMultiTestResult] = {}
+    variants: dict[Variant, dict[Condition, TwoSampleMultiTestResult]] = {}
 
     @property
-    def n_input_tokens_avg(self) -> float:
-        return sum([result.n_input_tokens_avg for result in self.results]) / len(self.results)
+    def input_token_avg(self) -> dict[Condition, float]:
+        result = {}
+        for condition in self.original.keys():
+            result[condition] = sum(
+                self.variants[variant][condition].input_token_avg for variant in self.variants
+            ) / len(self.variants)
+        return result
 
     @property
-    def n_output_tokens_avg(self) -> float:
-        return sum([result.n_output_tokens_avg for result in self.results]) / len(self.results)
+    def output_token_avg(self) -> dict[Condition, float]:
+        result = {}
+        for condition in self.original.keys():
+            result[condition] = sum(
+                self.variants[variant][condition].output_token_avg for variant in self.variants
+            ) / len(self.variants)
+        return result
 
-    @staticmethod
-    def multivariant_rocs(
-        origs: "TwoSampleMultiTestResultMultiROC",
-        all_variants: list["TwoSampleMultiTestResultMultiROC"],
-    ) -> list[tuple[np.ndarray, np.ndarray]]:
-        return [
-            TwoSampleMultiTestResultROC.multivariant_roc(orig, variants)
-            for orig, variants in zip(
-                origs.results, [variants.results for variants in all_variants]
-            )
-        ]
+    def compute_roc_curves(self, variant: Variant) -> dict[Condition, list[ROCCurve]]:
+        raise NotImplementedError()
 
-    @staticmethod
-    def multivariant_roc_auc_ci(
-        origs: "TwoSampleMultiTestResultMultiROC",
-        all_variants: list["TwoSampleMultiTestResultMultiROC"],
-        results_alpha: float,
-    ) -> CIResult:
-        return TwoSampleMultiTestResultMultiROC._ci(
-            [
-                TwoSampleMultiTestResultROC.multivariant_roc_auc(orig, variants)
-                for orig, variants in zip(
-                    origs.results, [variants.results for variants in all_variants]
-                )
-            ],
-            results_alpha,
-        )
-
-    @staticmethod
-    def roc_auc_avg_ci(
-        origs: "TwoSampleMultiTestResultMultiROC",
-        all_variants: list["TwoSampleMultiTestResultMultiROC"],
-        results_alpha: float,
-    ) -> CIResult:
-        """Return the average ROC AUC across all variants as a CI. It is computed by computing an average ROC AUC across variants for each run, then computing a CI on that list."""
-        averages = []
-        for i in range(len(all_variants[0].results)):
-            averages.append(
-                sum([variants.results[i].roc_auc(origs.results[i]) for variants in all_variants])
-                / len(all_variants)
-            )
-        return TwoSampleMultiTestResultMultiROC._ci(averages, results_alpha)
+    def compute_roc_auc_ci(self, variant: Variant) -> dict[Condition, CIResult]:
+        raise NotImplementedError()

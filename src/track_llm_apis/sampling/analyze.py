@@ -19,12 +19,12 @@ from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sa
 from track_llm_apis.sampling.analyze_logprobs import logprob_two_sample_test
 from track_llm_apis.sampling.analyze_mmlu import mmlu_two_sample_test
 from track_llm_apis.sampling.common import (
+    AnalysisResult,
     CIResult,
     CompressedOutput,
     CompressedOutputRow,
     DataSource,
-    TwoSampleMultiTestResultMultiROC,
-    TwoSampleMultiTestResultROC,
+    TwoSampleMultiTestResult,
 )
 from track_llm_apis.tinychange import TinyChange
 from track_llm_apis.util import slugify, trim_to_length
@@ -186,15 +186,14 @@ def gao2025_two_sample_test(
     rows_subset: dict[str, list[CompressedOutputRow]],
     unchanged_rows_subset: dict[str, list[CompressedOutputRow]],
     tokenizer: PreTrainedTokenizerBase,
-    compute_pvalue: bool = True,
-    b: int = 1000,
+    pvalue_b: int = 1000,
 ):
     sample1 = prompt_rows_dict_to_completion_sample(rows_subset, tokenizer)
     sample2 = prompt_rows_dict_to_completion_sample(unchanged_rows_subset, tokenizer)
-    return run_two_sample_test_torch(sample1, sample2, b=b, compute_pvalue=compute_pvalue)
+    return run_two_sample_test_torch(sample1, sample2, b=pvalue_b)
 
 
-def evaluate_detectors_on_variant(
+def evaluate_detector_on_variant(
     source: DataSource,
     rows1: dict[str, list[CompressedOutputRow]],
     rows2: dict[str, list[CompressedOutputRow]],
@@ -202,15 +201,17 @@ def evaluate_detectors_on_variant(
     prompt_length: dict[str, int],
     tokenizer: PreTrainedTokenizerBase | None = None,
     logprob_prompt: str | None = None,
-    compute_pvalue: bool = True,
-    n_tests_per_roc: int = 200,
-    n_rocs: int = 100,
-    b: int = 1000,
-) -> TwoSampleMultiTestResultMultiROC:
+    n_tests: int = 2000,
+    pvalue_b: int = 1000,
+) -> TwoSampleMultiTestResult:
     """
     Args:
       rows1, rows2: dictionary of prompts to lists of rows
     """
+    if logprob_prompt:
+        logger.info(f"Evaluating prompt {repr(logprob_prompt)}...")
+    else:
+        logger.info(f"Evaluating detector {source}...")
     match source:
         case DataSource.GAO2025:
             samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
@@ -221,61 +222,44 @@ def evaluate_detectors_on_variant(
         case DataSource.US:
             samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
             two_sample_test_fn = logprob_two_sample_test
-
-    multi_roc_result = TwoSampleMultiTestResultMultiROC(results=[])
-    for _ in range(n_rocs):
-        stats = []
-        pvalues = []
-        n_input_tokens = []
-        n_output_tokens = []
-        sample_pairs = []
-        if source == DataSource.US:
             # Only keep the provided or default prompt, discarding the others
             if logprob_prompt is None:
                 logprob_prompt = config.sampling.logprob.default_prompt
             rows1 = {logprob_prompt: rows1[logprob_prompt]}
             rows2 = {logprob_prompt: rows2[logprob_prompt]}
-        for _ in range(n_tests_per_roc):
-            if same:
-                assert rows1 == rows2
-                subset = {
-                    p: random.sample(rows, 2 * samples_per_prompt) for p, rows in rows1.items()
-                }
-                rows1_subset = {p: subset[p][:samples_per_prompt] for p in rows1.keys()}
-                rows2_subset = {p: subset[p][samples_per_prompt:] for p in rows2.keys()}
-            else:
-                rows1_subset = {
-                    p: random.sample(rows, samples_per_prompt) for p, rows in rows1.items()
-                }
-                rows2_subset = {
-                    p: random.sample(rows, samples_per_prompt) for p, rows in rows2.items()
-                }
-            sample_pairs.append((rows1_subset, rows2_subset))
 
-        for sample1, sample2 in sample_pairs:
-            result = two_sample_test_fn(
-                sample1, sample2, b=b, compute_pvalue=compute_pvalue, tokenizer=tokenizer
-            )
-            stats.append(result.statistic)
-            if compute_pvalue:
-                pvalues.append(result.pvalue)
-            n_input_tokens.append(
-                sum(prompt_length[p] * len(r) for p, r in sample1.items())
-                + sum(prompt_length[p] * len(r) for p, r in sample2.items())
-            )
-            n_output_tokens.append(
-                sum(r.text[1] for rows in sample1.values() for r in rows)
-                + sum(r.text[1] for rows in sample2.values() for r in rows)
-            )
-        multi_roc_result.results.append(
-            TwoSampleMultiTestResultROC(
-                stats=stats,
-                pvalues=pvalues if compute_pvalue else None,
-                n_input_tokens=n_input_tokens,
-                n_output_tokens=n_output_tokens,
-            )
+    token_count = {"i": [], "o": []}
+    stats = []
+    pvalues = []
+    for _ in range(n_tests):
+        if same:
+            assert rows1 == rows2
+            subset = {p: random.sample(rows, 2 * samples_per_prompt) for p, rows in rows1.items()}
+            sample1 = {p: subset[p][:samples_per_prompt] for p in rows1.keys()}
+            sample2 = {p: subset[p][samples_per_prompt:] for p in rows2.keys()}
+        else:
+            sample1 = {p: random.sample(rows, samples_per_prompt) for p, rows in rows1.items()}
+            sample2 = {p: random.sample(rows, samples_per_prompt) for p, rows in rows2.items()}
+
+        result = two_sample_test_fn(sample1, sample2, pvalue_b=pvalue_b, tokenizer=tokenizer)
+        stats.append(result.statistic)
+        if pvalue_b > 0:
+            pvalues.append(result.pvalue)
+        token_count["i"].append(
+            sum(prompt_length[p] * len(r) for p, r in sample1.items())
+            + sum(prompt_length[p] * len(r) for p, r in sample2.items())
         )
-    return multi_roc_result
+        token_count["o"].append(
+            sum(r.text[1] for rows in sample1.values() for r in rows)
+            + sum(r.text[1] for rows in sample2.values() for r in rows)
+        )
+
+    return TwoSampleMultiTestResult(
+        stats=stats,
+        pvalues=pvalues if pvalue_b > 0 else None,
+        input_token_avg=sum(token_count["i"]) / len(token_count["i"]),
+        output_token_avg=sum(token_count["o"]) / len(token_count["o"]),
+    )
 
 
 class PlotData(BaseModel):
@@ -402,17 +386,12 @@ def plot_roc_curve(
     logger.info(f"Saved ROC curve to {plot_dir / f'{filename_base}.html'}")
 
 
-def evaluate_detectors(
+def baseline_analysis(
     directory: Path,
     data: CompressedOutput,
     sources: list[DataSource],
-    detector_alpha: float,
-    results_alpha: float,
-    compute_pvalue: bool = False,
-    plot_roc: bool = False,
-    n_tests_per_roc: int = 200,
-    n_rocs: int = 100,
-    b: int = 1000,
+    n_tests: int = 1000,
+    pvalue_b: int = 1000,
 ):
     if DataSource.GAO2025 in sources:
         tokenizer = AutoTokenizer.from_pretrained(data.model_name)
@@ -420,19 +399,12 @@ def evaluate_detectors(
             logger.info(f"Setting pad token to eos token for {data.model_name}")
             tokenizer.pad_token = tokenizer.eos_token
 
-    analysis_results = {
-        "metadata": {
-            "model_name": data.model_name,
-            "sources": [source.name for source in sources],
-            "detector_alpha": detector_alpha,
-            "results_alpha": results_alpha,
-            "compute_pvalue": compute_pvalue,
-            "n_tests_per_roc": n_tests_per_roc,
-            "n_rocs": n_rocs,
-            "b": b,
-            "used_tokens": {},
-        }
-    }
+    analysis_results = AnalysisResult(
+        experiment="baseline",
+        model_name=data.model_name,
+        n_tests=n_tests,
+        pvalue_b=pvalue_b,
+    )
 
     logger.info(f"{sources=}")
     logger.info(f"{data.model_name=}")
@@ -455,139 +427,82 @@ def evaluate_detectors(
 
     start_time = time.time()
     # Get data on the false positive rate
-    results_original = {
-        source: evaluate_detectors_on_variant(
+    analysis_results.original = {
+        str(source.value): evaluate_detector_on_variant(
             source,
             unchanged_rows_by_prompt[source],
             unchanged_rows_by_prompt[source],
             same=True,
             prompt_length=prompt_length,
             tokenizer=tokenizer,
-            compute_pvalue=compute_pvalue,
-            n_tests_per_roc=n_tests_per_roc,
-            n_rocs=n_rocs,
-            b=b,
+            n_tests=n_tests,
+            pvalue_b=pvalue_b,
         )
         for source in sources
     }
-    variant_results = {}
     for variant_idx, variant in enumerate(variants):
         logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
-        roc_curves = {}
-        roc_auc_ci = {}
-        variant_results[variant] = {}
-        analysis_results[variant] = {}
+        analysis_results.variants[variant] = {}
         for source in sources:
             variant_rows = rows_by_variant[source][variant]
             rows_by_prompt = data_by_source[source].get_rows_by_prompt(variant_rows)
-            assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt[source].keys())
-            results = evaluate_detectors_on_variant(
+            analysis_results.variants[variant][str(source.value)] = evaluate_detector_on_variant(
                 source,
                 unchanged_rows_by_prompt[source],
                 rows_by_prompt,
                 same=False,
                 prompt_length=prompt_length,
                 tokenizer=tokenizer,
-                compute_pvalue=compute_pvalue,
-                n_tests_per_roc=n_tests_per_roc,
-                n_rocs=n_rocs,
-                b=b,
-            )
-            variant_results[variant][source] = results
-
-            stat_ci = results.stat_ci(results_alpha)
-            roc_auc_ci[source] = results.roc_auc_ci(results_original[source], results_alpha)
-            analysis_results[variant][source.name] = {
-                "stat_ci": stat_ci.model_dump(mode="json"),
-                "roc_auc_ci": roc_auc_ci[source].model_dump(mode="json"),
-            }
-            log_msg = [f"  * {source}:"]
-            log_msg.append(f"    - stat: {stat_ci}")
-            log_msg.append(f"    - roc_auc: {roc_auc_ci[source]}")
-
-            if compute_pvalue:
-                pvalue_ci = results.pvalue_ci(results_alpha)
-                power = results.power_ci(detector_alpha, results_alpha)
-                analysis_results[variant][source.name] |= {
-                    "pvalue_ci": pvalue_ci.model_dump(mode="json"),
-                    "power_ci": power.model_dump(mode="json"),
-                }
-                log_msg.append(f"    - pvalue: {pvalue_ci}")
-                log_msg.append(f"    - power: {power}")
-
-            log_msg.append(
-                f"    - input tokens / output tokens: {results.n_input_tokens_avg} / {results.n_output_tokens_avg}"
-            )
-            logger.info("\n".join(log_msg))
-
-            if plot_roc:
-                roc_curves[source] = results.roc_curves(results_original[source])
-
-            analysis_results["metadata"]["used_tokens"].setdefault(
-                source.name,
-                {
-                    "input": results.n_input_tokens_avg,
-                    "output": results.n_output_tokens_avg,
-                },
+                n_tests=n_tests,
+                pvalue_b=pvalue_b,
             )
 
-        if plot_roc:
-            plot_roc_curve_with_fs_cache(
-                PlotData(
-                    experiment="baseline",
-                    roc_curves=roc_curves,
-                    roc_auc_ci=roc_auc_ci,
-                    model_name=data.model_name,
-                    variant=variant,
-                ),
-                get_baselines_data_dir(directory),
-            )
-        with open(directory / "baseline_analysis.json", "w") as f:
-            json.dump(analysis_results, f, indent=2)
+        with open(directory / "baseline_analysis.json", "wb") as f:
+            f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
 
-    multivariant_roc_curves = {
-        source: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
-            results_original[source], [results[source] for results in variant_results.values()]
-        )
-        for source in sources
-    }
-    multivariant_roc_auc_ci = {
-        source: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
-            results_original[source],
-            [results[source] for results in variant_results.values()],
-            results_alpha,
-        )
-        for source in sources
-    }
-    avg_roc_auc_ci = {
-        source: TwoSampleMultiTestResultMultiROC.roc_auc_avg_ci(
-            results_original[source],
-            [results[source] for results in variant_results.values()],
-            results_alpha,
-        )
-        for source in sources
-    }
-    analysis_results["all"] = {}
-    for source in sources:
-        analysis_results["all"][source.name] = {
-            "multivariant_roc_auc_ci": multivariant_roc_auc_ci[source].model_dump(mode="json"),
-            "avg_roc_auc_ci": avg_roc_auc_ci[source].model_dump(mode="json"),
-        }
-        logger.info(f"Multivariant ROC AUC for {source}: {multivariant_roc_auc_ci[source]}")
-        logger.info(f"Average ROC AUC for {source}: {avg_roc_auc_ci[source]}")
-    if plot_roc:
-        plot_roc_curve_with_fs_cache(
-            PlotData(
-                experiment="baseline",
-                model_name=data.model_name,
-                variant=None,
-                roc_curves=multivariant_roc_curves,
-                roc_auc_ci=multivariant_roc_auc_ci,
-            ),
-            get_baselines_data_dir(directory),
-        )
-    with open(directory / "baseline_analysis.json", "w") as f:
-        json.dump(analysis_results, f, indent=2)
+    # multivariant_roc_curves = {
+    #     source: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
+    #         results_original[source], [results[source] for results in variant_results.values()]
+    #     )
+    #     for source in sources
+    # }
+    # multivariant_roc_auc_ci = {
+    #     source: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
+    #         results_original[source],
+    #         [results[source] for results in variant_results.values()],
+    #         results_alpha,
+    #     )
+    #     for source in sources
+    # }
+    # avg_roc_auc_ci = {
+    #     source: TwoSampleMultiTestResultMultiROC.roc_auc_avg_ci(
+    #         results_original[source],
+    #         [results[source] for results in variant_results.values()],
+    #         results_alpha,
+    #     )
+    #     for source in sources
+    # }
+    # analysis_results["all"] = {}
+    # for source in sources:
+    #     analysis_results["all"][source.name] = {
+    #         "multivariant_roc_auc_ci": multivariant_roc_auc_ci[source].model_dump(mode="json"),
+    #         "avg_roc_auc_ci": avg_roc_auc_ci[source].model_dump(mode="json"),
+    #     }
+    #     logger.info(f"Multivariant ROC AUC for {source}: {multivariant_roc_auc_ci[source]}")
+    #     logger.info(f"Average ROC AUC for {source}: {avg_roc_auc_ci[source]}")
+    # if plot_roc:
+    #     plot_roc_curve_with_fs_cache(
+    #         PlotData(
+    #             experiment="baseline",
+    #             model_name=data.model_name,
+    #             variant=None,
+    #             roc_curves=multivariant_roc_curves,
+    #             roc_auc_ci=multivariant_roc_auc_ci,
+    #         ),
+    #         get_baselines_data_dir(directory),
+    #     )
+    # with open(directory / "baseline_analysis.json", "w") as f:
+    #     json.dump(analysis_results, f, indent=2)
     end_time = time.time()
     logger.info(f"Time taken: {(end_time - start_time):.2f} seconds")
 
@@ -595,13 +510,8 @@ def evaluate_detectors(
 def ablation_influence_of_prompt(
     directory: Path,
     data: CompressedOutput,
-    detector_alpha: float,
-    results_alpha: float,
-    compute_pvalue: bool = False,
-    plot_roc: bool = False,
-    n_tests_per_roc: int = 200,
-    n_rocs: int = 100,
-    b: int = 1000,
+    n_tests: int = 1000,
+    pvalue_b: int = 1000,
 ):
     """Test the influence of the prompt choice on detection performance for the logprob method."""
     source = DataSource.US
@@ -616,147 +526,63 @@ def ablation_influence_of_prompt(
         if prompt in unchanged_rows_by_prompt
     }
     prompts = list(prompt_length.keys())
-    analysis_results = {
-        "metadata": {
-            "model_name": data.model_name,
-            "detector_alpha": detector_alpha,
-            "results_alpha": results_alpha,
-            "compute_pvalue": compute_pvalue,
-            "n_tests_per_roc": n_tests_per_roc,
-            "n_rocs": n_rocs,
-            "b": b,
-            "used_tokens": prompt_length,
-        }
-    }
+    analysis_results = AnalysisResult(
+        experiment="ablation_prompt",
+        model_name=data.model_name,
+        n_tests=n_tests,
+        pvalue_b=pvalue_b,
+    )
     variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
-    results_original = {
-        prompt: evaluate_detectors_on_variant(
+    analysis_results.original = {
+        prompt: evaluate_detector_on_variant(
             source,
             unchanged_rows_by_prompt,
             unchanged_rows_by_prompt,
             same=True,
             prompt_length=prompt_length,
             logprob_prompt=prompt,
-            compute_pvalue=compute_pvalue,
-            n_tests_per_roc=n_tests_per_roc,
-            n_rocs=n_rocs,
-            b=b,
+            n_tests=n_tests,
+            pvalue_b=pvalue_b,
         )
         for prompt in prompts
     }
-    variant_results = {}
     for variant_idx, variant in enumerate(variants):
         logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
-        roc_curves = {}
-        roc_auc_ci = {}
-        variant_results[variant] = {}
-        analysis_results[variant] = {}
-        variant_rows = rows_by_variant[variant]
-        rows_by_prompt = filtered_data.get_rows_by_prompt(variant_rows)
-        for prompt in prompts:
-            assert list(rows_by_prompt.keys()) == list(unchanged_rows_by_prompt.keys())
-            results = evaluate_detectors_on_variant(
+        rows_by_prompt = filtered_data.get_rows_by_prompt(rows_by_variant[variant])
+        analysis_results.variants[variant] = {
+            prompt: evaluate_detector_on_variant(
                 source,
                 unchanged_rows_by_prompt,
                 rows_by_prompt,
                 same=False,
                 prompt_length=prompt_length,
                 logprob_prompt=prompt,
-                compute_pvalue=compute_pvalue,
-                n_tests_per_roc=n_tests_per_roc,
-                n_rocs=n_rocs,
-                b=b,
+                n_tests=n_tests,
+                pvalue_b=pvalue_b,
             )
-            variant_results[variant][prompt] = results
-            stat_ci = results.stat_ci(results_alpha)
-            roc_auc_ci[prompt] = results.roc_auc_ci(results_original[prompt], results_alpha)
-            analysis_results[variant][prompt] = {
-                "stat_ci": stat_ci.model_dump(mode="json"),
-                "roc_auc_ci": roc_auc_ci[prompt].model_dump(mode="json"),
-            }
-            log_msg = [f"  * {repr(prompt)}:"]
-            log_msg.append(f"    - stat: {stat_ci}")
-            log_msg.append(f"    - roc_auc: {roc_auc_ci[prompt]}")
-            if compute_pvalue:
-                pvalue_ci = results.pvalue_ci(results_alpha)
-                power = results.power_ci(detector_alpha, results_alpha)
-                analysis_results[variant][prompt] |= {
-                    "pvalue_ci": pvalue_ci.model_dump(mode="json"),
-                    "power_ci": power.model_dump(mode="json"),
-                }
-                log_msg.append(f"    - pvalue: {pvalue_ci}")
-                log_msg.append(f"    - power: {power}")
-            log_msg.append(
-                f"    - input tokens / output tokens: {results.n_input_tokens_avg} / {results.n_output_tokens_avg}"
-            )
-            logger.info("\n".join(log_msg))
-            if plot_roc:
-                roc_curves[prompt] = results.roc_curves(results_original[prompt])
-        if plot_roc:
-            plot_roc_curve_with_fs_cache(
-                PlotData(
-                    experiment="ablation_prompt",
-                    roc_curves=roc_curves,
-                    roc_auc_ci=roc_auc_ci,
-                    model_name=data.model_name,
-                    variant=variant,
-                ),
-                get_ablation_prompt_data_dir(directory),
-            )
-        with open(directory / "prompt_ablation_analysis.json", "w") as f:
-            json.dump(analysis_results, f, indent=2)
-
-    multivariant_roc_curves = {
-        prompt: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
-            results_original[prompt], [results[prompt] for results in variant_results.values()]
-        )
-        for prompt in prompts
-    }
-    multivariant_roc_auc_ci = {
-        prompt: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
-            results_original[prompt],
-            [results[prompt] for results in variant_results.values()],
-            results_alpha,
-        )
-        for prompt in prompts
-    }
-
-    avg_roc_auc_ci = {
-        prompt: TwoSampleMultiTestResultMultiROC.roc_auc_avg_ci(
-            results_original[prompt],
-            [results[prompt] for results in variant_results.values()],
-            results_alpha,
-        )
-        for prompt in prompts
-    }
-    analysis_results["all"] = {}
-    for prompt in prompts:
-        analysis_results["all"][repr(prompt)] = {
-            "multivariant_roc_auc_ci": multivariant_roc_auc_ci[prompt].model_dump(mode="json"),
-            "avg_roc_auc_ci": avg_roc_auc_ci[prompt].model_dump(mode="json"),
+            for prompt in prompts
         }
-        logger.info(f"Multivariant ROC AUC for {repr(prompt)}: {multivariant_roc_auc_ci[prompt]}")
-        logger.info(f"Average ROC AUC for {repr(prompt)}: {avg_roc_auc_ci[prompt]}")
-    if plot_roc:
-        plot_roc_curve_with_fs_cache(
-            PlotData(
-                experiment="ablation_prompt",
-                model_name=data.model_name,
-                variant=None,
-                roc_curves=multivariant_roc_curves,
-                roc_auc_ci=multivariant_roc_auc_ci,
-            ),
-            get_ablation_prompt_data_dir(directory),
-        )
-    with open(directory / "prompt_ablation_analysis.json", "w") as f:
-        json.dump(analysis_results, f, indent=2)
+        with open(directory / "prompt_ablation_analysis.json", "wb") as f:
+            f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
+
+    # Maybe reintroduce later if needed
+    # if plot_roc:
+    #     plot_roc_curve_with_fs_cache(
+    #         PlotData(
+    #             experiment="ablation_prompt",
+    #             model_name=data.model_name,
+    #             variant=None,
+    #             roc_curves=multivariant_roc_curves,
+    #             roc_auc_ci=multivariant_roc_auc_ci,
+    #         ),
+    #         get_ablation_prompt_data_dir(directory),
+    #     )
+    # with open(directory / "prompt_ablation_analysis.json", "wb") as f:
+    #     f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
 
 
 def ablation_influence_of_prompt_plot():
-    """Build a line plot of average ROC AUC per model across prompts,
-    with error bars from confidence intervals.
-    Expects one `prompt_ablation_analysis.json` per sampling dir.
-    """
+    """Expects one `prompt_ablation_analysis.json` per sampling dir."""
     rows = []
     sampling_dirs = [
         config.sampling_data_dir / "keep" / dirname for dirname in config.analysis.sampling_dirnames
@@ -798,15 +624,13 @@ def ablation_influence_of_prompt_plot():
 
     fig.update_layout(
         title="Average ROC AUC per Model across Prompts",
-        yaxis=dict(range=[0, 1]),
         legend_title="Prompt",
         margin=dict(l=10, r=10, t=40, b=40),
     )
 
-    fig.write_html(config.plots_dir / "prompt_ablation_analysis.html")
-    logger.info(
-        f"Prompt ablation analysis plot saved to {config.plots_dir / 'prompt_ablation_analysis.html'}"
-    )
+    plot_path = config.plots_dir / "paper" / "prompt_ablation_analysis.html"
+    fig.write_html(plot_path)
+    logger.info(f"Prompt ablation analysis plot saved to {plot_path}")
 
 
 if __name__ == "__main__":
@@ -814,7 +638,6 @@ if __name__ == "__main__":
 
     if analysis_config.experiment in ["baseline", "ablation_prompt"]:
         output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
-        logger.info(f"Obtaining data from {output_dir}...")
         compressed_output = CompressedOutput.from_json_dir(output_dir)
         logger.info(compressed_output.model_name)
         logger.info(f"number of rows: {len(compressed_output.rows)}")
@@ -822,29 +645,19 @@ if __name__ == "__main__":
             ref = getattr(compressed_output.references, ref_attr)
             logger.info(f"length of field '{ref_attr}': {len(ref)}")
     if analysis_config.experiment == "baseline":
-        evaluate_detectors(
+        baseline_analysis(
             directory=output_dir,
             data=compressed_output,
             sources=[DataSource.US, DataSource.MMLU, DataSource.GAO2025],
-            detector_alpha=analysis_config.detector_alpha,
-            results_alpha=analysis_config.results_alpha,
-            compute_pvalue=analysis_config.compute_pvalue,
-            plot_roc=analysis_config.plot_roc,
-            n_tests_per_roc=analysis_config.n_tests_per_roc,
-            n_rocs=analysis_config.n_rocs,
-            b=analysis_config.b,
+            n_tests=analysis_config.n_tests,
+            pvalue_b=analysis_config.pvalue_b,
         )
     elif analysis_config.experiment == "ablation_prompt":
         ablation_influence_of_prompt(
             directory=output_dir,
             data=compressed_output,
-            detector_alpha=analysis_config.detector_alpha,
-            results_alpha=analysis_config.results_alpha,
-            compute_pvalue=analysis_config.compute_pvalue,
-            plot_roc=analysis_config.plot_roc,
-            n_tests_per_roc=analysis_config.n_tests_per_roc,
-            n_rocs=analysis_config.n_rocs,
-            b=analysis_config.b,
+            n_tests=analysis_config.n_tests,
+            pvalue_b=analysis_config.pvalue_b,
         )
     elif analysis_config.experiment == "ablation_prompt_plot":
         ablation_influence_of_prompt_plot()

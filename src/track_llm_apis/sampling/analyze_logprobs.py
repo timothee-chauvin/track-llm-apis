@@ -57,8 +57,7 @@ def get_seen_tokens(
 def logprob_two_sample_test(
     sample1: dict[str, list[CompressedOutputRow]],
     sample2: dict[str, list[CompressedOutputRow]],
-    b: int = 1000,
-    compute_pvalue: bool = True,
+    pvalue_b: int = 1000,
     **kwargs,
 ) -> TwoSampleTestResult:
     assert len(sample1) == 1 and len(sample2) == 1
@@ -72,8 +71,8 @@ def logprob_two_sample_test(
     t1 = build_logprob_tensor(sample1_logprobs, seen_tokens, token_short_ids)
     t2 = build_logprob_tensor(sample2_logprobs, seen_tokens, token_short_ids)
     statistic = logprob_two_sample_statistic(t1.unsqueeze(0), t2.unsqueeze(0)).item()
-    if compute_pvalue:
-        permutation_stats = logprob_two_sample_permutation_pvalue(t1, t2, b=b)
+    if pvalue_b > 0:
+        permutation_stats = logprob_two_sample_permutation_pvalue(t1, t2, b=pvalue_b)
         pvalue = torch.mean(permutation_stats >= statistic, dim=0, dtype=torch.float32).item()
         return TwoSampleTestResult(pvalue=pvalue, statistic=statistic)
     else:

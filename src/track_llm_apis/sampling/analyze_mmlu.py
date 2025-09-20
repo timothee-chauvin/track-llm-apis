@@ -20,8 +20,7 @@ def is_correct(prompt: str, text: str) -> bool:
 def mmlu_two_sample_test(
     rows_subset: dict[str, list[CompressedOutputRow]],
     unchanged_rows_subset: dict[str, list[CompressedOutputRow]],
-    b: int = 1000,
-    compute_pvalue: bool = True,
+    pvalue_b: int = 1000,
     **kwargs,
 ) -> TwoSampleTestResult:
     assert set(rows_subset.keys()) == set(unchanged_rows_subset.keys())
@@ -40,8 +39,8 @@ def mmlu_two_sample_test(
         device=config.analysis.device,
     ).T
     statistic = mmlu_two_sample_statistic(correct1.unsqueeze(0), correct2.unsqueeze(0)).item()
-    if compute_pvalue:
-        permutation_stats = mmlu_two_sample_permutation_pvalue(correct1, correct2, b=b)
+    if pvalue_b > 0:
+        permutation_stats = mmlu_two_sample_permutation_pvalue(correct1, correct2, b=pvalue_b)
         pvalue = torch.mean(permutation_stats >= statistic, dim=0, dtype=torch.float32).item()
         return TwoSampleTestResult(pvalue=pvalue, statistic=statistic)
     else:

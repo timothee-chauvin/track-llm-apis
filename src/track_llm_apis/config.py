@@ -29,13 +29,12 @@ class AnalysisConfig(BaseSettings):
     sampling_dirname: str | None = None
     # For ablation_prompt_plot
     sampling_dirnames: list[str] | None = None
+
     detector_alpha: float = 0.05
     results_alpha: float = 0.05
-    compute_pvalue: bool = False
-    plot_roc: bool = False
-    n_tests_per_roc: int = 100
-    n_rocs: int = 10
-    b: int = 1000
+    n_tests: int = 1000
+    # Set to 0 to avoid computing the pvalue
+    pvalue_b: int = 1000
 
 
 class DeviceConfig(BaseModel):

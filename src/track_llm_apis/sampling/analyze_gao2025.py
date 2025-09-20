@@ -206,13 +206,12 @@ def run_two_sample_test(
 def run_two_sample_test_torch(
     sample: CompletionSample,
     other_sample: CompletionSample,
-    compute_pvalue: bool = True,
     b=1000,
 ) -> TwoSampleTestResult:
     statistic = mmd_hamming_torch(
         sample.sequences.unsqueeze(0), other_sample.sequences.unsqueeze(0)
     ).item()
-    if compute_pvalue:
+    if b > 0:
         get_pvalue = two_sample_permutation_pvalue_torch(sample, other_sample, b=b)
         pvalue = get_pvalue(statistic)
         return TwoSampleTestResult(pvalue=pvalue, statistic=statistic)
