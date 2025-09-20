@@ -430,7 +430,7 @@ def evaluate_detectors(
             "n_tests_per_roc": n_tests_per_roc,
             "n_rocs": n_rocs,
             "b": b,
-            "used_tokens": {source.name: None for source in sources},
+            "used_tokens": {},
         }
     }
 
