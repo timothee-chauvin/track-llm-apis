@@ -1,6 +1,7 @@
 import gzip
 import json
 import os
+import random
 from collections import defaultdict
 from collections.abc import Sequence
 from enum import Enum
@@ -365,11 +366,6 @@ class TwoSampleMultiTestResult(BaseModel):
         fpr, tpr, _ = roc_curve(y_true, y_pred)
         return list(fpr), list(tpr)
 
-    def roc_auc(self, orig: "TwoSampleMultiTestResult") -> float:
-        y_true = [0] * len(orig.stats) + [1] * len(self.stats)
-        y_pred = orig.stats + self.stats
-        return roc_auc_score(y_true, y_pred)
-
     @property
     def stat_avg(self) -> float:
         return sum(self.stats) / len(self.stats)
@@ -524,3 +520,32 @@ class AnalysisResult(BaseModel):
 
     def compute_roc_auc_ci(self, variant: Variant) -> dict[Condition, CIResult]:
         raise NotImplementedError()
+
+    def avg_auc_across_variants(
+        self, sampling: bool = False, centered: bool = False
+    ) -> dict[Condition, float]:
+        """If centered is True, subtract the average to the AUC of each condition.
+        If sampling is True, sample with replacement from each list of statistics.
+        """
+        result = {}
+        for condition in self.original.keys():
+            result[condition] = sum(
+                self.auc(variant=variant, condition=condition, sampling=sampling)
+                for variant in self.variants
+            ) / len(self.variants)
+
+        if centered:
+            avg_auc = sum(result.values()) / len(result)
+            result = {condition: result[condition] - avg_auc for condition in result}
+
+        return result
+
+    def auc(self, variant: Variant, condition: Condition, sampling: bool) -> float:
+        orig_stats = self.original[condition].stats
+        variant_stats = self.variants[variant][condition].stats
+        if sampling:
+            orig_stats = random.choices(orig_stats, k=len(orig_stats))
+            variant_stats = random.choices(variant_stats, k=len(variant_stats))
+        y_true = [0] * len(orig_stats) + [1] * len(variant_stats)
+        y_pred = orig_stats + variant_stats
+        return roc_auc_score(y_true, y_pred)

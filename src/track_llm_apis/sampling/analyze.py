@@ -2,16 +2,17 @@ import json
 import os
 import random
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Literal
 
 import orjson
-import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from pydantic import BaseModel, field_validator
+from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from track_llm_apis.config import config
@@ -507,7 +508,7 @@ def baseline_analysis(
     logger.info(f"Time taken: {(end_time - start_time):.2f} seconds")
 
 
-def ablation_influence_of_prompt(
+def ablation_influence_of_prompt_compute_stats(
     directory: Path,
     data: CompressedOutput,
     n_tests: int = 1000,
@@ -565,72 +566,92 @@ def ablation_influence_of_prompt(
         with open(directory / "prompt_ablation_analysis.json", "wb") as f:
             f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
 
-    # Maybe reintroduce later if needed
-    # if plot_roc:
-    #     plot_roc_curve_with_fs_cache(
-    #         PlotData(
-    #             experiment="ablation_prompt",
-    #             model_name=data.model_name,
-    #             variant=None,
-    #             roc_curves=multivariant_roc_curves,
-    #             roc_auc_ci=multivariant_roc_auc_ci,
-    #         ),
-    #         get_ablation_prompt_data_dir(directory),
-    #     )
-    # with open(directory / "prompt_ablation_analysis.json", "wb") as f:
-    #     f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
+
+def compute_prompt_score(analyses: list[AnalysisResult], sampling: bool) -> dict[str, float]:
+    """For each prompt, return the average over analyses (models) of its AUC minus the model average."""
+    prompts = list(analyses[0].original.keys())
+    n_models = len(analyses)
+    scores = []
+    for analysis in analyses:
+        scores.append(analysis.avg_auc_across_variants(sampling=sampling, centered=True))
+    results = {}
+    for prompt in prompts:
+        results[prompt] = sum(scores[i][prompt] for i in range(n_models)) / n_models
+    return results
 
 
-def ablation_influence_of_prompt_plot():
+def compute_prompt_score_bootstrap(analyses: list[AnalysisResult]) -> dict[str, list[float]]:
+    """Bootstrap by sampling with replacement both from the analyses, then from the statistics for each analysis."""
+    # TODO parallelize
+    n_bootstrap = config.analysis.n_bootstrap
+    results = defaultdict(list)
+    for _ in tqdm(range(n_bootstrap), desc="bootstrap"):
+        # Sample with replacement from the analyses
+        analyses_bootstrap = random.choices(analyses, k=len(analyses))
+        result = compute_prompt_score(analyses_bootstrap, sampling=True)
+        for prompt, score in result.items():
+            results[prompt].append(score)
+    return results
+
+
+def ablation_influence_of_prompt_gen_and_plot():
     """Expects one `prompt_ablation_analysis.json` per sampling dir."""
-    rows = []
+    data_path = config.plots_dir / "paper" / "prompt_ablation.json"
+    ablation_influence_of_prompt_gen(data_path)
+    ablation_influence_of_prompt_plot(data_path)
+
+
+def ablation_influence_of_prompt_plot(data_path: Path):
+    with open(data_path, "rb") as f:
+        all_results = orjson.loads(f.read())
+    bootstrap_results = all_results["bootstrap_results"]
+
+    fig = go.Figure()
+    for prompt, scores in bootstrap_results.items():
+        fig.add_trace(
+            go.Violin(
+                x=[prompt] * len(scores), y=scores, name=prompt, box_visible=True, points="all"
+            )
+        )
+
+    fig.update_layout(
+        font_family="Spectral",
+        template="plotly_white",
+        title="Prompt Ablaction Analysis",
+        xaxis_showticklabels=False,
+        yaxis=dict(
+            title="Overall AUC Advantage",
+            tickformat=".0%",
+            dtick=0.01,
+        ),
+    )
+
+    plot_path = config.plots_dir / "paper" / "prompt_ablation.html"
+    fig.write_html(plot_path)
+    logger.info(f"Prompt ablation analysis plot saved to {plot_path}")
+
+
+def ablation_influence_of_prompt_gen(out_path: Path):
     sampling_dirs = [
         config.sampling_data_dir / "keep" / dirname for dirname in config.analysis.sampling_dirnames
     ]
-
+    analyses = []
     for sampling_dir in sampling_dirs:
         p = Path(sampling_dir) / "prompt_ablation_analysis.json"
         with open(p) as f:
-            analysis = orjson.loads(f.read())
+            analyses.append(AnalysisResult.model_validate(orjson.loads(f.read())))
 
-        model = analysis["metadata"]["model_name"]
-        for prompt, pa in analysis["all"].items():
-            avg = pa["avg_roc_auc_ci"]["avg"]
-            lower = pa["avg_roc_auc_ci"]["lower"]
-            upper = pa["avg_roc_auc_ci"]["upper"]
+    point_estimates = compute_prompt_score(analyses, sampling=False)
 
-            rows.append(
-                {
-                    "prompt": prompt,
-                    "model": model,
-                    "auc": avg,
-                    "err_low": avg - lower,
-                    "err_high": upper - avg,
-                }
-            )
+    bootstrap_results = compute_prompt_score_bootstrap(analyses)
 
-    df = pd.DataFrame(rows)
-
-    fig = px.line(
-        df,
-        x="model",
-        y="auc",
-        color="prompt",  # one line per prompt
-        markers=True,
-        error_y="err_high",
-        error_y_minus="err_low",
-        labels={"model": "Model", "auc": "Average ROC AUC", "prompt": "Prompt"},
-    )
-
-    fig.update_layout(
-        title="Average ROC AUC per Model across Prompts",
-        legend_title="Prompt",
-        margin=dict(l=10, r=10, t=40, b=40),
-    )
-
-    plot_path = config.plots_dir / "paper" / "prompt_ablation_analysis.html"
-    fig.write_html(plot_path)
-    logger.info(f"Prompt ablation analysis plot saved to {plot_path}")
+    all_results = {
+        "point_estimates": point_estimates,
+        "bootstrap_results": bootstrap_results,
+    }
+    with open(out_path, "wb") as f:
+        f.write(orjson.dumps(all_results))
+    logger.info(f"Prompt ablation analysis data saved to {out_path}")
 
 
 if __name__ == "__main__":
@@ -653,11 +674,11 @@ if __name__ == "__main__":
             pvalue_b=analysis_config.pvalue_b,
         )
     elif analysis_config.experiment == "ablation_prompt":
-        ablation_influence_of_prompt(
+        ablation_influence_of_prompt_compute_stats(
             directory=output_dir,
             data=compressed_output,
             n_tests=analysis_config.n_tests,
             pvalue_b=analysis_config.pvalue_b,
         )
     elif analysis_config.experiment == "ablation_prompt_plot":
-        ablation_influence_of_prompt_plot()
+        ablation_influence_of_prompt_gen_and_plot()

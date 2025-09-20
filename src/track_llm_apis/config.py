@@ -33,6 +33,7 @@ class AnalysisConfig(BaseSettings):
     detector_alpha: float = 0.05
     results_alpha: float = 0.05
     n_tests: int = 1000
+    n_bootstrap: int = 2000
     # Set to 0 to avoid computing the pvalue
     pvalue_b: int = 1000
 
