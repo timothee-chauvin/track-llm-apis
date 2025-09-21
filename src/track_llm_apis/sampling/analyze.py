@@ -604,10 +604,12 @@ def ablation_influence_of_prompt_gen_and_plot():
 def ablation_influence_of_prompt_plot(data_path: Path):
     with open(data_path, "rb") as f:
         all_results = orjson.loads(f.read())
+    prompt_length_avg = all_results["prompt_length_avg"]
     bootstrap_results = all_results["bootstrap_results"]
 
     fig = go.Figure()
-    for prompt, scores in bootstrap_results.items():
+    for prompt in sorted(bootstrap_results.keys(), key=lambda x: prompt_length_avg[x]):
+        scores = bootstrap_results[prompt]
         fig.add_trace(
             go.Violin(
                 x=[prompt] * len(scores), y=scores, name=prompt, box_visible=True, points="all"
@@ -617,13 +619,14 @@ def ablation_influence_of_prompt_plot(data_path: Path):
     fig.update_layout(
         font_family="Spectral",
         template="plotly_white",
-        title="Prompt Ablaction Analysis",
+        title="AUC Advantages of Prompts",
         xaxis_showticklabels=False,
         yaxis=dict(
             title="Overall AUC Advantage",
             tickformat=".0%",
             dtick=0.01,
         ),
+        legend=dict(x=0, y=1, xanchor="left", yanchor="top"),
     )
 
     plot_path = config.plots_dir / "paper" / "prompt_ablation.html"
@@ -641,11 +644,23 @@ def ablation_influence_of_prompt_gen(out_path: Path):
         with open(p) as f:
             analyses.append(AnalysisResult.model_validate(orjson.loads(f.read())))
 
+    prompt_lengths = defaultdict(list)
+    for analysis in analyses:
+        for prompt, prompt_length in analysis.input_token_avg.items():
+            prompt_lengths[prompt].append(
+                prompt_length / (2 * config.sampling.logprob.n_samples_per_prompt)
+            )
+
+    prompt_length_avg = {
+        prompt: sum(lengths) / len(lengths) for prompt, lengths in prompt_lengths.items()
+    }
+
     point_estimates = compute_prompt_score(analyses, sampling=False)
 
     bootstrap_results = compute_prompt_score_bootstrap(analyses)
 
     all_results = {
+        "prompt_length_avg": prompt_length_avg,
         "point_estimates": point_estimates,
         "bootstrap_results": bootstrap_results,
     }
