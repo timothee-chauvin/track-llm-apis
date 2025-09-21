@@ -11,6 +11,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
+from plotly.subplots import make_subplots
 from pydantic import BaseModel, field_validator
 from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
@@ -607,27 +608,60 @@ def ablation_influence_of_prompt_plot(data_path: Path):
     prompt_length_avg = all_results["prompt_length_avg"]
     bootstrap_results = all_results["bootstrap_results"]
 
-    fig = go.Figure()
-    for prompt in sorted(bootstrap_results.keys(), key=lambda x: prompt_length_avg[x]):
+    # Create subplot with secondary y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Sort prompts by average length for consistent ordering
+    sorted_prompts = sorted(bootstrap_results.keys(), key=lambda x: prompt_length_avg[x])
+
+    # Add violin plots for AUC advantages
+    for prompt in sorted_prompts:
         scores = bootstrap_results[prompt]
         fig.add_trace(
             go.Violin(
-                x=[prompt] * len(scores), y=scores, name=prompt, box_visible=True, points="all"
-            )
+                x=[prompt] * len(scores),
+                y=scores,
+                name=prompt,
+                box_visible=True,
+                points="all",
+                showlegend=True,
+                legend="legend",
+            ),
+            secondary_y=False,
         )
 
+    # Add scatter plot for prompt lengths with text annotations
+    fig.add_trace(
+        go.Scatter(
+            x=sorted_prompts,
+            y=[prompt_length_avg[prompt] for prompt in sorted_prompts],
+            mode="markers+text",
+            name="Average Prompt Token Length Across Models",
+            marker=dict(size=10, color="white", line_width=2),
+            text=[f"{prompt_length_avg[prompt]:.1f}" for prompt in sorted_prompts],
+            textposition="middle right",
+            textfont=dict(size=14),
+            showlegend=True,
+            legend="legend2",
+        ),
+        secondary_y=True,
+    )
+
+    # Update layout
     fig.update_layout(
         font_family="Spectral",
         template="plotly_white",
-        title="AUC Advantages of Prompts",
+        title="AUC Advantages of Prompts and Their Average Lengths",
         xaxis_showticklabels=False,
-        yaxis=dict(
-            title="Overall AUC Advantage",
-            tickformat=".0%",
-            dtick=0.01,
-        ),
         legend=dict(x=0, y=1, xanchor="left", yanchor="top"),
+        legend2=dict(x=0.35, y=1, xanchor="left", yanchor="top"),
     )
+
+    # Update y-axes
+    fig.update_yaxes(
+        title_text="Overall AUC Advantage", tickformat=".0%", dtick=0.01, secondary_y=False
+    )
+    fig.update_yaxes(showgrid=False, showticklabels=False, secondary_y=True)
 
     plot_path = config.plots_dir / "paper" / "prompt_ablation.html"
     fig.write_html(plot_path)
