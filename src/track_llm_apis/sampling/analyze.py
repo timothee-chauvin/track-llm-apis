@@ -429,6 +429,7 @@ def baseline_analysis(
 
     start_time = time.time()
     # Get data on the false positive rate
+    logger.info("Evaluating on the original model")
     analysis_results.original = {
         str(source.value): evaluate_detector_on_variant(
             source,
@@ -509,54 +510,44 @@ def baseline_analysis(
     logger.info(f"Time taken: {(end_time - start_time):.2f} seconds")
 
 
-def ablation_influence_of_prompt_compute_stats(
-    directory: Path,
-    data: CompressedOutput,
-    n_tests: int = 1000,
-    pvalue_b: int = 1000,
-):
-    """Test the influence of the prompt choice on detection performance for the logprob method."""
-    source = DataSource.US
-    filtered_data = data.filter(datasource=source)
-    rows_by_variant = filtered_data.get_rows_by_variant()
-    unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
-    unchanged_rows_by_prompt = filtered_data.get_rows_by_prompt(unchanged_rows)
+class PromptAblation:
+    stats_filename = "prompt_ablation_analysis.json"
+    plot_data_path = config.plots_dir / "paper" / "prompt_ablation.json"
+    plot_path = config.plots_dir / "paper" / "prompt_ablation.html"
 
-    prompt_length = {
-        prompt: tokens
-        for prompt, tokens in filtered_data.references.prompts.keys()
-        if prompt in unchanged_rows_by_prompt
-    }
-    prompts = list(prompt_length.keys())
-    analysis_results = AnalysisResult(
-        experiment="ablation_prompt",
-        model_name=data.model_name,
-        n_tests=n_tests,
-        pvalue_b=pvalue_b,
-    )
-    variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
-    analysis_results.original = {
-        prompt: evaluate_detector_on_variant(
-            source,
-            unchanged_rows_by_prompt,
-            unchanged_rows_by_prompt,
-            same=True,
-            prompt_length=prompt_length,
-            logprob_prompt=prompt,
+    @staticmethod
+    def compute_stats(
+        directory: Path,
+        data: CompressedOutput,
+        n_tests: int = 1000,
+        pvalue_b: int = 1000,
+    ):
+        """Test the influence of the prompt choice on detection performance for the logprob method."""
+        source = DataSource.US
+        filtered_data = data.filter(datasource=source)
+        rows_by_variant = filtered_data.get_rows_by_variant()
+        unchanged_rows = rows_by_variant[TinyChange.unchanged_str()]
+        unchanged_rows_by_prompt = filtered_data.get_rows_by_prompt(unchanged_rows)
+
+        prompt_length = {
+            prompt: tokens
+            for prompt, tokens in filtered_data.references.prompts.keys()
+            if prompt in unchanged_rows_by_prompt
+        }
+        prompts = list(prompt_length.keys())
+        analysis_results = AnalysisResult(
+            experiment="ablation_prompt",
+            model_name=data.model_name,
             n_tests=n_tests,
             pvalue_b=pvalue_b,
         )
-        for prompt in prompts
-    }
-    for variant_idx, variant in enumerate(variants):
-        logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
-        rows_by_prompt = filtered_data.get_rows_by_prompt(rows_by_variant[variant])
-        analysis_results.variants[variant] = {
+        variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
+        analysis_results.original = {
             prompt: evaluate_detector_on_variant(
                 source,
                 unchanged_rows_by_prompt,
-                rows_by_prompt,
-                same=False,
+                unchanged_rows_by_prompt,
+                same=True,
                 prompt_length=prompt_length,
                 logprob_prompt=prompt,
                 n_tests=n_tests,
@@ -564,143 +555,154 @@ def ablation_influence_of_prompt_compute_stats(
             )
             for prompt in prompts
         }
-        with open(directory / "prompt_ablation_analysis.json", "wb") as f:
-            f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
+        for variant_idx, variant in enumerate(variants):
+            logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
+            rows_by_prompt = filtered_data.get_rows_by_prompt(rows_by_variant[variant])
+            analysis_results.variants[variant] = {
+                prompt: evaluate_detector_on_variant(
+                    source,
+                    unchanged_rows_by_prompt,
+                    rows_by_prompt,
+                    same=False,
+                    prompt_length=prompt_length,
+                    logprob_prompt=prompt,
+                    n_tests=n_tests,
+                    pvalue_b=pvalue_b,
+                )
+                for prompt in prompts
+            }
+            with open(directory / PromptAblation.stats_filename, "wb") as f:
+                f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
 
+    @staticmethod
+    def compute_prompt_score(analyses: list[AnalysisResult], sampling: bool) -> dict[str, float]:
+        """For each prompt, return the average over analyses (models) of its AUC minus the model average."""
+        prompts = list(analyses[0].original.keys())
+        n_models = len(analyses)
+        scores = []
+        for analysis in analyses:
+            scores.append(analysis.avg_auc_across_variants(sampling=sampling, centered=True))
+        results = {}
+        for prompt in prompts:
+            results[prompt] = sum(scores[i][prompt] for i in range(n_models)) / n_models
+        return results
 
-def compute_prompt_score(analyses: list[AnalysisResult], sampling: bool) -> dict[str, float]:
-    """For each prompt, return the average over analyses (models) of its AUC minus the model average."""
-    prompts = list(analyses[0].original.keys())
-    n_models = len(analyses)
-    scores = []
-    for analysis in analyses:
-        scores.append(analysis.avg_auc_across_variants(sampling=sampling, centered=True))
-    results = {}
-    for prompt in prompts:
-        results[prompt] = sum(scores[i][prompt] for i in range(n_models)) / n_models
-    return results
+    @staticmethod
+    def compute_prompt_score_bootstrap(analyses: list[AnalysisResult]) -> dict[str, list[float]]:
+        """Bootstrap by sampling with replacement both from the analyses, then from the statistics for each analysis."""
+        # TODO parallelize
+        n_bootstrap = config.analysis.n_bootstrap
+        results = defaultdict(list)
+        for _ in tqdm(range(n_bootstrap), desc="bootstrap"):
+            analyses_bootstrap = random.choices(analyses, k=len(analyses))
+            result = PromptAblation.compute_prompt_score(analyses_bootstrap, sampling=True)
+            for prompt, score in result.items():
+                results[prompt].append(score)
+        return results
 
+    @staticmethod
+    def gen_plot_data_and_plot():
+        PromptAblation.gen_plot_data()
+        PromptAblation.plot()
 
-def compute_prompt_score_bootstrap(analyses: list[AnalysisResult]) -> dict[str, list[float]]:
-    """Bootstrap by sampling with replacement both from the analyses, then from the statistics for each analysis."""
-    # TODO parallelize
-    n_bootstrap = config.analysis.n_bootstrap
-    results = defaultdict(list)
-    for _ in tqdm(range(n_bootstrap), desc="bootstrap"):
-        # Sample with replacement from the analyses
-        analyses_bootstrap = random.choices(analyses, k=len(analyses))
-        result = compute_prompt_score(analyses_bootstrap, sampling=True)
-        for prompt, score in result.items():
-            results[prompt].append(score)
-    return results
+    @staticmethod
+    def gen_plot_data():
+        sampling_dirs = [
+            config.sampling_data_dir / "keep" / dirname
+            for dirname in config.analysis.sampling_dirnames
+        ]
+        analyses = []
+        for sampling_dir in sampling_dirs:
+            p = Path(sampling_dir) / PromptAblation.stats_filename
+            with open(p) as f:
+                analyses.append(AnalysisResult.model_validate(orjson.loads(f.read())))
 
+        prompt_lengths = defaultdict(list)
+        for analysis in analyses:
+            for prompt, prompt_length in analysis.input_token_avg.items():
+                prompt_lengths[prompt].append(
+                    prompt_length / (2 * config.sampling.logprob.n_samples_per_prompt)
+                )
 
-def ablation_influence_of_prompt_gen_and_plot():
-    """Expects one `prompt_ablation_analysis.json` per sampling dir."""
-    data_path = config.plots_dir / "paper" / "prompt_ablation.json"
-    ablation_influence_of_prompt_gen(data_path)
-    ablation_influence_of_prompt_plot(data_path)
+        prompt_length_avg = {
+            prompt: sum(lengths) / len(lengths) for prompt, lengths in prompt_lengths.items()
+        }
 
+        point_estimates = PromptAblation.compute_prompt_score(analyses, sampling=False)
 
-def ablation_influence_of_prompt_plot(data_path: Path):
-    with open(data_path, "rb") as f:
-        all_results = orjson.loads(f.read())
-    prompt_length_avg = all_results["prompt_length_avg"]
-    bootstrap_results = all_results["bootstrap_results"]
+        bootstrap_results = PromptAblation.compute_prompt_score_bootstrap(analyses)
 
-    # Create subplot with secondary y-axis
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
+        all_results = {
+            "prompt_length_avg": prompt_length_avg,
+            "point_estimates": point_estimates,
+            "bootstrap_results": bootstrap_results,
+        }
+        plot_data_path = PromptAblation.plot_data_path
+        with open(plot_data_path, "wb") as f:
+            f.write(orjson.dumps(all_results))
+        logger.info(f"Prompt ablation analysis data saved to {plot_data_path}")
 
-    # Sort prompts by average length for consistent ordering
-    sorted_prompts = sorted(bootstrap_results.keys(), key=lambda x: prompt_length_avg[x])
+    @staticmethod
+    def plot():
+        with open(PromptAblation.plot_data_path, "rb") as f:
+            all_results = orjson.loads(f.read())
+        prompt_length_avg = all_results["prompt_length_avg"]
+        bootstrap_results = all_results["bootstrap_results"]
 
-    # Add violin plots for AUC advantages
-    for prompt in sorted_prompts:
-        scores = bootstrap_results[prompt]
-        fig.add_trace(
-            go.Violin(
-                x=[prompt] * len(scores),
-                y=scores,
-                name=prompt,
-                box_visible=True,
-                points="all",
-                showlegend=True,
-                legend="legend",
-            ),
-            secondary_y=False,
-        )
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # Add scatter plot for prompt lengths with text annotations
-    fig.add_trace(
-        go.Scatter(
-            x=sorted_prompts,
-            y=[prompt_length_avg[prompt] for prompt in sorted_prompts],
-            mode="markers+text",
-            name="Average Prompt Token Length Across Models",
-            marker=dict(size=10, color="white", line_width=2),
-            text=[f"{prompt_length_avg[prompt]:.1f}" for prompt in sorted_prompts],
-            textposition="middle right",
-            textfont=dict(size=14),
-            showlegend=True,
-            legend="legend2",
-        ),
-        secondary_y=True,
-    )
+        sorted_prompts = sorted(bootstrap_results.keys(), key=lambda x: prompt_length_avg[x])
 
-    # Update layout
-    fig.update_layout(
-        font_family="Spectral",
-        template="plotly_white",
-        title="AUC Advantages of Prompts and Their Average Lengths",
-        xaxis_showticklabels=False,
-        legend=dict(x=0, y=1, xanchor="left", yanchor="top"),
-        legend2=dict(x=0.35, y=1, xanchor="left", yanchor="top"),
-    )
-
-    # Update y-axes
-    fig.update_yaxes(
-        title_text="Overall AUC Advantage", tickformat=".0%", dtick=0.01, secondary_y=False
-    )
-    fig.update_yaxes(showgrid=False, showticklabels=False, secondary_y=True)
-
-    plot_path = config.plots_dir / "paper" / "prompt_ablation.html"
-    fig.write_html(plot_path)
-    logger.info(f"Prompt ablation analysis plot saved to {plot_path}")
-
-
-def ablation_influence_of_prompt_gen(out_path: Path):
-    sampling_dirs = [
-        config.sampling_data_dir / "keep" / dirname for dirname in config.analysis.sampling_dirnames
-    ]
-    analyses = []
-    for sampling_dir in sampling_dirs:
-        p = Path(sampling_dir) / "prompt_ablation_analysis.json"
-        with open(p) as f:
-            analyses.append(AnalysisResult.model_validate(orjson.loads(f.read())))
-
-    prompt_lengths = defaultdict(list)
-    for analysis in analyses:
-        for prompt, prompt_length in analysis.input_token_avg.items():
-            prompt_lengths[prompt].append(
-                prompt_length / (2 * config.sampling.logprob.n_samples_per_prompt)
+        # Violin plots for AUC advantages
+        for prompt in sorted_prompts:
+            scores = bootstrap_results[prompt]
+            fig.add_trace(
+                go.Violin(
+                    x=[prompt] * len(scores),
+                    y=scores,
+                    name=prompt,
+                    box_visible=True,
+                    points="all",
+                    showlegend=True,
+                    legend="legend",
+                ),
+                secondary_y=False,
             )
 
-    prompt_length_avg = {
-        prompt: sum(lengths) / len(lengths) for prompt, lengths in prompt_lengths.items()
-    }
+        # Scatter plot for prompt lengths
+        fig.add_trace(
+            go.Scatter(
+                x=sorted_prompts,
+                y=[prompt_length_avg[prompt] for prompt in sorted_prompts],
+                mode="markers+text",
+                name="Average Prompt Token Length Across Models",
+                marker=dict(size=10, color="white", line_width=2),
+                text=[f"{prompt_length_avg[prompt]:.1f}" for prompt in sorted_prompts],
+                textposition="middle right",
+                textfont=dict(size=14),
+                showlegend=True,
+                legend="legend2",
+            ),
+            secondary_y=True,
+        )
 
-    point_estimates = compute_prompt_score(analyses, sampling=False)
+        fig.update_layout(
+            font_family="Spectral",
+            template="plotly_white",
+            title="AUC Advantages of Prompts and Their Average Lengths",
+            xaxis_showticklabels=False,
+            legend=dict(x=0, y=1, xanchor="left", yanchor="top"),
+            legend2=dict(x=0.35, y=1, xanchor="left", yanchor="top"),
+        )
 
-    bootstrap_results = compute_prompt_score_bootstrap(analyses)
+        fig.update_yaxes(
+            title_text="Overall AUC Advantage", tickformat=".0%", dtick=0.01, secondary_y=False
+        )
+        fig.update_yaxes(showgrid=False, showticklabels=False, secondary_y=True)
 
-    all_results = {
-        "prompt_length_avg": prompt_length_avg,
-        "point_estimates": point_estimates,
-        "bootstrap_results": bootstrap_results,
-    }
-    with open(out_path, "wb") as f:
-        f.write(orjson.dumps(all_results))
-    logger.info(f"Prompt ablation analysis data saved to {out_path}")
+        plot_path = PromptAblation.plot_path
+        fig.write_html(plot_path)
+        logger.info(f"Prompt ablation analysis plot saved to {plot_path}")
 
 
 if __name__ == "__main__":
@@ -723,13 +725,13 @@ if __name__ == "__main__":
             pvalue_b=analysis_config.pvalue_b,
         )
     elif analysis_config.experiment == "ablation_prompt":
-        ablation_influence_of_prompt_compute_stats(
+        PromptAblation.compute_stats(
             directory=output_dir,
             data=compressed_output,
             n_tests=analysis_config.n_tests,
             pvalue_b=analysis_config.pvalue_b,
         )
     elif analysis_config.experiment == "ablation_prompt_plot":
-        ablation_influence_of_prompt_gen_and_plot()
+        PromptAblation.gen_plot_data_and_plot()
     else:
         raise ValueError(f"Invalid experiment: {analysis_config.experiment}")
