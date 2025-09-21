@@ -24,10 +24,11 @@ logger = logging.getLogger("track-llm-apis")
 
 class AnalysisConfig(BaseSettings):
     device: str | None = "cuda" if torch.cuda.is_available() else None
-    experiment: Literal["baseline", "ablation_prompt", "ablation_prompt_plot"] = "baseline"
-    # For baseline, ablation_prompt
+    experiment: Literal["baseline", "ablation_prompt"] = "baseline"
+    task: Literal["compute_stats", "plot"] = "compute_stats"
+    # For task="compute_stats"
     sampling_dirname: str | None = None
-    # For ablation_prompt_plot
+    # For task="plot"
     sampling_dirnames: list[str] | None = None
 
     detector_alpha: float = 0.05
@@ -36,6 +37,18 @@ class AnalysisConfig(BaseSettings):
     n_bootstrap: int = 2000
     # Set to 0 to avoid computing the pvalue
     pvalue_b: int = 1000
+
+
+class PlottingConfig(BaseModel):
+    template: str = "plotly_white"
+    font_family: str = "Spectral"
+    color_map: dict[str, str] = Field(
+        default_factory=lambda: {
+            "0": "#636EFA",  # Logprobs
+            "1": "#EF553B",  # MMLU
+            "2": "#00CC96",  # GAO2025
+        }
+    )
 
 
 class DeviceConfig(BaseModel):
@@ -82,7 +95,7 @@ class DeviceConfig(BaseModel):
 
 class Gao2025Config(BaseModel):
     n_wikipedia_prompts: int = 25
-    n_wikipedia_samples_per_prompt: int = 10
+    n_samples_per_prompt: int = 10
     wikipedia_seed: int = 0
     max_tokens: int = 50
     temperature: float = 1.0
@@ -232,6 +245,7 @@ class Config(BaseSettings):
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     api: APIConfig = Field(default_factory=APIConfig)
+    plotting: PlottingConfig = Field(default_factory=PlottingConfig)
 
     @property
     def assets_dir(self) -> Path:

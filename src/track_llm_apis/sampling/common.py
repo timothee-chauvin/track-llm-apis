@@ -31,6 +31,21 @@ class DataSource(Enum):
     MMLU = 1
     GAO2025 = 2
 
+    def get_config(self) -> BaseModel:
+        return {
+            DataSource.US: config.sampling.logprob,
+            DataSource.MMLU: config.sampling.mmlu,
+            DataSource.GAO2025: config.sampling.gao2025,
+        }[self]
+
+    def to_str(self) -> str:
+        return str(self.value)
+
+    @classmethod
+    def from_str(cls, s: str) -> Self:
+        """s contains the integer value of the DataSource"""
+        return cls(int(s))
+
 
 class References:
     def __init__(self):
@@ -394,100 +409,6 @@ class TwoSampleMultiTestResult(BaseModel):
         return roc_auc_score(y_true, y_pred)
 
 
-# class TwoSampleMultiTestResultMultiROC(BaseModel):
-#     """Result of multiple sets of multiple two-sample tests on the same variant, allowing to compute multiple ROC curves."""
-
-#     results: list["TwoSampleMultiTestResultROC"]
-
-#     @staticmethod
-#     def _ci(values: list[float | None], results_alpha: float) -> CIResult:
-#         if any(value is None for value in values):
-#             return CIResult(
-#                 lower=None,
-#                 avg=None,
-#                 upper=None,
-#             )
-#         values = sorted(values)
-#         return CIResult(
-#             lower=values[int(results_alpha * len(values))],
-#             avg=sum(values) / len(values),
-#             upper=values[int((1 - results_alpha) * len(values))],
-#         )
-
-#     def roc_auc_ci(
-#         self, origs: "TwoSampleMultiTestResultMultiROC", results_alpha: float
-#     ) -> CIResult:
-#         roc_aucs = [result.roc_auc(orig) for orig, result in zip(origs.results, self.results)]
-#         return self._ci(roc_aucs, results_alpha)
-
-#     def roc_curves(self, origs: "TwoSampleMultiTestResultMultiROC") -> list[ROCCurve]:
-#         return [result.roc_curve(orig) for orig, result in zip(origs.results, self.results)]
-
-#     def stat_ci(self, results_alpha: float) -> CIResult:
-#         return self._ci([result.stat_avg for result in self.results], results_alpha)
-
-#     def pvalue_ci(self, results_alpha: float) -> CIResult:
-#         return self._ci([result.pvalue_avg for result in self.results], results_alpha)
-
-#     def power_ci(self, detector_alpha: float, results_alpha: float) -> CIResult:
-#         return self._ci([result.power(detector_alpha) for result in self.results], results_alpha)
-
-#     @staticmethod
-#     def multivariant_rocs(
-#         origs: "TwoSampleMultiTestResultMultiROC",
-#         all_variants: list["TwoSampleMultiTestResultMultiROC"],
-#     ) -> list[tuple[np.ndarray, np.ndarray]]:
-#         return [
-#             TwoSampleMultiTestResultROC.multivariant_roc(orig, variants)
-#             for orig, variants in zip(
-#                 origs.results, [variants.results for variants in all_variants]
-#             )
-#         ]
-
-#     @staticmethod
-#     def multivariant_roc_auc_ci(
-#         origs: "TwoSampleMultiTestResultMultiROC",
-#         all_variants: list["TwoSampleMultiTestResultMultiROC"],
-#         results_alpha: float,
-#     ) -> CIResult:
-#         return TwoSampleMultiTestResultMultiROC._ci(
-#             [
-#                 TwoSampleMultiTestResultROC.multivariant_roc_auc(orig, variants)
-#                 for orig, variants in zip(
-#                     origs.results, [variants.results for variants in all_variants]
-#                 )
-#             ],
-#             results_alpha,
-#         )
-
-#     @staticmethod
-#     def roc_auc_avg_ci(
-#         origs: "TwoSampleMultiTestResultMultiROC",
-#         all_variants: list["TwoSampleMultiTestResultMultiROC"],
-#         results_alpha: float,
-#         return_values: bool = False,
-#     ) -> CIResult:
-#         """Return the average ROC AUC across all variants as a CI.
-
-#         Suppose there are V variants, each containing S sets of two-sample tests (i.e. 1 TwoSampleMultiTestResultMultiRoc object, S TwoSampleMultiTestResultROC objects).
-#         We compute S average ROC AUCs: for s in [1, ..., S], compute the average ROC AUC across V variants at set index s.
-#         We then compute a CI on the list of S average ROC AUCs.
-
-#         If return_values is True, return a tuple: (the CI, the list of S average ROC AUCs).
-#         """
-#         averages = []
-#         S = len(all_variants[0].results)
-#         for s in range(S):
-#             averages.append(
-#                 sum([variants.results[s].roc_auc(origs.results[s]) for variants in all_variants])
-#                 / len(all_variants)
-#             )
-#         if return_values:
-#             return TwoSampleMultiTestResultMultiROC._ci(averages, results_alpha), averages
-#         else:
-#             return TwoSampleMultiTestResultMultiROC._ci(averages, results_alpha)
-
-
 class AnalysisResult(BaseModel):
     experiment: Literal["baseline", "ablation_prompt"]
     model_name: str
@@ -516,6 +437,10 @@ class AnalysisResult(BaseModel):
     @property
     def conditions(self) -> list[Condition]:
         return list(self.original.keys())
+
+    @property
+    def variant_names(self) -> list[Variant]:
+        return list(self.variants.keys())
 
     def compute_roc_curves(self, variant: Variant) -> dict[Condition, list[ROCCurve]]:
         raise NotImplementedError()
@@ -551,3 +476,19 @@ class AnalysisResult(BaseModel):
         y_true = [0] * len(orig_stats) + [1] * len(variant_stats)
         y_pred = orig_stats + variant_stats
         return roc_auc_score(y_true, y_pred)
+
+    @staticmethod
+    def multianalysis_input_token_avg(analyses: list["AnalysisResult"]) -> dict[Condition, float]:
+        return {
+            condition: sum(analysis.input_token_avg[condition] for analysis in analyses)
+            / len(analyses)
+            for condition in analyses[0].conditions
+        }
+
+    @staticmethod
+    def multianalysis_output_token_avg(analyses: list["AnalysisResult"]) -> dict[Condition, float]:
+        return {
+            condition: sum(analysis.output_token_avg[condition] for analysis in analyses)
+            / len(analyses)
+            for condition in analyses[0].conditions
+        }

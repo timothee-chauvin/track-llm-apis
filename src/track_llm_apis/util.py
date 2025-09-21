@@ -377,3 +377,8 @@ def dataset_info(dataset: Dataset | None) -> dict[str, str | int]:
         "first": trim_to_length(dataset[0]["conversation"][0]["content"], 100),
         "last": trim_to_length(dataset[-1]["conversation"][0]["content"], 100),
     }
+
+
+def ci(values: list[float], alpha: float) -> tuple[float, float]:
+    values = sorted(values)
+    return values[int(alpha / 2 * len(values))], values[int((1 - alpha / 2) * len(values))]

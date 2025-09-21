@@ -1,8 +1,10 @@
 import json
+import math
 import os
 import random
 import time
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,9 +29,10 @@ from track_llm_apis.sampling.common import (
     CompressedOutputRow,
     DataSource,
     TwoSampleMultiTestResult,
+    Variant,
 )
 from track_llm_apis.tinychange import TinyChange
-from track_llm_apis.util import slugify, trim_to_length
+from track_llm_apis.util import ci, slugify, trim_to_length
 
 logger = config.logger
 
@@ -216,7 +219,7 @@ def evaluate_detector_on_variant(
         logger.info(f"Evaluating detector {source}...")
     match source:
         case DataSource.GAO2025:
-            samples_per_prompt = config.sampling.gao2025.n_wikipedia_samples_per_prompt
+            samples_per_prompt = config.sampling.gao2025.n_samples_per_prompt
             two_sample_test_fn = gao2025_two_sample_test
         case DataSource.MMLU:
             samples_per_prompt = config.sampling.mmlu.n_samples_per_prompt
@@ -388,126 +391,325 @@ def plot_roc_curve(
     logger.info(f"Saved ROC curve to {plot_dir / f'{filename_base}.html'}")
 
 
-def baseline_analysis(
-    directory: Path,
-    data: CompressedOutput,
-    sources: list[DataSource],
-    n_tests: int = 1000,
-    pvalue_b: int = 1000,
-):
-    if DataSource.GAO2025 in sources:
-        tokenizer = AutoTokenizer.from_pretrained(data.model_name)
-        if not hasattr(tokenizer, "pad_token") or tokenizer.pad_token is None:
-            logger.info(f"Setting pad token to eos token for {data.model_name}")
-            tokenizer.pad_token = tokenizer.eos_token
+class BAPlotData(BaseModel):
+    token_count: dict[DataSource, tuple[float, float]]
+    point_estimates: dict[Variant, dict[DataSource, float]]
+    bootstrap_results: dict[Variant, dict[DataSource, list[float]]]
 
-    analysis_results = AnalysisResult(
-        experiment="baseline",
-        model_name=data.model_name,
-        n_tests=n_tests,
-        pvalue_b=pvalue_b,
-    )
+    @field_validator("token_count", "point_estimates", "bootstrap_results", mode="before")
+    @classmethod
+    def validate_datasource_keys(cls, value):
+        """Convert string keys back to DataSource enums during deserialization"""
+        if isinstance(value, dict):
+            result = {}
+            for key, val in value.items():
+                if isinstance(val, dict) and all(
+                    isinstance(k, str) and k.isdigit() for k in val.keys()
+                ):
+                    # Nested dict with string/int DataSource keys
+                    result[key] = {DataSource.from_str(ds): v for ds, v in val.items()}
+                elif isinstance(key, str) and key.isdigit():
+                    # Direct string/int DataSource key
+                    result[DataSource.from_str(key)] = val
+                else:
+                    result[key] = val
+            return result
+        return value
 
-    logger.info(f"{sources=}")
-    logger.info(f"{data.model_name=}")
-    variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
-    prompts = list(data.references.prompts.keys())
-    prompt_length = {prompt: tokens for prompt, tokens in prompts}
+    def sources(self) -> list[DataSource]:
+        return list(self.token_count.keys())
 
-    logger.info("Splitting data by source...")
-    data_by_source = {source: data.filter(datasource=source) for source in sources}
 
-    logger.info("Getting rows by variant...")
-    rows_by_variant = {source: data_by_source[source].get_rows_by_variant() for source in sources}
-    unchanged_rows = {
-        source: rows_by_variant[source][TinyChange.unchanged_str()] for source in sources
-    }
-    unchanged_rows_by_prompt = {
-        source: data_by_source[source].get_rows_by_prompt(unchanged_rows[source])
-        for source in sources
-    }
+class BaselineAnalysis:
+    stats_filename = "baseline_analysis.json"
+    plot_dir = config.plots_dir / "paper" / "baseline"
+    plot_data_path = plot_dir / "baseline.json"
 
-    start_time = time.time()
-    # Get data on the false positive rate
-    logger.info("Evaluating on the original model")
-    analysis_results.original = {
-        str(source.value): evaluate_detector_on_variant(
-            source,
-            unchanged_rows_by_prompt[source],
-            unchanged_rows_by_prompt[source],
-            same=True,
-            prompt_length=prompt_length,
-            tokenizer=tokenizer,
+    @staticmethod
+    def compute_stats(
+        directory: Path,
+        data: CompressedOutput,
+        sources: list[DataSource],
+        n_tests: int = 1000,
+        pvalue_b: int = 1000,
+    ):
+        if DataSource.GAO2025 in sources:
+            tokenizer = AutoTokenizer.from_pretrained(data.model_name)
+            if not hasattr(tokenizer, "pad_token") or tokenizer.pad_token is None:
+                logger.info(f"Setting pad token to eos token for {data.model_name}")
+                tokenizer.pad_token = tokenizer.eos_token
+
+        analysis_results = AnalysisResult(
+            experiment="baseline",
+            model_name=data.model_name,
             n_tests=n_tests,
             pvalue_b=pvalue_b,
         )
-        for source in sources
-    }
-    for variant_idx, variant in enumerate(variants):
-        logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
-        analysis_results.variants[variant] = {}
-        for source in sources:
-            variant_rows = rows_by_variant[source][variant]
-            rows_by_prompt = data_by_source[source].get_rows_by_prompt(variant_rows)
-            analysis_results.variants[variant][str(source.value)] = evaluate_detector_on_variant(
+
+        logger.info(f"{sources=}")
+        logger.info(f"{data.model_name=}")
+        variants = [v for v in data.references.variants.keys() if v != TinyChange.unchanged_str()]
+        prompts = list(data.references.prompts.keys())
+        prompt_length = {prompt: tokens for prompt, tokens in prompts}
+
+        logger.info("Splitting data by source...")
+        data_by_source = {source: data.filter(datasource=source) for source in sources}
+
+        logger.info("Getting rows by variant...")
+        rows_by_variant = {
+            source: data_by_source[source].get_rows_by_variant() for source in sources
+        }
+        unchanged_rows = {
+            source: rows_by_variant[source][TinyChange.unchanged_str()] for source in sources
+        }
+        unchanged_rows_by_prompt = {
+            source: data_by_source[source].get_rows_by_prompt(unchanged_rows[source])
+            for source in sources
+        }
+
+        start_time = time.time()
+        # Get data on the false positive rate
+        logger.info("Evaluating on the original model")
+        analysis_results.original = {
+            source.to_str(): evaluate_detector_on_variant(
                 source,
                 unchanged_rows_by_prompt[source],
-                rows_by_prompt,
-                same=False,
+                unchanged_rows_by_prompt[source],
+                same=True,
                 prompt_length=prompt_length,
                 tokenizer=tokenizer,
                 n_tests=n_tests,
                 pvalue_b=pvalue_b,
             )
+            for source in sources
+        }
+        for variant_idx, variant in enumerate(variants):
+            logger.info(f"Variant {variant_idx + 1}/{len(variants)}: {variant}")
+            analysis_results.variants[variant] = {}
+            for source in sources:
+                variant_rows = rows_by_variant[source][variant]
+                rows_by_prompt = data_by_source[source].get_rows_by_prompt(variant_rows)
+                analysis_results.variants[variant][source.to_str()] = evaluate_detector_on_variant(
+                    source,
+                    unchanged_rows_by_prompt[source],
+                    rows_by_prompt,
+                    same=False,
+                    prompt_length=prompt_length,
+                    tokenizer=tokenizer,
+                    n_tests=n_tests,
+                    pvalue_b=pvalue_b,
+                )
+            with open(directory / BaselineAnalysis.stats_filename, "wb") as f:
+                f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
 
-        with open(directory / "baseline_analysis.json", "wb") as f:
-            f.write(orjson.dumps(analysis_results.model_dump(mode="json")))
+        end_time = time.time()
+        logger.info(f"Time taken: {(end_time - start_time):.2f} seconds")
 
-    # multivariant_roc_curves = {
-    #     source: TwoSampleMultiTestResultMultiROC.multivariant_rocs(
-    #         results_original[source], [results[source] for results in variant_results.values()]
-    #     )
-    #     for source in sources
-    # }
-    # multivariant_roc_auc_ci = {
-    #     source: TwoSampleMultiTestResultMultiROC.multivariant_roc_auc_ci(
-    #         results_original[source],
-    #         [results[source] for results in variant_results.values()],
-    #         results_alpha,
-    #     )
-    #     for source in sources
-    # }
-    # avg_roc_auc_ci = {
-    #     source: TwoSampleMultiTestResultMultiROC.roc_auc_avg_ci(
-    #         results_original[source],
-    #         [results[source] for results in variant_results.values()],
-    #         results_alpha,
-    #     )
-    #     for source in sources
-    # }
-    # analysis_results["all"] = {}
-    # for source in sources:
-    #     analysis_results["all"][source.name] = {
-    #         "multivariant_roc_auc_ci": multivariant_roc_auc_ci[source].model_dump(mode="json"),
-    #         "avg_roc_auc_ci": avg_roc_auc_ci[source].model_dump(mode="json"),
-    #     }
-    #     logger.info(f"Multivariant ROC AUC for {source}: {multivariant_roc_auc_ci[source]}")
-    #     logger.info(f"Average ROC AUC for {source}: {avg_roc_auc_ci[source]}")
-    # if plot_roc:
-    #     plot_roc_curve_with_fs_cache(
-    #         PlotData(
-    #             experiment="baseline",
-    #             model_name=data.model_name,
-    #             variant=None,
-    #             roc_curves=multivariant_roc_curves,
-    #             roc_auc_ci=multivariant_roc_auc_ci,
-    #         ),
-    #         get_baselines_data_dir(directory),
-    #     )
-    # with open(directory / "baseline_analysis.json", "w") as f:
-    #     json.dump(analysis_results, f, indent=2)
-    end_time = time.time()
-    logger.info(f"Time taken: {(end_time - start_time):.2f} seconds")
+    @staticmethod
+    def compute_source_score_one_analysis(
+        analysis: AnalysisResult, sampling: bool
+    ) -> dict[Variant, dict[DataSource, float]]:
+        """Compute the AUC by variant and source"""
+        variants = analysis.variant_names
+        sources = [DataSource.from_str(k) for k in analysis.conditions]
+        scores = {}
+        for variant in variants:
+            scores[variant] = {}
+            for source in sources:
+                scores[variant][source] = analysis.auc(
+                    variant=variant, condition=source.to_str(), sampling=sampling
+                )
+        return scores
+
+    @staticmethod
+    def compute_source_score(
+        analyses: list[AnalysisResult], sampling: bool
+    ) -> dict[Variant, dict[DataSource, float]]:
+        """Compute the AUC by variant and source, average across the analyses (models)."""
+        variants = analyses[0].variant_names
+        sources = [DataSource.from_str(k) for k in analyses[0].conditions]
+        scores = [BaselineAnalysis.compute_source_score_one_analysis(a, sampling) for a in analyses]
+        results = {v: {s: 0 for s in sources} for v in variants}
+        for v in variants:
+            for s in sources:
+                results[v][s] = sum(score[v][s] for score in scores) / len(scores)
+        return results
+
+    @staticmethod
+    def bootstrap_iteration(analyses: list[AnalysisResult]):
+        """Single bootstrap iteration"""
+        analyses_bootstrap = random.choices(analyses, k=len(analyses))
+        return BaselineAnalysis.compute_source_score(analyses_bootstrap, sampling=True)
+
+    @staticmethod
+    def compute_source_score_bootstrap(
+        analyses: list[AnalysisResult],
+    ) -> dict[Variant, dict[DataSource, list[float]]]:
+        """Bootstrap by sampling with replacement both from the analyses, then from the statistics for each analysis."""
+        n_bootstrap = config.analysis.n_bootstrap
+        variants = analyses[0].variant_names
+        sources = [DataSource.from_str(k) for k in analyses[0].conditions]
+        results = {v: {s: [] for s in sources} for v in variants}
+
+        with ProcessPoolExecutor() as executor:
+            futures = [
+                executor.submit(BaselineAnalysis.bootstrap_iteration, analyses)
+                for _ in range(n_bootstrap)
+            ]
+            for future in tqdm(futures, desc="bootstrap"):
+                result = future.result()
+                for v in variants:
+                    for s in sources:
+                        results[v][s].append(result[v][s])
+
+        return results
+
+    @staticmethod
+    def gen_plot_data_and_plot():
+        BaselineAnalysis.gen_plot_data()
+        BaselineAnalysis.plot()
+
+    @staticmethod
+    def gen_plot_data():
+        sampling_dirs = [
+            config.sampling_data_dir / "keep" / dirname
+            for dirname in config.analysis.sampling_dirnames
+        ]
+        analyses = []
+        for sampling_dir in sampling_dirs:
+            p = Path(sampling_dir) / BaselineAnalysis.stats_filename
+            with open(p) as f:
+                analyses.append(AnalysisResult.model_validate(orjson.loads(f.read())))
+
+        input_tokens = AnalysisResult.multianalysis_input_token_avg(analyses)
+        output_tokens = AnalysisResult.multianalysis_output_token_avg(analyses)
+
+        token_count = {
+            DataSource.from_str(k): (input_tokens[k], output_tokens[k]) for k in input_tokens.keys()
+        }
+        for source in token_count.keys():
+            token_count[source] = tuple(
+                token_count[source][i] / (2 * source.get_config().n_samples_per_prompt)
+                for i in range(2)
+            )
+
+        point_estimates = BaselineAnalysis.compute_source_score(analyses, sampling=False)
+        bootstrap_results = BaselineAnalysis.compute_source_score_bootstrap(analyses)
+        plot_data = BAPlotData(
+            token_count=token_count,
+            point_estimates=point_estimates,
+            bootstrap_results=bootstrap_results,
+        )
+        os.makedirs(BaselineAnalysis.plot_dir, exist_ok=True)
+        with open(BaselineAnalysis.plot_data_path, "wb") as f:
+            f.write(orjson.dumps(plot_data.model_dump(mode="json")))
+
+    @staticmethod
+    def plot():
+        with open(BaselineAnalysis.plot_data_path, "rb") as f:
+            plot_data = BAPlotData.model_validate(orjson.loads(f.read()))
+        difficulty_scales = {
+            "finetune_no_lora": {
+                "title": "finetuning, no LoRA",
+                "match_fn": lambda v: v["type"] == "finetune" and v["lora"] is False,
+                "scale_attr": "n_samples",
+            },
+            "finetune_lora": {
+                "title": "finetuning, LoRA",
+                "match_fn": lambda v: v["type"] == "finetune" and v["lora"] is True,
+                "scale_attr": "n_samples",
+            },
+            "random_noise": {
+                "title": "random noise",
+                "match_fn": lambda v: v["type"] == "random_noise",
+                "scale_attr": "scale",
+            },
+            "weight_pruning_magnitude": {
+                "title": "weight pruning, magnitude",
+                "match_fn": lambda v: v["type"] == "weight_pruning" and v["method"] == "magnitude",
+                "scale_attr": "scale",
+            },
+            "weight_pruning_random": {
+                "title": "weight pruning, random",
+                "match_fn": lambda v: v["type"] == "weight_pruning" and v["method"] == "random",
+                "scale_attr": "scale",
+            },
+        }
+
+        for scale_name, scale_info in difficulty_scales.items():
+            BaselineAnalysis.plot_difficulty_scale(plot_data, scale_name, scale_info)
+
+    @staticmethod
+    def plot_difficulty_scale(plot_data: BAPlotData, scale_name: str, scale_info: dict):
+        logger.info(f"Plotting difficulty scale: {scale_name}...")
+        variant_description_subset = []
+        for k in plot_data.point_estimates.keys():
+            variant = orjson.loads(k)
+            if scale_info["match_fn"](variant):
+                variant_description_subset.append(k)
+        scale_attr = scale_info["scale_attr"]
+        variant_description_subset.sort(key=lambda k: orjson.loads(k)[scale_attr], reverse=True)
+        xaxis_values = [orjson.loads(k)[scale_attr] for k in variant_description_subset]
+        print(xaxis_values)
+
+        fig = go.Figure()
+        for source in plot_data.sources():
+            y_values = [plot_data.point_estimates[v][source] for v in variant_description_subset]
+            y_bootstrap_values = [
+                plot_data.bootstrap_results[v][source] for v in variant_description_subset
+            ]
+            y_cis = [ci(b, config.analysis.results_alpha) for b in y_bootstrap_values]
+            y_upper = [y_ci[1] for y_ci in y_cis]
+            y_lower = [y_ci[0] for y_ci in y_cis]
+            fig.add_trace(
+                go.Scatter(
+                    x=xaxis_values,
+                    y=y_values,
+                    name=source.to_str(),
+                    line_color=config.plotting.color_map[source.to_str()],
+                )
+            )
+            # https://plotly.com/python/continuous-error-bars/
+            fig.add_trace(
+                go.Scatter(
+                    x=xaxis_values + xaxis_values[::-1],
+                    y=y_upper + y_lower[::-1],
+                    fill="toself",
+                    fillcolor=config.plotting.color_map[source.to_str()],
+                    line=dict(color="rgba(255,255,255,0)"),
+                    opacity=0.2,
+                    showlegend=False,
+                )
+            )
+
+        # Add horizontal line for random guessing
+        fig.add_hline(
+            y=0.5,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text="Random guessing",
+            annotation_position="bottom right",
+        )
+        if xaxis_values[-1] < 1:
+            xaxis_ticktext = [f"2<sup>{round(math.log(x, 2))}</sup>" for x in xaxis_values]
+        else:
+            xaxis_ticktext = xaxis_values
+
+        fig.update_layout(
+            font_family="Spectral",
+            template="plotly_white",
+            title=f"{scale_info['title']}",
+            xaxis=dict(
+                type="log",
+                autorange="reversed",
+                tickmode="array",
+                tickvals=xaxis_values,
+                ticktext=xaxis_ticktext,
+            ),
+        )
+        fig_path = BaselineAnalysis.plot_dir / f"{scale_name}.html"
+        fig.write_html(fig_path)
+        logger.info(f"Saved plot to {fig_path}")
 
 
 class PromptAblation:
@@ -578,14 +780,10 @@ class PromptAblation:
     def compute_prompt_score(analyses: list[AnalysisResult], sampling: bool) -> dict[str, float]:
         """For each prompt, return the average over analyses (models) of its AUC minus the model average."""
         prompts = list(analyses[0].original.keys())
-        n_models = len(analyses)
         scores = []
         for analysis in analyses:
             scores.append(analysis.avg_auc_across_variants(sampling=sampling, centered=True))
-        results = {}
-        for prompt in prompts:
-            results[prompt] = sum(scores[i][prompt] for i in range(n_models)) / n_models
-        return results
+        return {prompt: sum(score[prompt] for score in scores) / len(scores) for prompt in prompts}
 
     @staticmethod
     def compute_prompt_score_bootstrap(analyses: list[AnalysisResult]) -> dict[str, list[float]]:
@@ -617,16 +815,9 @@ class PromptAblation:
             with open(p) as f:
                 analyses.append(AnalysisResult.model_validate(orjson.loads(f.read())))
 
-        prompt_lengths = defaultdict(list)
-        for analysis in analyses:
-            for prompt, prompt_length in analysis.input_token_avg.items():
-                prompt_lengths[prompt].append(
-                    prompt_length / (2 * config.sampling.logprob.n_samples_per_prompt)
-                )
-
-        prompt_length_avg = {
-            prompt: sum(lengths) / len(lengths) for prompt, lengths in prompt_lengths.items()
-        }
+        prompt_length_avg = AnalysisResult.multianalysis_input_token_avg(analyses)
+        for prompt in prompt_length_avg.keys():
+            prompt_length_avg[prompt] /= 2 * config.sampling.logprob.n_samples_per_prompt
 
         point_estimates = PromptAblation.compute_prompt_score(analyses, sampling=False)
 
@@ -708,7 +899,7 @@ class PromptAblation:
 if __name__ == "__main__":
     analysis_config = config.analysis
 
-    if analysis_config.experiment in ["baseline", "ablation_prompt"]:
+    if analysis_config.task == "compute_stats":
         output_dir = config.sampling_data_dir / "keep" / analysis_config.sampling_dirname
         compressed_output = CompressedOutput.from_json_dir(output_dir)
         logger.info(compressed_output.model_name)
@@ -716,22 +907,25 @@ if __name__ == "__main__":
         for ref_attr in compressed_output.references.__dict__.keys():
             ref = getattr(compressed_output.references, ref_attr)
             logger.info(f"length of field '{ref_attr}': {len(ref)}")
-    if analysis_config.experiment == "baseline":
-        baseline_analysis(
-            directory=output_dir,
-            data=compressed_output,
-            sources=[DataSource.US, DataSource.MMLU, DataSource.GAO2025],
-            n_tests=analysis_config.n_tests,
-            pvalue_b=analysis_config.pvalue_b,
-        )
-    elif analysis_config.experiment == "ablation_prompt":
-        PromptAblation.compute_stats(
-            directory=output_dir,
-            data=compressed_output,
-            n_tests=analysis_config.n_tests,
-            pvalue_b=analysis_config.pvalue_b,
-        )
-    elif analysis_config.experiment == "ablation_prompt_plot":
-        PromptAblation.gen_plot_data_and_plot()
-    else:
-        raise ValueError(f"Invalid experiment: {analysis_config.experiment}")
+
+        if analysis_config.experiment == "baseline":
+            BaselineAnalysis.compute_stats(
+                directory=output_dir,
+                data=compressed_output,
+                sources=[DataSource.US, DataSource.MMLU, DataSource.GAO2025],
+                n_tests=analysis_config.n_tests,
+                pvalue_b=analysis_config.pvalue_b,
+            )
+        elif analysis_config.experiment == "ablation_prompt":
+            PromptAblation.compute_stats(
+                directory=output_dir,
+                data=compressed_output,
+                n_tests=analysis_config.n_tests,
+                pvalue_b=analysis_config.pvalue_b,
+            )
+
+    elif analysis_config.task == "plot":
+        if analysis_config.experiment == "ablation_prompt":
+            PromptAblation.gen_plot_data_and_plot()
+        elif analysis_config.experiment == "baseline":
+            BaselineAnalysis.gen_plot_data_and_plot()
