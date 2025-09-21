@@ -497,23 +497,25 @@ class AnalysisResult(BaseModel):
     original: dict[Condition, TwoSampleMultiTestResult] = {}
     variants: dict[Variant, dict[Condition, TwoSampleMultiTestResult]] = {}
 
-    @property
-    def input_token_avg(self) -> dict[Condition, float]:
+    def _token_avg(self, attr: str) -> dict[Condition, float]:
         result = {}
-        for condition in self.original.keys():
+        for condition in self.conditions:
             result[condition] = sum(
-                self.variants[variant][condition].input_token_avg for variant in self.variants
+                getattr(self.variants[variant][condition], attr) for variant in self.variants
             ) / len(self.variants)
         return result
 
     @property
+    def input_token_avg(self) -> dict[Condition, float]:
+        return self._token_avg("input_token_avg")
+
+    @property
     def output_token_avg(self) -> dict[Condition, float]:
-        result = {}
-        for condition in self.original.keys():
-            result[condition] = sum(
-                self.variants[variant][condition].output_token_avg for variant in self.variants
-            ) / len(self.variants)
-        return result
+        return self._token_avg("output_token_avg")
+
+    @property
+    def conditions(self) -> list[Condition]:
+        return list(self.original.keys())
 
     def compute_roc_curves(self, variant: Variant) -> dict[Condition, list[ROCCurve]]:
         raise NotImplementedError()
@@ -528,7 +530,7 @@ class AnalysisResult(BaseModel):
         If sampling is True, sample with replacement from each list of statistics.
         """
         result = {}
-        for condition in self.original.keys():
+        for condition in self.conditions:
             result[condition] = sum(
                 self.auc(variant=variant, condition=condition, sampling=sampling)
                 for variant in self.variants
