@@ -731,3 +731,5 @@ if __name__ == "__main__":
         )
     elif analysis_config.experiment == "ablation_prompt_plot":
         ablation_influence_of_prompt_gen_and_plot()
+    else:
+        raise ValueError(f"Invalid experiment: {analysis_config.experiment}")
