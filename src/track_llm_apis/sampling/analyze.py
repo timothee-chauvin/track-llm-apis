@@ -3,7 +3,6 @@ import math
 import os
 import random
 import time
-from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
@@ -786,16 +785,28 @@ class PromptAblation:
         return {prompt: sum(score[prompt] for score in scores) / len(scores) for prompt in prompts}
 
     @staticmethod
+    def bootstrap_iteration(analyses: list[AnalysisResult]):
+        """Single bootstrap iteration"""
+        analyses_bootstrap = random.choices(analyses, k=len(analyses))
+        return PromptAblation.compute_prompt_score(analyses_bootstrap, sampling=True)
+
+    @staticmethod
     def compute_prompt_score_bootstrap(analyses: list[AnalysisResult]) -> dict[str, list[float]]:
         """Bootstrap by sampling with replacement both from the analyses, then from the statistics for each analysis."""
-        # TODO parallelize
         n_bootstrap = config.analysis.n_bootstrap
-        results = defaultdict(list)
-        for _ in tqdm(range(n_bootstrap), desc="bootstrap"):
-            analyses_bootstrap = random.choices(analyses, k=len(analyses))
-            result = PromptAblation.compute_prompt_score(analyses_bootstrap, sampling=True)
-            for prompt, score in result.items():
-                results[prompt].append(score)
+        prompts = list(analyses[0].original.keys())
+        results = {prompt: [] for prompt in prompts}
+
+        with ProcessPoolExecutor() as executor:
+            futures = [
+                executor.submit(PromptAblation.bootstrap_iteration, analyses)
+                for _ in range(n_bootstrap)
+            ]
+            for future in tqdm(futures, desc="bootstrap"):
+                result = future.result()
+                for prompt, score in result.items():
+                    results[prompt].append(score)
+
         return results
 
     @staticmethod
