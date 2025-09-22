@@ -271,10 +271,10 @@ def mmlu_prompt_to_question(prompt: str) -> str:
 
 @cache
 def mmlu_answer_to_choice(answer: str) -> int:
-    pattern = r"^.*Answer: ([A-D]).*$"
-    match = re.match(pattern, answer, re.DOTALL)
+    pattern = r"^.*ANSWER: ([A-D]).*$"
+    match = re.match(pattern, answer, re.DOTALL | re.IGNORECASE)
     if match:
-        return ord(match.group(1)) - ord("A")
+        return ord(match.group(1).upper()) - ord("A")
     else:
         # Not formatting the answer correctly is an error
         return -1
