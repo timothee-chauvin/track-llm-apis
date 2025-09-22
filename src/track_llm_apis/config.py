@@ -103,7 +103,7 @@ class Gao2025Config(BaseModel):
 
 class MMLUConfig(BaseModel):
     subset_name: str = "abstract_algebra"
-    max_tokens: int = 5
+    max_tokens: int = 10
     temperature: float = 0.1
     # at the time of analysis, how many benchmark runs to use per p-value test
     n_samples_per_prompt: int = 10
