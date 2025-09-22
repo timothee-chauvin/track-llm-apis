@@ -907,6 +907,33 @@ class PromptAblation:
         logger.info(f"Prompt ablation analysis plot saved to {plot_path}")
 
 
+def debug_mmlu_correct_rate(debug_dir: Path):
+    import sys
+
+    from track_llm_apis.sampling.analyze_mmlu import is_correct
+
+    debug_dir = (
+        # config.sampling_data_dir / "keep" / "2025-09-12_11-16-46_Qwen2fQwen2.5-0.5B-Instruct"
+        config.sampling_data_dir / "keep" / "2025-09-12_11-16-45_google2fgemma-3-1b-it"
+    )
+    compressed_output = CompressedOutput.from_json_dir(debug_dir)
+    compressed_output = compressed_output.filter(datasource=DataSource.MMLU)
+    rows_by_variant = compressed_output.get_rows_by_variant()
+    correct_rates = []
+    for variant, rows in rows_by_variant.items():
+        print(f"Variant: {variant}")
+        correct = 0
+        total = 0
+        for row in rows:
+            total += 1
+            if is_correct(row.prompt[0], row.text[0]):
+                correct += 1
+        print(f"  Rate of correct MMLU answers: {correct / total}")
+        correct_rates.append(correct / total)
+    print(f"Average rate of correct MMLU answers: {sum(correct_rates) / len(correct_rates)}")
+    sys.exit()
+
+
 if __name__ == "__main__":
     analysis_config = config.analysis
 
