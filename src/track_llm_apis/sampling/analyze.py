@@ -609,29 +609,34 @@ class BaselineAnalysis:
             plot_data = BAPlotData.model_validate(orjson.loads(f.read()))
         difficulty_scales = {
             "finetune_no_lora": {
-                "title": "finetuning, no LoRA",
+                "title": "finetuning",
                 "match_fn": lambda v: v["type"] == "finetune" and v["lora"] is False,
                 "scale_attr": "n_samples",
+                "xaxis_title": "Number of steps of finetuning",
             },
             "finetune_lora": {
-                "title": "finetuning, LoRA",
+                "title": "LoRA finetuning",
                 "match_fn": lambda v: v["type"] == "finetune" and v["lora"] is True,
                 "scale_attr": "n_samples",
+                "xaxis_title": "Number of steps of finetuning",
             },
             "random_noise": {
                 "title": "random noise",
                 "match_fn": lambda v: v["type"] == "random_noise",
                 "scale_attr": "scale",
+                "xaxis_title": "Standard deviation of the gaussian noise added to each weight",
             },
             "weight_pruning_magnitude": {
-                "title": "weight pruning, magnitude",
+                "title": "weight pruning, selection by magnitude",
                 "match_fn": lambda v: v["type"] == "weight_pruning" and v["method"] == "magnitude",
                 "scale_attr": "scale",
+                "xaxis_title": "Fraction of the weights to prune",
             },
             "weight_pruning_random": {
-                "title": "weight pruning, random",
+                "title": "weight pruning, random selection",
                 "match_fn": lambda v: v["type"] == "weight_pruning" and v["method"] == "random",
                 "scale_attr": "scale",
+                "xaxis_title": "Fraction of the weights to prune",
             },
         }
 
@@ -664,7 +669,7 @@ class BaselineAnalysis:
                 go.Scatter(
                     x=xaxis_values,
                     y=y_values,
-                    name=source.to_str(),
+                    name=config.plotting.source_name[source.value],
                     line_color=config.plotting.color_map[source.to_str()],
                 )
             )
@@ -696,25 +701,28 @@ class BaselineAnalysis:
 
         fig.update_layout(
             font_family="Spectral",
+            font_size=18,
             template="plotly_white",
             title=f"{scale_info['title']}",
             xaxis=dict(
+                title=scale_info["xaxis_title"],
                 type="log",
                 autorange="reversed",
                 tickmode="array",
                 tickvals=xaxis_values,
                 ticktext=xaxis_ticktext,
             ),
+            yaxis_title="ROC AUC",
         )
-        fig_path = BaselineAnalysis.plot_dir / f"{scale_name}.html"
-        fig.write_html(fig_path)
+        fig_path = BaselineAnalysis.plot_dir / f"{scale_name}.pdf"
+        fig.write_image(fig_path)
         logger.info(f"Saved plot to {fig_path}")
 
 
 class PromptAblation:
     stats_filename = "prompt_ablation_analysis.json"
     plot_data_path = config.plots_dir / "paper" / "prompt_ablation.json"
-    plot_path = config.plots_dir / "paper" / "prompt_ablation.html"
+    plot_path = config.plots_dir / "paper" / "prompt_ablation.pdf"
 
     @staticmethod
     def compute_stats(

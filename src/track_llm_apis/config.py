@@ -49,6 +49,13 @@ class PlottingConfig(BaseModel):
             "2": "#00CC96",  # GAO2025
         }
     )
+    source_name: dict[int, str] = Field(
+        default_factory=lambda: {
+            0: "Logprobs",
+            1: "MMLU",
+            2: "MET",
+        }
+    )
 
 
 class DeviceConfig(BaseModel):
