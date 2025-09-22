@@ -224,7 +224,7 @@ class CompressedOutput:
             self.rows.append(
                 CompressedOutputRow.from_values(
                     references=self.references,
-                    source=source,
+                    source=source.value,
                     variant=variant,
                     prompt=prompt,
                     text=(output.text, len(output.token_ids)),
