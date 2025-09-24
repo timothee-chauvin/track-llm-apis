@@ -717,13 +717,17 @@ class BaselineAnalysis:
                 for i in range(2)
             )
 
+        variants = analyses[0].variant_names
+
         v_point_estimates = BaselineAnalysis.score_by_variant(analyses, sampling=False)
         v_bootstrap_results = BaselineAnalysis.score_by_variant_bootstrap(analyses)
         m_point_estimates = BaselineAnalysis.score_by_model(
-            analyses, variants=analyses[0].variant_names, sampling=False
+            analyses, variants=variants, sampling=False
         )
         m_bootstrap_results = BaselineAnalysis.score_by_model_bootstrap(analyses)
-        t_point_estimates = BaselineAnalysis.overall_score(analyses, sampling=False)
+        t_point_estimates = BaselineAnalysis.overall_score(
+            analyses, variants=variants, sampling=False
+        )
         t_bootstrap_results = BaselineAnalysis.overall_score_bootstrap(analyses)
         plot_data = BAPlotData(
             token_count=token_count,
@@ -742,8 +746,65 @@ class BaselineAnalysis:
     def print_data():
         with open(BaselineAnalysis.plot_data_path, "rb") as f:
             plot_data = BAPlotData.model_validate(orjson.loads(f.read()))
-        # TODO
-        print(plot_data)
+        # Print scores with confidence intervals
+        print("Token count:")
+        print(plot_data.token_count)
+
+        print("Token count per test:")
+        n_samples_per_prompt = config.sampling.gao2025.n_samples_per_prompt
+        assert (
+            n_samples_per_prompt
+            == config.sampling.mmlu.n_samples_per_prompt
+            == config.sampling.logprob.n_samples_per_prompt
+        )
+        print(
+            {
+                s: (
+                    plot_data.token_count[s][0] * 2 * n_samples_per_prompt,
+                    plot_data.token_count[s][1] * 2 * n_samples_per_prompt,
+                )
+                for s in plot_data.sources()
+            }
+        )
+        # Cost per year: assumes one sample per hour, then hypothesis tests can be performed
+        # by comparing two 10-hour windows (10 = config.sampling.<all methods>.n_samples_per_prompts)
+        print("Cost per year of hourly sampling at GPT-4.1 pricing:")
+        gpt_4_1_cost = (3 / 1e6, 12 / 1e6)
+        sample_cost = {
+            s: gpt_4_1_cost[0] * plot_data.token_count[s][0]
+            + gpt_4_1_cost[1] * plot_data.token_count[s][1]
+            for s in plot_data.sources()
+        }
+        yearly_cost = {s: sample_cost[s] * 24 * 365 for s in plot_data.sources()}
+        print(yearly_cost)
+
+        print("Score by variant:")
+        for v in plot_data.v_point_estimates.keys():
+            print(f"{v}:")
+            for s in plot_data.sources():
+                score = plot_data.v_point_estimates[v][s]
+                score_ci = ci(plot_data.v_bootstrap_results[v][s], config.analysis.results_alpha)
+                print(
+                    f"    {config.plotting.source_name[s.value]}: {score} ({score_ci[0]}, {score_ci[1]})"
+                )
+        print("Score by model:")
+        for m in plot_data.m_point_estimates.keys():
+            print(f"{m}:")
+            for s in plot_data.sources():
+                score = plot_data.m_point_estimates[m][s]
+                score_ci = ci(plot_data.m_bootstrap_results[m][s], config.analysis.results_alpha)
+                print(
+                    f"    {config.plotting.source_name[s.value]}: {score} ({score_ci[0]}, {score_ci[1]})"
+                )
+        print("Overall score:")
+        for s in plot_data.t_point_estimates.keys():
+            print(f"{s}:")
+            for s in plot_data.sources():
+                score = plot_data.t_point_estimates[s]
+                score_ci = ci(plot_data.t_bootstrap_results[s], config.analysis.results_alpha)
+                print(
+                    f"    {config.plotting.source_name[s.value]}: {score} ({score_ci[0]}, {score_ci[1]})"
+                )
 
     @staticmethod
     def plot():
@@ -784,7 +845,6 @@ class BaselineAnalysis:
 
         for scale_name, scale_info in difficulty_scales.items():
             BaselineAnalysis.plot_difficulty_scale(plot_data, scale_name, scale_info)
-        BaselineAnalysis.compute_overall_performance(plot_data)
 
     @staticmethod
     def plot_difficulty_scale(plot_data: BAPlotData, scale_name: str, scale_info: dict):
