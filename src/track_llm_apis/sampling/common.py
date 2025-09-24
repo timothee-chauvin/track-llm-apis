@@ -72,9 +72,11 @@ class References:
     def from_json(cls, json_data: dict[str, Any]) -> Self:
         instance = cls.__new__(cls)
         instance.variants = {variant: i for i, variant in enumerate(json_data["variants"])}
-        instance.prompts = {prompt: i for i, prompt in enumerate(json_data["prompts"])}
-        instance.texts = {text: i for i, text in enumerate(json_data["texts"])}
-        instance.logprobs = {logprobs: i for i, logprobs in enumerate(json_data["logprobs"])}
+        instance.prompts = {tuple(prompt): i for i, prompt in enumerate(json_data["prompts"])}
+        instance.texts = {tuple(text): i for i, text in enumerate(json_data["texts"])}
+        instance.logprobs = {
+            json.dumps(logprobs): i for i, logprobs in enumerate(json_data["logprobs"])
+        }
         instance._cache = {}
         return instance
 
@@ -243,7 +245,7 @@ class CompressedOutput:
 
     @classmethod
     def from_json(cls, json_data: dict[str, Any]) -> Self:
-        if not hasattr(json_data, "version"):
+        if "version" not in json_data.keys():
             # v0
             logger.info("Loading compressed output v0...")
             return cls._from_json_v0(json_data)
