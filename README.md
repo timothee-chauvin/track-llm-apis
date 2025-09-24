@@ -1,13 +1,3 @@
-# track-llm-apis
+# Log Probability Tracking of LLM APIs
 
-## Run
-
-Build the image:
-```bash
-docker compose build
-```
-
-Run the container:
-```bash
-docker compose run --rm trackllm
-```
+This is the code accompanying the paper "Log Probability Tracking of LLM APIs".
