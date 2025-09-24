@@ -392,10 +392,21 @@ def plot_roc_curve(
 
 class BAPlotData(BaseModel):
     token_count: dict[DataSource, tuple[float, float]]
-    point_estimates: dict[Variant, dict[DataSource, float]]
-    bootstrap_results: dict[Variant, dict[DataSource, list[float]]]
+    # ROC AUCs averaged across models, by variant and DataSource
+    v_point_estimates: dict[Variant, dict[DataSource, float]]
+    v_bootstrap_results: dict[Variant, dict[DataSource, list[float]]]
+    # ROC AUCs averaged across variants, by model and DataSource
+    m_point_estimates: dict[str, dict[DataSource, float]]
+    m_bootstrap_results: dict[str, dict[DataSource, list[float]]]
 
-    @field_validator("token_count", "point_estimates", "bootstrap_results", mode="before")
+    @field_validator(
+        "token_count",
+        "v_point_estimates",
+        "v_bootstrap_results",
+        "m_point_estimates",
+        "m_bootstrap_results",
+        mode="before",
+    )
     @classmethod
     def validate_datasource_keys(cls, value):
         """Convert string keys back to DataSource enums during deserialization"""
@@ -422,6 +433,7 @@ class BAPlotData(BaseModel):
 class BaselineAnalysis:
     stats_filename = "baseline_analysis.json"
     plot_dir = config.plots_dir / "paper" / "baseline"
+    overall_performance_path = plot_dir / "overall_performance.json"
     plot_data_path = plot_dir / "baseline.json"
 
     @staticmethod
@@ -505,10 +517,10 @@ class BaselineAnalysis:
         logger.info(f"Time taken: {(end_time - start_time):.2f} seconds")
 
     @staticmethod
-    def compute_source_score_one_analysis(
+    def score_by_variant_one(
         analysis: AnalysisResult, sampling: bool
     ) -> dict[Variant, dict[DataSource, float]]:
-        """Compute the AUC by variant and source"""
+        """Compute the AUC by variant and source for a given analysis (model)"""
         variants = analysis.variant_names
         sources = [DataSource.from_str(k) for k in analysis.conditions]
         scores = {}
@@ -521,13 +533,13 @@ class BaselineAnalysis:
         return scores
 
     @staticmethod
-    def compute_source_score(
+    def score_by_variant(
         analyses: list[AnalysisResult], sampling: bool
     ) -> dict[Variant, dict[DataSource, float]]:
         """Compute the AUC by variant and source, average across the analyses (models)."""
         variants = analyses[0].variant_names
         sources = [DataSource.from_str(k) for k in analyses[0].conditions]
-        scores = [BaselineAnalysis.compute_source_score_one_analysis(a, sampling) for a in analyses]
+        scores = [BaselineAnalysis.score_by_variant_one(a, sampling) for a in analyses]
         results = {v: {s: 0 for s in sources} for v in variants}
         for v in variants:
             for s in sources:
@@ -535,16 +547,16 @@ class BaselineAnalysis:
         return results
 
     @staticmethod
-    def bootstrap_iteration(analyses: list[AnalysisResult]):
+    def score_by_variant_bootstrap_one(analyses: list[AnalysisResult]):
         """Single bootstrap iteration"""
         analyses_bootstrap = random.choices(analyses, k=len(analyses))
-        return BaselineAnalysis.compute_source_score(analyses_bootstrap, sampling=True)
+        return BaselineAnalysis.score_by_variant(analyses_bootstrap, sampling=True)
 
     @staticmethod
-    def compute_source_score_bootstrap(
+    def score_by_variant_bootstrap(
         analyses: list[AnalysisResult],
     ) -> dict[Variant, dict[DataSource, list[float]]]:
-        """Bootstrap by sampling with replacement both from the analyses, then from the statistics for each analysis."""
+        """Bootstrap by sampling with replacement from the analyses, then from the statistics for each analysis."""
         n_bootstrap = config.analysis.n_bootstrap
         variants = analyses[0].variant_names
         sources = [DataSource.from_str(k) for k in analyses[0].conditions]
@@ -552,7 +564,7 @@ class BaselineAnalysis:
 
         with ProcessPoolExecutor() as executor:
             futures = [
-                executor.submit(BaselineAnalysis.bootstrap_iteration, analyses)
+                executor.submit(BaselineAnalysis.score_by_variant_bootstrap_one, analyses)
                 for _ in range(n_bootstrap)
             ]
             for future in tqdm(futures, desc="bootstrap"):
@@ -560,12 +572,72 @@ class BaselineAnalysis:
                 for v in variants:
                     for s in sources:
                         results[v][s].append(result[v][s])
+        return results
 
+    @staticmethod
+    def score_by_model_bootstrap_one(analyses: list[AnalysisResult], variants: list[Variant]):
+        """Single bootstrap iteration"""
+        variant_bootstrap = random.choices(variants, k=len(variants))
+        return BaselineAnalysis.score_by_model(analyses, variant_bootstrap, sampling=True)
+
+    @staticmethod
+    def score_by_model_bootstrap(analyses: list[AnalysisResult]):
+        """Bootstrap by sampling with replacement from the variants, then from the statistics for each variant."""
+        n_bootstrap = config.analysis.n_bootstrap
+        model_names = [a.model_name for a in analyses]
+        variants = analyses[0].variant_names
+        sources = [DataSource.from_str(k) for k in analyses[0].conditions]
+        results = {m: {s: [] for s in sources} for m in model_names}
+
+        with ProcessPoolExecutor() as executor:
+            futures = [
+                executor.submit(BaselineAnalysis.score_by_model_bootstrap_one, analyses, variants)
+                for _ in range(n_bootstrap)
+            ]
+            for future in tqdm(futures, desc="bootstrap"):
+                result = future.result()
+                for m in model_names:
+                    for s in sources:
+                        results[m][s].append(result[m][s])
+        return results
+
+    @staticmethod
+    def score_by_model_one(
+        analyses: list[AnalysisResult], variant: Variant, sampling: bool
+    ) -> dict[str, dict[DataSource, float]]:
+        """Compute the AUC by model and source for a given variant."""
+        sources = [DataSource.from_str(k) for k in analyses[0].conditions]
+        model_names = [a.model_name for a in analyses]
+        scores = {}
+        for analysis, model_name in zip(analyses, model_names):
+            scores[model_name] = {}
+            for source in sources:
+                scores[model_name][source] = analysis.auc(
+                    variant=variant, condition=source.to_str(), sampling=sampling
+                )
+        return scores
+
+    @staticmethod
+    def score_by_model(
+        analyses: list[AnalysisResult], variants: list[Variant], sampling: bool
+    ) -> dict[str, dict[DataSource, float]]:
+        """Compute the AUC by model and source, averaged across the variants."""
+        models = [a.model_name for a in analyses]
+        sources = [DataSource.from_str(k) for k in analyses[0].conditions]
+        scores = [
+            BaselineAnalysis.score_by_model_one(analyses, variant, sampling=sampling)
+            for variant in variants
+        ]
+        results = {model: {source: 0 for source in sources} for model in models}
+        for model in models:
+            for source in sources:
+                results[model][source] = sum(score[model][source] for score in scores) / len(scores)
         return results
 
     @staticmethod
     def gen_plot_data_and_plot():
         BaselineAnalysis.gen_plot_data()
+        BaselineAnalysis.print_data()
         BaselineAnalysis.plot()
 
     @staticmethod
@@ -592,16 +664,29 @@ class BaselineAnalysis:
                 for i in range(2)
             )
 
-        point_estimates = BaselineAnalysis.compute_source_score(analyses, sampling=False)
-        bootstrap_results = BaselineAnalysis.compute_source_score_bootstrap(analyses)
+        v_point_estimates = BaselineAnalysis.score_by_variant(analyses, sampling=False)
+        v_bootstrap_results = BaselineAnalysis.score_by_variant_bootstrap(analyses)
+        m_point_estimates = BaselineAnalysis.score_by_model(
+            analyses, variants=analyses[0].variant_names, sampling=False
+        )
+        m_bootstrap_results = BaselineAnalysis.score_by_model_bootstrap(analyses)
         plot_data = BAPlotData(
             token_count=token_count,
-            point_estimates=point_estimates,
-            bootstrap_results=bootstrap_results,
+            v_point_estimates=v_point_estimates,
+            v_bootstrap_results=v_bootstrap_results,
+            m_point_estimates=m_point_estimates,
+            m_bootstrap_results=m_bootstrap_results,
         )
         os.makedirs(BaselineAnalysis.plot_dir, exist_ok=True)
         with open(BaselineAnalysis.plot_data_path, "wb") as f:
             f.write(orjson.dumps(plot_data.model_dump(mode="json")))
+
+    @staticmethod
+    def print_data():
+        with open(BaselineAnalysis.plot_data_path, "rb") as f:
+            plot_data = BAPlotData.model_validate(orjson.loads(f.read()))
+        # TODO
+        print(plot_data)
 
     @staticmethod
     def plot():
@@ -642,12 +727,13 @@ class BaselineAnalysis:
 
         for scale_name, scale_info in difficulty_scales.items():
             BaselineAnalysis.plot_difficulty_scale(plot_data, scale_name, scale_info)
+        BaselineAnalysis.compute_overall_performance(plot_data)
 
     @staticmethod
     def plot_difficulty_scale(plot_data: BAPlotData, scale_name: str, scale_info: dict):
         logger.info(f"Plotting difficulty scale: {scale_name}...")
         variant_description_subset = []
-        for k in plot_data.point_estimates.keys():
+        for k in plot_data.v_point_estimates.keys():
             variant = orjson.loads(k)
             if scale_info["match_fn"](variant):
                 variant_description_subset.append(k)
@@ -658,9 +744,9 @@ class BaselineAnalysis:
 
         fig = go.Figure()
         for source in plot_data.sources():
-            y_values = [plot_data.point_estimates[v][source] for v in variant_description_subset]
+            y_values = [plot_data.v_point_estimates[v][source] for v in variant_description_subset]
             y_bootstrap_values = [
-                plot_data.bootstrap_results[v][source] for v in variant_description_subset
+                plot_data.v_bootstrap_results[v][source] for v in variant_description_subset
             ]
             y_cis = [ci(b, config.analysis.results_alpha) for b in y_bootstrap_values]
             y_upper = [y_ci[1] for y_ci in y_cis]
