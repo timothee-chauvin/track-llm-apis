@@ -51,8 +51,8 @@ class PlottingConfig(BaseModel):
     )
     source_name: dict[int, str] = Field(
         default_factory=lambda: {
-            0: "Logprobs",
-            1: "MMLU",
+            0: "LT (Ours)",
+            1: "MMLU-ALG",
             2: "MET",
         }
     )

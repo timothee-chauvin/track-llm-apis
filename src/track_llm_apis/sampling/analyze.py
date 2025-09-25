@@ -747,6 +747,11 @@ class BaselineAnalysis:
         with open(BaselineAnalysis.plot_data_path, "rb") as f:
             plot_data = BAPlotData.model_validate(orjson.loads(f.read()))
         # Print scores with confidence intervals
+        # sort in order: MMLU-ALG, MET, LT
+        sources = sorted(
+            plot_data.sources(),
+            key=lambda s: [DataSource.MMLU, DataSource.GAO2025, DataSource.US].index(s),
+        )
         print("Token count:")
         print(plot_data.token_count)
 
@@ -763,7 +768,7 @@ class BaselineAnalysis:
                     plot_data.token_count[s][0] * 2 * n_samples_per_prompt,
                     plot_data.token_count[s][1] * 2 * n_samples_per_prompt,
                 )
-                for s in plot_data.sources()
+                for s in sources
             }
         )
         # Cost per year: assumes one sample per hour, then hypothesis tests can be performed
@@ -773,38 +778,87 @@ class BaselineAnalysis:
         sample_cost = {
             s: gpt_4_1_cost[0] * plot_data.token_count[s][0]
             + gpt_4_1_cost[1] * plot_data.token_count[s][1]
-            for s in plot_data.sources()
+            for s in sources
         }
-        yearly_cost = {s: sample_cost[s] * 24 * 365 for s in plot_data.sources()}
+        yearly_cost = {s: sample_cost[s] * 24 * 365 for s in sources}
         print(yearly_cost)
 
         print("Score by variant:")
         for v in plot_data.v_point_estimates.keys():
             print(f"{v}:")
-            for s in plot_data.sources():
+            for s in sources:
                 score = plot_data.v_point_estimates[v][s]
                 score_ci = ci(plot_data.v_bootstrap_results[v][s], config.analysis.results_alpha)
                 print(
-                    f"    {config.plotting.source_name[s.value]}: {score} ({score_ci[0]}, {score_ci[1]})"
+                    f"    {config.plotting.source_name[s.value]}: {score:.3f} ({score_ci[0]:.3f}, {score_ci[1]:.3f})"
                 )
         print("Score by model:")
         for m in plot_data.m_point_estimates.keys():
             print(f"{m}:")
-            for s in plot_data.sources():
+            for s in sources:
                 score = plot_data.m_point_estimates[m][s]
                 score_ci = ci(plot_data.m_bootstrap_results[m][s], config.analysis.results_alpha)
                 print(
-                    f"    {config.plotting.source_name[s.value]}: {score} ({score_ci[0]}, {score_ci[1]})"
+                    f"    {config.plotting.source_name[s.value]}: {score:.3f} ({score_ci[0]:.3f}, {score_ci[1]:.3f})"
                 )
         print("Overall score:")
-        for s in plot_data.t_point_estimates.keys():
-            print(f"{s}:")
-            for s in plot_data.sources():
-                score = plot_data.t_point_estimates[s]
-                score_ci = ci(plot_data.t_bootstrap_results[s], config.analysis.results_alpha)
-                print(
-                    f"    {config.plotting.source_name[s.value]}: {score} ({score_ci[0]}, {score_ci[1]})"
-                )
+        for s in sources:
+            score = plot_data.t_point_estimates[s]
+            score_ci = ci(plot_data.t_bootstrap_results[s], config.analysis.results_alpha)
+            print(
+                f"{config.plotting.source_name[s.value]}: {score:.3f} ({score_ci[0]:.3f}, {score_ci[1]:.3f})"
+            )
+
+        # Print the same info for inclusion in a latex table
+
+        print("\nLaTeX:")
+        print("\\textbf{Model} & \\textbf{MMLU-ALG} & \\textbf{MET} & \\textbf{LT (Ours)} \\\\")
+        print("\\hline")
+
+        # Print each model's scores
+        for m in sorted(plot_data.m_point_estimates.keys()):
+            row = [m]
+            for s in sources:
+                score = plot_data.m_point_estimates[m][s]
+                score_ci = ci(plot_data.m_bootstrap_results[m][s], config.analysis.results_alpha)
+                row.append(f"{score:.3f} ({score_ci[0]:.3f}, {score_ci[1]:.3f})")
+            print(" & ".join(row) + " \\\\")
+            print("\\hline")
+
+        print("\\hline")
+
+        # Average across models row
+        avg_row = ["Overall TinyChange AUC"]
+        for s in sources:
+            score = plot_data.t_point_estimates[s]
+            score_ci = ci(plot_data.t_bootstrap_results[s], config.analysis.results_alpha)
+            avg_row.append(f"{score:.3f} ({score_ci[0]:.3f}, {score_ci[1]:.3f})")
+        print(" & ".join(avg_row) + " \\\\")
+        print("\\hline")
+
+        # Token cost per test row
+        token_costs = []
+        for s in sources:
+            input_tokens = plot_data.token_count[s][0] * 2 * n_samples_per_prompt
+            output_tokens = plot_data.token_count[s][1] * 2 * n_samples_per_prompt
+            token_costs.append(f"$({input_tokens:.2g}, {output_tokens:.2g})$")
+
+        token_cost_row = ["Token Count Per Test (I, O)"] + token_costs
+        print(" & ".join(token_cost_row) + " \\\\")
+        print("\\hline")
+
+        # Cost per year row
+        yearly_costs = []
+        for s in sources:
+            cost = yearly_cost[s]
+            if cost >= 1:
+                yearly_costs.append(f"\\${cost:.0f}")
+            else:
+                yearly_costs.append(f"\\${cost:.2f}")
+
+        cost_year_row = ["Cost Per Year*"] + yearly_costs
+        print(" & ".join(cost_year_row) + " \\\\")
+        print("\\end{tabular}")
 
     @staticmethod
     def plot():
@@ -812,7 +866,7 @@ class BaselineAnalysis:
             plot_data = BAPlotData.model_validate(orjson.loads(f.read()))
         difficulty_scales = {
             "finetune_no_lora": {
-                "title": "finetuning",
+                "title": "Finetuning",
                 "match_fn": lambda v: v["type"] == "finetune" and v["lora"] is False,
                 "scale_attr": "n_samples",
                 "xaxis_title": "Number of steps of finetuning",
@@ -824,19 +878,19 @@ class BaselineAnalysis:
                 "xaxis_title": "Number of steps of finetuning",
             },
             "random_noise": {
-                "title": "random noise",
+                "title": "Random noise",
                 "match_fn": lambda v: v["type"] == "random_noise",
                 "scale_attr": "scale",
                 "xaxis_title": "Standard deviation of the gaussian noise added to each weight",
             },
             "weight_pruning_magnitude": {
-                "title": "weight pruning, selection by magnitude",
+                "title": "Weight pruning, selection by magnitude",
                 "match_fn": lambda v: v["type"] == "weight_pruning" and v["method"] == "magnitude",
                 "scale_attr": "scale",
                 "xaxis_title": "Fraction of the weights to prune",
             },
             "weight_pruning_random": {
-                "title": "weight pruning, random selection",
+                "title": "Weight pruning, random selection",
                 "match_fn": lambda v: v["type"] == "weight_pruning" and v["method"] == "random",
                 "scale_attr": "scale",
                 "xaxis_title": "Fraction of the weights to prune",
@@ -904,7 +958,7 @@ class BaselineAnalysis:
 
         fig.update_layout(
             font_family="Spectral",
-            font_size=18,
+            font_size=20,
             template="plotly_white",
             title=f"{scale_info['title']}",
             xaxis=dict(
