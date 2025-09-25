@@ -59,7 +59,7 @@ async def test_endpoint_logprobs(endpoint):
     client = OpenRouterClient()
     try:
         logger.info(f"Testing logprobs for {endpoint}...")
-        response = await client.query(endpoint, "x")
+        response = await client.query(endpoint, "x", temperature=1.0)
 
         if response.error:
             return endpoint, False, response.error
@@ -278,7 +278,6 @@ async def main(add_to_existing: bool = False):
 
 
 def entrypoint(add_to_existing: bool = False):
-    add_to_existing = True
     asyncio.run(main(add_to_existing=add_to_existing))
 
 

@@ -983,14 +983,16 @@ class GrokClient:
 
 
 class OpenRouterClient:
-    async def _make_request(self, endpoint: Endpoint, prompt: str) -> Response:
+    async def _make_request(
+        self, endpoint: Endpoint, prompt: str, temperature: float = 0.0
+    ) -> Response:
         request_data = {
             "model": endpoint.name,
             "messages": [{"role": "user", "content": prompt}],
             "max_completion_tokens": config.max_completion_tokens,
             "logprobs": True,
             "top_logprobs": endpoint.get_max_logprobs(),
-            "temperature": 0,
+            "temperature": temperature,
             "provider": {
                 "allow_fallbacks": False,
                 "require_parameters": True,
@@ -1039,10 +1041,14 @@ class OpenRouterClient:
         logger.error(f"No logprobs returned for {endpoint}")
         return Response(endpoint, prompt, [], [], cost, error="No logprobs returned")
 
-    async def query(self, endpoint: Endpoint, prompt: str) -> Response:
+    async def query(self, endpoint: Endpoint, prompt: str, temperature: float = 0.0) -> Response:
         try:
             return await retry_with_exponential_backoff(
-                self._make_request, endpoint, prompt, max_retries=config.api.max_retries
+                self._make_request,
+                endpoint,
+                prompt,
+                temperature,
+                max_retries=config.api.max_retries,
             )
         except Exception as e:
             logger.error(f"Error querying {endpoint} after {config.api.max_retries} retries: {e}")

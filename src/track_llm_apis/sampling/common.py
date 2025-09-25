@@ -56,6 +56,9 @@ class References:
         self.prompts: dict[tuple[str, int], int] = {}
         # (text, output_tokens)
         self.texts: dict[tuple[str, int], int] = {}
+        # logprobs are a list of dictionaries mapping tokens to floats.
+        # They are stored here in a JSON string representation,
+        # in order to be used as dictionary keys.
         self.logprobs: dict[str, int] = {}
         # Cache for the ordered keys of the dictionaries, for lookup by index
         self._cache = {}
