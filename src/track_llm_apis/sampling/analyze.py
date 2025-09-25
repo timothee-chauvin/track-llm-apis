@@ -979,7 +979,7 @@ class BaselineAnalysis:
 class PromptAblation:
     stats_filename = "prompt_ablation_analysis.json"
     plot_data_path = config.plots_dir / "paper" / "prompt_ablation.json"
-    plot_path = config.plots_dir / "paper" / "prompt_ablation.pdf"
+    plot_path = config.plots_dir / "paper" / "prompt_ablation.html"
 
     @staticmethod
     def compute_stats(
@@ -1116,6 +1116,14 @@ class PromptAblation:
         prompt_length_avg = all_results["prompt_length_avg"]
         bootstrap_results = all_results["bootstrap_results"]
 
+        prompt_legend_names = {
+            "Let's generate random words! Only output the words, no other text. Continue the list: Underpay\nPolicy\nRisotto\nIdealist": "Let's generate random words! [...] Underpay\nPolicy\nRisotto\nIdealist",
+            "Let's generate random words! Only output the words, no other text. Continue the list: Sinuous\nCornbread\nStipulate\nOverreact": "Let's generate random words! [...] Sinuous\nCornbread\nStipulate\nOverreact",
+        }
+
+        def get_display_name(prompt):
+            return prompt_legend_names.get(prompt, prompt)
+
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
         sorted_prompts = sorted(bootstrap_results.keys(), key=lambda x: prompt_length_avg[x])
@@ -1125,9 +1133,9 @@ class PromptAblation:
             scores = bootstrap_results[prompt]
             fig.add_trace(
                 go.Violin(
-                    x=[prompt] * len(scores),
+                    x=[get_display_name(prompt)] * len(scores),
                     y=scores,
-                    name=prompt,
+                    name=get_display_name(prompt),
                     box_visible=True,
                     points="all",
                     showlegend=True,
@@ -1139,14 +1147,14 @@ class PromptAblation:
         # Scatter plot for prompt lengths
         fig.add_trace(
             go.Scatter(
-                x=sorted_prompts,
+                x=[get_display_name(prompt) for prompt in sorted_prompts],
                 y=[prompt_length_avg[prompt] for prompt in sorted_prompts],
-                mode="markers+text",
-                name="Average Prompt Token Length Across Models",
-                marker=dict(size=10, color="white", line_width=2),
+                mode="markers+lines+text",
+                name="Average Token Length of Prompts Across Models",
+                marker=dict(size=10, color="black", line_width=2),
                 text=[f"{prompt_length_avg[prompt]:.1f}" for prompt in sorted_prompts],
-                textposition="middle right",
-                textfont=dict(size=14),
+                textposition="bottom right",
+                textfont=dict(size=40),
                 showlegend=True,
                 legend="legend2",
             ),
@@ -1155,11 +1163,18 @@ class PromptAblation:
 
         fig.update_layout(
             font_family="Spectral",
+            font_size=40,
             template="plotly_white",
-            title="AUC Advantages of Prompts and Their Average Lengths",
             xaxis_showticklabels=False,
-            legend=dict(x=0, y=1, xanchor="left", yanchor="top"),
-            legend2=dict(x=0.35, y=1, xanchor="left", yanchor="top"),
+            legend=dict(
+                x=0.05,
+                y=1.1,
+                xanchor="left",
+                yanchor="top",
+                traceorder="reversed",
+                bgcolor="rgba(255,255,255,0)",
+            ),
+            legend2=dict(x=0.5, y=0.1, xanchor="left", yanchor="bottom"),
         )
 
         fig.update_yaxes(
@@ -1168,6 +1183,7 @@ class PromptAblation:
         fig.update_yaxes(showgrid=False, showticklabels=False, secondary_y=True)
 
         plot_path = PromptAblation.plot_path
+        # Something in this figure triggers a plotly.js bug when trying to save as pdf or svg.
         fig.write_html(plot_path)
         logger.info(f"Prompt ablation analysis plot saved to {plot_path}")
 
