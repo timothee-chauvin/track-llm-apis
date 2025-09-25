@@ -93,8 +93,12 @@ async def test_endpoint_simple(endpoint):
                             return endpoint, False, "No choices in response"
                     else:
                         error_text = await resp.text()
+                        logger.error(
+                            f"Error in response from {endpoint}: {resp.status} {error_text}"
+                        )
                         return endpoint, False, f"HTTP {resp.status}: {error_text}"
         except Exception as e:
+            logger.error(f"Error testing endpoint {endpoint}: {e}")
             return endpoint, False, str(e)
 
     return await retry_with_exponential_backoff(
@@ -228,6 +232,29 @@ async def main():
     for provider, stats in sorted(provider_stats.items()):
         if stats["supported"] == 0 and stats["not_supported"] > 0:
             print(f"  {provider}: 0/{stats['not_supported']} (0.000)")
+
+    print("\n" + "=" * 50)
+    print("MODELS NEVER SUPPORTING LOGPROBS")
+    print("=" * 50)
+
+    sometimes_supported_models = set()
+    never_supported_models = set()
+
+    for endpoint in logprob_supported:
+        model_name = endpoint.name
+        if model_name not in sometimes_supported_models:
+            sometimes_supported_models.add(model_name)
+
+    for endpoint, error in logprob_not_supported:
+        model_name = endpoint.name
+        if model_name not in sometimes_supported_models:
+            never_supported_models.add(model_name)
+
+    print(
+        f"\nModels that never support logprobs across any provider ({len(never_supported_models)} total):"
+    )
+    for model_name in never_supported_models:
+        print(f"  {model_name}")
 
     # Show some example errors
     print("\n" + "=" * 50)
