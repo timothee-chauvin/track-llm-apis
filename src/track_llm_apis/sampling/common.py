@@ -497,3 +497,16 @@ class AnalysisResult(BaseModel):
             / len(analyses)
             for condition in analyses[0].conditions
         }
+
+    @staticmethod
+    def multianalysis_avg_auc_across_variants(
+        analyses: list["AnalysisResult"], sampling: bool = False
+    ) -> dict[Condition, float]:
+        """Return a dict with the average performance of each Condition on all analyses (models) and all variants."""
+        return {
+            condition: sum(
+                analysis.avg_auc_across_variants(sampling=sampling) for analysis in analyses
+            )
+            / len(analyses)
+            for condition in analyses[0].conditions
+        }

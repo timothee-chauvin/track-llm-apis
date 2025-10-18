@@ -439,6 +439,7 @@ def plot_prob_histograms(after: datetime | None = None):
 
 def plot_top_token_logprobs_over_time(
     after: datetime | None = None,
+    before: datetime | None = None,
     prompt: str | None = None,
     tables: list[str] | None = None,
 ):
@@ -446,10 +447,11 @@ def plot_top_token_logprobs_over_time(
 
     Args:
         after: Only plot data after this date.
+        before: Only plot data before this date.
         prompt: Only plot data for this prompt.
         tables: Only plot data for these tables.
     """
-    data = get_db_data(after=after, tables=tables, prompt=prompt, sort_by_date=True)
+    data = get_db_data(after=after, before=before, tables=tables, prompt=prompt, sort_by_date=True)
     time_series_dir = config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
 
@@ -502,10 +504,11 @@ def plot_top_token_logprobs_over_time(
             prompt_preview = repr(trim_to_length(p, 50))
             fig.update_layout(
                 title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}<br>Prompt: {prompt_preview}",
+                font_family=config.plotting.font_family,
+                font_size=14,
                 xaxis_title="Time",
                 yaxis_title="Log Probability",
-                template="plotly_white",
-                hovermode="x unified",
+                template=config.plotting.template,
                 legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01),
             )
 
@@ -514,8 +517,8 @@ def plot_top_token_logprobs_over_time(
             filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
             fig_dir = prompt_dir
             os.makedirs(fig_dir, exist_ok=True)
-            fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.html"
-            fig.write_html(fig_path)
+            fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.pdf"
+            fig.write_image(fig_path, width=1200, height=800)
             logger.info(
                 f"Saved logprobs over time for {table_name} (prompt start: {repr(p[:40])}) to {fig_path}"
             )
@@ -799,4 +802,21 @@ if __name__ == "__main__":
     # plot_top_token_logprobs_over_time(
     #     prompt="\x06P\x1dz\x13ZTq", tables=["openai#gpt-4.1-nano"]
     # )
-    plot_top_token_logprobs_over_time()
+    # plot_top_token_logprobs_over_time(
+    #     prompt="x " * 20,
+    #     tables=["openrouter#deepseek/deepseek-chat-v3-0324#nebius/fp8"],
+    #     after=datetime(2025, 5, 28, 0, 0, 0),
+    #     before=datetime(2025, 6, 13, 0, 0, 0),
+    # )
+    # plot_top_token_logprobs_over_time(
+    #     prompt="x",
+    #     tables=["openrouter#x-ai/grok-3-mini#xai"],
+    #     after=datetime(2025, 6, 27, 0, 0, 0),
+    #     before=datetime(2025, 8, 22, 0, 0, 0),
+    # )
+    plot_top_token_logprobs_over_time(
+        prompt="x",
+        tables=["openrouter#meta-llama/llama-3.1-70b-instruct#lambda/fp8"],
+        after=datetime(2025, 7, 10, 0, 0, 0),
+        before=datetime(2025, 8, 18, 0, 0, 0),
+    )

@@ -72,6 +72,7 @@ class Response:
     error: str | None = None
 
 
+# TODO should be config, not part of main.py
 ENDPOINTS = [
     Endpoint("openai", "gpt-4o-mini", cost=(0.15, 0.60)),
     Endpoint("openai", "gpt-4o", cost=(2.5, 10)),
