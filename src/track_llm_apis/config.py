@@ -210,6 +210,8 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(
         arbitrary_types_allowed=False,
         validate_assignment=True,
+        env_file=".env",
+        extra="allow",
         env_prefix="TRACKLLM__",
         # e.g. specify the model name: TRACKLLM__SAMPLING__MODEL_NAME=...
         env_nested_delimiter="__",
