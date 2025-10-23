@@ -1,4 +1,3 @@
-import asyncio
 import gc
 import json
 import logging
@@ -277,7 +276,7 @@ class TinyChange:
 
         self.tasks = []
         if self.config.return_unchanged:
-            self.tasks.append(self.get_unchanged())
+            self.tasks.append(lambda: self.get_unchanged())
 
         if self.config.enable_finetuning:
             self.tasks.extend(self._generate_finetuning_tasks(use_lora=False))
@@ -286,41 +285,35 @@ class TinyChange:
             self.tasks.extend(self._generate_finetuning_tasks(use_lora=True))
 
         if self.config.enable_quantization:
-            self.tasks.extend(
-                [self.quantize(method) for method in self.config.quantization_methods]
-            )
+            for method in self.config.quantization_methods:
+                self.tasks.append(lambda method=method: self.quantize(method))
+
         if self.config.enable_random_noise:
-            self.tasks.extend(
-                [self.random_noise(scale) for scale in self.config.random_noise_scale]
-            )
+            for scale in self.config.random_noise_scale:
+                self.tasks.append(lambda scale=scale: self.random_noise(scale))
+
         if self.config.enable_weight_pruning:
-            self.tasks.extend(
-                [
-                    self.weight_pruning(scale, method="magnitude")
-                    for scale in self.config.weight_pruning_magnitude_scale
-                ]
-            )
-            self.tasks.extend(
-                [
-                    self.weight_pruning(scale, method="random")
-                    for scale in self.config.weight_pruning_random_scale
-                ]
-            )
+            for scale in self.config.weight_pruning_magnitude_scale:
+                self.tasks.append(lambda scale=scale, m="magnitude": self.weight_pruning(scale, m))
+            for scale in self.config.weight_pruning_random_scale:
+                self.tasks.append(lambda scale=scale, m="random": self.weight_pruning(scale, m))
 
         self._task_index = 0
 
     def _generate_finetuning_tasks(self, use_lora: bool):
-        return [
-            self.finetune(
-                lr,
-                n_samples,
-                self.config.finetuning_epochs,
-                self.config.finetuning_batch_size,
-                use_lora=use_lora,
-            )
-            for lr in self.config.finetuning_lr_scale
-            for n_samples in self.config.finetuning_samples
-        ]
+        tasks = []
+        for lr in self.config.finetuning_lr_scale:
+            for n_samples in self.config.finetuning_samples:
+                tasks.append(
+                    lambda lr=lr, n_samples=n_samples, use_lora=use_lora: self.finetune(
+                        lr,
+                        n_samples,
+                        self.config.finetuning_epochs,
+                        self.config.finetuning_batch_size,
+                        use_lora=use_lora,
+                    )
+                )
+        return tasks
 
     @property
     def n_variants(self) -> int:
@@ -331,18 +324,18 @@ class TinyChange:
     def unchanged_str() -> str:
         return TinyChangeModel.description_to_str(TinyChange.UNCHANGED_DESCRIPTION)
 
-    def __aiter__(self):
+    def __iter__(self):
         return self
 
-    async def __anext__(self):
+    def __next__(self):
         """Generate and return the next modified model."""
         gc.collect()
         torch.cuda.empty_cache()
         if self._task_index >= len(self.tasks):
-            raise StopAsyncIteration
+            raise StopIteration
         task = self.tasks[self._task_index]
         self._task_index += 1
-        result = await task
+        result = task()
         gc.collect()
         torch.cuda.empty_cache()
         assert get_model_hash(self.model) == self.model_hash, (
@@ -350,7 +343,7 @@ class TinyChange:
         )
         return result
 
-    async def get_unchanged(self) -> TinyChangeModel:
+    def get_unchanged(self) -> TinyChangeModel:
         """Return the unchanged model as a TinyChangeModel object."""
         return TinyChangeModel(
             description=self.UNCHANGED_DESCRIPTION,
@@ -358,7 +351,7 @@ class TinyChange:
             model=self.model,
         )
 
-    async def random_noise(self, scale: float) -> TinyChangeModel:
+    def random_noise(self, scale: float) -> TinyChangeModel:
         """Add random noise following a normal distribution of mean 0 and standard deviation `scale` to each parameter in the model."""
         model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
         for _, param in model.named_parameters():
@@ -376,7 +369,7 @@ class TinyChange:
             model=model,
         )
 
-    async def weight_pruning(
+    def weight_pruning(
         self, scale: float | int, method: Literal["magnitude", "random"]
     ) -> TinyChangeModel:
         """Prune the model by removing parameters across the weights (not biases) of all MLP layers."""
@@ -422,7 +415,7 @@ class TinyChange:
                     pruning_method(module, param_name, amount=amount)
                     prune.remove(module, param_name)
 
-    async def finetune(
+    def finetune(
         self, lr: float | int, n_samples: int, epochs: int, batch_size: int, use_lora: bool = False
     ) -> TinyChangeModel:
         """Finetune the model on a subset of the finetuning dataset."""
@@ -479,7 +472,7 @@ class TinyChange:
             model=recreated_model,
         )
 
-    async def quantize(self, method: str) -> TinyChangeModel:
+    def quantize(self, method: str) -> TinyChangeModel:
         model = copy_model_to(self.model, self.config.variants_device)  # pyright: ignore[reportArgumentType]
         configs = {
             "int8": mtq.INT8_DEFAULT_CFG,
@@ -495,7 +488,7 @@ class TinyChange:
         )
 
 
-async def main():
+def main():
     # Testing
     DEVICE = "cuda"
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -505,18 +498,13 @@ async def main():
     tiny_change = TinyChange(model, tokenizer, config)
 
     logger.info(f"dtype: {model.dtype}")
-    logger.info(f"Base model hash: {(await tiny_change.get_unchanged()).model_hash}")
+    logger.info(f"Base model hash: {(tiny_change.get_unchanged()).model_hash}")
 
-    # Synchronous iteration for testing
-    async_iter = tiny_change.__aiter__()
-    try:
-        while True:
-            variant = await async_iter.__anext__()
-            logger.info(f"Generated variant: ({variant.model_hash})")
-            logger.info(json.dumps(variant.description, indent=2))
-    except StopAsyncIteration:
-        logger.info("All variants processed")
+    for variant in tiny_change:
+        logger.info(f"Generated variant: ({variant.model_hash})")
+        logger.info(json.dumps(variant.description, indent=2))
+    logger.info("All variants processed")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

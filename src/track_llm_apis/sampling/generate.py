@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import random
@@ -211,7 +210,7 @@ def vllm_inference_random_traffic(
             )
 
 
-async def main():
+def main():
     start_time = time.time()
     DEBUG = False
     if DEBUG:
@@ -284,15 +283,13 @@ async def main():
     # Initialize vLLM instance
     llm = init_vllm(model, tokenizer, config.sampling.device_config.vllm_device)
 
-    # Synchronous iteration for testing
-    async_iter = tiny_change.__aiter__()
     i = 0
     total_gen_time = 0.0
     total_inference_time = 0.0
     try:
         while True:
             gen_start = time.time()
-            variant = await async_iter.__anext__()
+            variant = tiny_change.__next__()
             gen_time = time.time() - gen_start
             gen_time_str = str(timedelta(seconds=gen_time))
             total_gen_time += gen_time
@@ -392,16 +389,12 @@ async def main():
             del variant.model
             del variant
 
-    except StopAsyncIteration:
+    except StopIteration:
         logger.info("All variants processed")
 
     if llm is not None:
         cleanup_vllm(llm)
 
 
-def entrypoint():
-    asyncio.run(main())
-
-
 if __name__ == "__main__":
-    entrypoint()
+    main()
