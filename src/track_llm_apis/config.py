@@ -165,9 +165,7 @@ class LogprobConfig(BaseModel):
 class SamplingConfig(BaseModel):
     model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
     device_config: DeviceConfig = Field(default_factory=DeviceConfig)
-    # How many times to sample the original model vs variants
-    original_model_n_samples: int = 1_000
-    variants_n_samples: int = 1_000
+    n_samples: int = 1_000
     vllm_enable_sleep_mode: bool = False
     vllm_use_tqdm: bool = True
 

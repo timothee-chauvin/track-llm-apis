@@ -214,8 +214,7 @@ def main():
     start_time = time.time()
     DEBUG = False
     if DEBUG:
-        config.sampling.original_model_n_samples = 5
-        config.sampling.variants_n_samples = 5
+        config.sampling.n_samples = 5
 
     config.sampling.device_config = DeviceConfig(
         vllm_device="cuda:0",
@@ -295,10 +294,7 @@ def main():
             total_gen_time += gen_time
             total_gen_time_str = str(timedelta(seconds=total_gen_time))
             i += 1
-            if variant.description == TinyChange.UNCHANGED_DESCRIPTION:
-                n_samples = config.sampling.original_model_n_samples
-            else:
-                n_samples = config.sampling.variants_n_samples
+            n_samples = config.sampling.n_samples
             logger.info(f"Generated variant {i}/{n_variants}: ({variant.model_hash})")
             logger.info(json.dumps(variant.description))
             logger.info(f"Generation time: {gen_time_str}")
