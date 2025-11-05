@@ -187,6 +187,7 @@ class APIConfig(BaseModel):
             # Default is 20, but these providers have a lower limit.
             "fireworks": 5,
             "azure": 5,
+            "inference-net": 5,
             "xai": 8,
         }
     )
