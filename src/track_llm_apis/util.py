@@ -204,7 +204,7 @@ def slugify(s: str, max_length: int = 50, hash_length: int = 8) -> str:
     Convert a string to a slugified version suitable for Linux and MacOS filenames.
 
     Special characters are hex-encoded to preserve information while keeping
-    the filename safe. For example, "|" becomes "-x7c-".
+    the filename safe. For example, "|" becomes "7c".
 
     Args:
         s: The input string to slugify
