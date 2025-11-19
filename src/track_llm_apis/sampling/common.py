@@ -201,6 +201,18 @@ class CompressedOutputRow:
             return None
         return self.references.get_logprobs(self.logprobs_idx)
 
+    @property
+    def first_token_logprobs(self) -> dict[int, float]:
+        """
+        Return the logprob dictionary for the first token of the output.
+
+        If there are no logprobs, raise a ValueError.
+        """
+        if self.logprobs_idx is None:
+            raise ValueError("logprobs_idx is None")
+        logprobs_list = self.references.get_logprobs(self.logprobs_idx)
+        return logprobs_list[0]
+
 
 class CompressedOutput:
     def __init__(self, model_name: str, gpus: list[str] | None = None):

@@ -49,6 +49,13 @@ def build_logprob_tensor(
 def get_seen_tokens(
     logprobs: FrozenList[frozendict[int, float]],
 ) -> tuple[frozenset[int], frozendict[int, int]]:
+    """
+    Input: a list of logprob dictionaries (token_id -> logprob value)
+
+    Output:
+    - the set of all seen token IDs
+    - a dictionary mapping each seen token ID to a short ID (0, 1, 2, ...)
+    """
     seen_tokens = frozenset(token_id for lp in logprobs for token_id in lp.keys())
     token_short_ids = frozendict({token_id: i for i, token_id in enumerate(seen_tokens)})
     return seen_tokens, token_short_ids
@@ -64,10 +71,10 @@ def logprob_two_sample_test(
     values1 = next(iter(sample1.values()))
     values2 = next(iter(sample2.values()))
     # Convert the samples to suitable tensors.
-    all_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in values1 + values2])
+    all_logprobs = frozenlist([frozendict(r.first_token_logprobs) for r in values1 + values2])
     seen_tokens, token_short_ids = get_seen_tokens(all_logprobs)
-    sample1_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in values1])
-    sample2_logprobs = frozenlist([frozendict(r.logprobs[0]) for r in values2])
+    sample1_logprobs = frozenlist([frozendict(r.first_token_logprobs) for r in values1])
+    sample2_logprobs = frozenlist([frozendict(r.first_token_logprobs) for r in values2])
     t1 = build_logprob_tensor(sample1_logprobs, seen_tokens, token_short_ids)
     t2 = build_logprob_tensor(sample2_logprobs, seen_tokens, token_short_ids)
     statistic = logprob_two_sample_statistic(t1.unsqueeze(0), t2.unsqueeze(0)).item()
