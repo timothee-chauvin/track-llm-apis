@@ -19,7 +19,9 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from track_llm_apis.config import config
 from track_llm_apis.sampling.analyze_gao2025 import CompletionSample, run_two_sample_test_torch
-from track_llm_apis.sampling.analyze_logprobs import logprob_two_sample_test
+from track_llm_apis.sampling.analyze_logprobs import (
+    logprob_two_sample_test_from_compressed_output_row,
+)
 from track_llm_apis.sampling.analyze_mmlu import mmlu_two_sample_test
 from track_llm_apis.sampling.common import (
     AnalysisResult,
@@ -225,7 +227,7 @@ def evaluate_detector_on_variant(
             two_sample_test_fn = mmlu_two_sample_test
         case DataSource.US:
             samples_per_prompt = config.sampling.logprob.n_samples_per_prompt
-            two_sample_test_fn = logprob_two_sample_test
+            two_sample_test_fn = logprob_two_sample_test_from_compressed_output_row
             # Only keep the provided or default prompt, discarding the others
             if logprob_prompt is None:
                 logprob_prompt = config.sampling.logprob.default_prompt
