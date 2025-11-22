@@ -25,7 +25,8 @@ from scipy.stats import linregress, shapiro
 from tqdm import tqdm
 
 from track_llm_apis.config import config
-from track_llm_apis.util import slugify, trim_to_length
+from track_llm_apis.lt_on_apis import plot_top_token_logprobs_over_time
+from track_llm_apis.util import trim_to_length
 
 logger = config.logger
 analysis_config = config.analysis
@@ -435,95 +436,6 @@ def plot_prob_histograms(after: datetime | None = None):
         fig_path = histograms_dir / f"{stub}_prob_histogram{filename_suffix}.html"
         fig.write_html(fig_path)
         print(f"Saved histogram for {table_name} to {fig_path}")
-
-
-def plot_top_token_logprobs_over_time(
-    after: datetime | None = None,
-    before: datetime | None = None,
-    prompt: str | None = None,
-    tables: list[str] | None = None,
-):
-    """Plot logprobs of top tokens over time for each prompt in each table.
-
-    Args:
-        after: Only plot data after this date.
-        before: Only plot data before this date.
-        prompt: Only plot data for this prompt.
-        tables: Only plot data for these tables.
-    """
-    data = get_db_data(after=after, before=before, tables=tables, prompt=prompt, sort_by_date=True)
-    time_series_dir = config.plots_dir / "time_series"
-    os.makedirs(time_series_dir, exist_ok=True)
-
-    n_plots = sum(len(set(row.prompt for row in table_rows)) for table_rows in data.values())
-
-    pbar = tqdm(total=n_plots)
-    for table_name in data.keys():
-        rows = data[table_name]
-
-        # Group rows by prompt
-        prompt_groups = defaultdict(list)
-        for row in rows:
-            prompt_groups[row.prompt].append(row)
-
-        # Create a plot for each prompt
-        if prompt:
-            if prompt not in prompt_groups:
-                logger.info(f"Prompt {prompt} not found in {table_name}")
-                continue
-            prompt_groups = {prompt: prompt_groups[prompt]}
-        for p, prompt_rows in prompt_groups.items():
-            prompt_dir = time_series_dir / slugify(p, max_length=50, hash_length=8)
-            os.makedirs(prompt_dir, exist_ok=True)
-
-            all_token_logprobs = get_token_logprobs(prompt_rows, p, missing_policy="none")
-
-            # Create the plot
-            fig = go.Figure()
-
-            # Get a fixed, sorted order of tokens
-            sorted_tokens = sorted(all_token_logprobs.keys())
-
-            # Add a line for each top token
-            for token in sorted_tokens:
-                token_logprobs = all_token_logprobs[token]
-                fig.add_trace(
-                    go.Scatter(
-                        x=token_logprobs.dates,
-                        y=token_logprobs.logprobs,
-                        mode="lines+markers",
-                        name=f'"{token}"',
-                        line=dict(width=2),
-                        marker=dict(size=4),
-                    )
-                )
-
-            # Update layout
-            title_suffix = f" (after {after.isoformat()})" if after else ""
-            # Truncate prompt for title if it's too long
-            prompt_preview = repr(trim_to_length(p, 50))
-            fig.update_layout(
-                title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}<br>Prompt: {prompt_preview}",
-                font_family=config.plotting.font_family,
-                font_size=14,
-                xaxis_title="Time",
-                yaxis_title="Log Probability",
-                template=config.plotting.template,
-                legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01),
-            )
-
-            # Save the plot
-            stub = table_name.replace("/", "_").replace("#", "_")
-            filename_suffix = f"_after_{after.strftime('%Y%m%d_%H%M%S')}" if after else ""
-            fig_dir = prompt_dir
-            os.makedirs(fig_dir, exist_ok=True)
-            fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.pdf"
-            fig.write_image(fig_path, width=1200, height=800)
-            logger.info(
-                f"Saved logprobs over time for {table_name} (prompt start: {repr(p[:40])}) to {fig_path}"
-            )
-            pbar.update(1)
-    pbar.close()
 
 
 def test_normality_shapiro():
