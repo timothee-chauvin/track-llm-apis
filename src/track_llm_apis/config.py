@@ -19,6 +19,8 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("choreographer").setLevel(logging.WARNING)
+logging.getLogger("kaleido").setLevel(logging.WARNING)
 logger = logging.getLogger("track-llm-apis")
 
 
