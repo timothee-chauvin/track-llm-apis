@@ -19,8 +19,9 @@ from track_llm_apis.sampling.common import TwoSampleTestResultWithDate
 from track_llm_apis.util import fast_hash, slugify, trim_to_length
 
 n_per_test = 10
-pvalue_threshold = 0.005
+pvalue_threshold = 1e-3
 pvalue_b = 2000
+prompt = "x"
 
 
 class LTOnAPIData(BaseModel):
@@ -37,7 +38,7 @@ def _get_filename(tables: list[str] | None, n_per_test: int, pvalue_b: int) -> s
 
 
 def lt_on_apis(
-    tables: list[str] | None = None, overwrite: bool = False
+    prompt: str, tables: list[str] | None = None, overwrite: bool = False
 ) -> dict[str, list[TwoSampleTestResultWithDate]]:
     """Compute pvalues on all supplied tables (or all tables if `tables` is None).
     Store them in a filename derived from the hash of the supplied table names, n_per_test and pvalue_b. If `overwrite` is False is the file exists, load data from the file instead."""
@@ -68,7 +69,7 @@ def lt_on_apis(
 
 def plot_threshold_analysis(tables: list[str] | None = None):
     """Create a plot showing the total number of detections and days with detections depending on the p-value threshold."""
-    all_results = lt_on_apis(tables=tables)
+    all_results = lt_on_apis(prompt=prompt, tables=tables)
 
     total_endpoints = len(all_results)
     total_tests = sum(len(r) for r in all_results.values())
@@ -122,7 +123,7 @@ def plot_threshold_analysis(tables: list[str] | None = None):
 
 def plot_pvalue_histogram(tables: list[str] | None = None):
     """Create a histogram of p-values across all endpoints."""
-    all_results = lt_on_apis(tables=tables)
+    all_results = lt_on_apis(prompt=prompt, tables=tables)
     total_endpoints = len(all_results)
     total_tests = sum(len(r) for r in all_results.values())
 
@@ -175,6 +176,8 @@ def plot_top_token_logprobs_over_time(
     before: datetime | None = None,
     prompt: str | None = None,
     tables: list[str] | None = None,
+    with_lt_results: bool = False,
+    pvalue_threshold: float = pvalue_threshold,
 ):
     """Plot logprobs of top tokens over time for each prompt in each table.
 
@@ -183,9 +186,18 @@ def plot_top_token_logprobs_over_time(
         before: Only plot data before this date.
         prompt: Only plot data for this prompt.
         tables: Only plot data for these tables.
+        with_lt_results: If True, include results of hypothesis tests.
+        pvalue_threshold: Threshold below which pvalues are considered to indicate a change in the LLM API.
     """
+    if with_lt_results:
+        assert prompt is not None, "Prompt must be specified when with_lt_results is True"
+        lt_results = lt_on_apis(prompt=prompt, tables=tables)
+
     data = get_db_data(after=after, before=before, tables=tables, prompt=prompt, sort_by_date=True)
-    time_series_dir = config.plots_dir / "time_series"
+    if with_lt_results:
+        time_series_dir = config.plots_dir / "time_series_lt"
+    else:
+        time_series_dir = config.plots_dir / "time_series"
     os.makedirs(time_series_dir, exist_ok=True)
 
     n_plots = sum(len(set(row.prompt for row in table_rows)) for table_rows in data.values())
@@ -230,6 +242,17 @@ def plot_top_token_logprobs_over_time(
                         marker=dict(size=4),
                     )
                 )
+
+            # Add vertical lines for significant p-values
+            if with_lt_results and table_name in lt_results:
+                for test_result in lt_results[table_name]:
+                    if test_result.pvalue and test_result.pvalue < pvalue_threshold:
+                        fig.add_vline(
+                            x=test_result.date,
+                            line_color="red",
+                            line_width=1,
+                            line_dash="solid",
+                        )
 
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
@@ -282,6 +305,12 @@ if __name__ == "__main__":
         "openrouter#mistralai/devstral-small-2505#chutes",
         "openrouter#mistralai/mistral-small-24b-instruct-2501#chutes",
     ]
-    lt_on_apis(tables=tables, overwrite=False)
-    plot_threshold_analysis(tables=tables)
-    plot_pvalue_histogram(tables=tables)
+    # lt_on_apis(prompt=prompt, tables=tables, overwrite=False)
+    # plot_threshold_analysis(tables=tables)
+    # plot_pvalue_histogram(tables=tables)
+    plot_top_token_logprobs_over_time(
+        tables=tables,
+        prompt=prompt,
+        with_lt_results=True,
+        pvalue_threshold=pvalue_threshold,
+    )

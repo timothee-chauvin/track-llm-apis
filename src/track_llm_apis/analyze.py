@@ -25,7 +25,6 @@ from scipy.stats import linregress, shapiro
 from tqdm import tqdm
 
 from track_llm_apis.config import config
-from track_llm_apis.lt_on_apis import plot_top_token_logprobs_over_time
 from track_llm_apis.util import trim_to_length
 
 logger = config.logger
@@ -726,9 +725,9 @@ if __name__ == "__main__":
     #     after=datetime(2025, 6, 27, 0, 0, 0),
     #     before=datetime(2025, 8, 22, 0, 0, 0),
     # )
-    plot_top_token_logprobs_over_time(
-        prompt="x",
-        tables=["openrouter#meta-llama/llama-3.1-70b-instruct#lambda/fp8"],
-        after=datetime(2025, 7, 10, 0, 0, 0),
-        before=datetime(2025, 8, 18, 0, 0, 0),
-    )
+    # plot_top_token_logprobs_over_time(
+    #     prompt="x",
+    #     tables=["openrouter#meta-llama/llama-3.1-70b-instruct#lambda/fp8"],
+    #     after=datetime(2025, 7, 10, 0, 0, 0),
+    #     before=datetime(2025, 8, 18, 0, 0, 0),
+    # )
