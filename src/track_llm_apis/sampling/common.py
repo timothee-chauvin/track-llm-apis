@@ -4,6 +4,7 @@ import os
 import random
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -375,6 +376,14 @@ class CIResult(BaseModel):
 class TwoSampleTestResult(BaseModel):
     """Result of a single two-sample test, that returns a single statistic and a p-value."""
 
+    pvalue: float | None = None
+    statistic: float
+
+
+class TwoSampleTestResultWithDate(BaseModel):
+    """Like TwoSampleTestResult, but with the date."""
+
+    date: datetime
     pvalue: float | None = None
     statistic: float
 

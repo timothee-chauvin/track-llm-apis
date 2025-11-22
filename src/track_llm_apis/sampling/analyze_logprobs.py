@@ -8,7 +8,11 @@ from torch import Tensor
 
 from track_llm_apis.analyze import ResponseData
 from track_llm_apis.config import config
-from track_llm_apis.sampling.common import CompressedOutputRow, TwoSampleTestResult
+from track_llm_apis.sampling.common import (
+    CompressedOutputRow,
+    TwoSampleTestResult,
+    TwoSampleTestResultWithDate,
+)
 
 
 def frozenlist(li: list) -> FrozenList:
@@ -84,11 +88,9 @@ def get_seen_tokens(
 
 def logprob_time_series(
     data: list[ResponseData], n_per_test: int, pvalue_b: int = 1000
-) -> list[tuple[int, TwoSampleTestResult]]:
+) -> list[TwoSampleTestResultWithDate]:
     """
-    Apply logprob tracking on all sets of 2 consecutive windows of size n_per_test.
-
-    Return a list of (index, TwoSampleTestResult) tuples."""
+    Apply logprob tracking on all sets of 2 consecutive windows of size n_per_test."""
     # Convert to common format
     logprobs = frozenlist(
         [frozendict({tok: lp for tok, lp in zip(rd.top_tokens, rd.logprobs)}) for rd in data]
@@ -108,45 +110,46 @@ def logprob_time_series(
     # (n_windows,)
     statistics = logprob_two_sample_statistic(t1_stack, t2_stack)
 
-    if pvalue_b > 0:
-        # Split in chunks along the pvalue_b dimension
-        # 1. How much memory do we have available?
-        free, _ = torch.cuda.mem_get_info()
-        # 2. How much memory does one permutation require?
-        fp32 = 4
-        memory_per_perm = n_windows * (2 * n_per_test) * nt * fp32
-        safety_factor = 0.7
-        pvalue_chunk = int(free * safety_factor / memory_per_perm)
-        assert pvalue_chunk > 0, "Not enough memory to compute even one permutation!"
-
-        if pvalue_chunk < pvalue_b:
-            print(
-                f"Computing p-values in chunks of {pvalue_chunk} out of {pvalue_b} due to memory constraints."
-            )
-
-        all_permuted_stats = []
-        for start_idx in range(0, pvalue_b, pvalue_chunk):
-            end_idx = min(start_idx + pvalue_chunk, pvalue_b)
-            chunk_size = end_idx - start_idx
-            permuted_stats = permuted_stats_batched(
-                t1_stack,
-                t2_stack,
-                n_windows,
-                n_per_test,
-                chunk_size,
-            )
-            all_permuted_stats.append(permuted_stats)
-        all_permuted_stats = torch.cat(all_permuted_stats, dim=1)  # (n_windows, pvalue_b)
-        pvalues = (all_permuted_stats >= statistics[:, None]).float().mean(dim=1)  # (n_windows,)
-
+    if pvalue_b == 0:
         return [
-            (i.item(), TwoSampleTestResult(pvalue=p.item(), statistic=s.item()))
-            for i, p, s in zip(indices, pvalues, statistics)
+            TwoSampleTestResultWithDate(date=data[i].date, statistic=s.item())
+            for i, s in zip(indices, statistics)
         ]
-    else:
-        return [
-            (i.item(), TwoSampleTestResult(statistic=s.item())) for i, s in zip(indices, statistics)
-        ]
+
+    # Split in chunks along the pvalue_b dimension
+    # 1. How much memory do we have available?
+    free, _ = torch.cuda.mem_get_info()
+    # 2. How much memory does one permutation require?
+    fp32 = 4
+    memory_per_perm = n_windows * (2 * n_per_test) * nt * fp32
+    safety_factor = 0.7
+    pvalue_chunk = int(free * safety_factor / memory_per_perm)
+    assert pvalue_chunk > 0, "Not enough memory to compute even one permutation!"
+
+    if pvalue_chunk < pvalue_b:
+        print(
+            f"Computing p-values in chunks of {pvalue_chunk} out of {pvalue_b} due to memory constraints."
+        )
+
+    all_permuted_stats = []
+    for start_idx in range(0, pvalue_b, pvalue_chunk):
+        end_idx = min(start_idx + pvalue_chunk, pvalue_b)
+        chunk_size = end_idx - start_idx
+        permuted_stats = permuted_stats_batched(
+            t1_stack,
+            t2_stack,
+            n_windows,
+            n_per_test,
+            chunk_size,
+        )
+        all_permuted_stats.append(permuted_stats)
+    all_permuted_stats = torch.cat(all_permuted_stats, dim=1)  # (n_windows, pvalue_b)
+    pvalues = (all_permuted_stats >= statistics[:, None]).float().mean(dim=1)  # (n_windows,)
+
+    return [
+        TwoSampleTestResultWithDate(date=data[i].date, pvalue=p.item(), statistic=s.item())
+        for i, p, s in zip(indices, pvalues, statistics)
+    ]
 
 
 def permuted_stats_batched(

@@ -1,53 +1,68 @@
 # from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime
 
 import numpy as np
+import orjson
 import plotly.graph_objects as go
-import torch
+from pydantic import BaseModel
 
-from track_llm_apis.analyze import ResponseData, get_db_data
-from track_llm_apis.config import config
+from track_llm_apis.analyze import get_db_data
+from track_llm_apis.config import config, logger
 from track_llm_apis.sampling.analyze_logprobs import (
     logprob_time_series,
 )
-from track_llm_apis.sampling.common import TwoSampleTestResult
+from track_llm_apis.sampling.common import TwoSampleTestResultWithDate
+from track_llm_apis.util import fast_hash
 
 n_per_test = 10
 pvalue_threshold = 0.005
 pvalue_b = 2000
 
 
-def lt_on_table(
-    table_name: str, data: list[ResponseData]
-) -> list[tuple[int, datetime, float, float]]:
-    detections = []
-    results = logprob_time_series(data, n_per_test, pvalue_b=pvalue_b)
-    for i, result in results:
-        if result.pvalue is not None and result.pvalue < pvalue_threshold:
-            detections.append((i, data[i].date, result.statistic, result.pvalue))
-    unique_days = set(date.date() for _, date, _, _ in detections)
-    print(f"Detected {len(detections)} changes, on {len(unique_days)} unique days, in {table_name}")
-    print(f"Unique days with detections: {len(unique_days)}")
-    torch.cuda.empty_cache()
-    return detections
+class LTOnAPIData(BaseModel):
+    n_per_test: int
+    pvalue_b: int
+    # mapping from table name to list of hypothesis test results
+    data: dict[str, list[TwoSampleTestResultWithDate]]
 
 
-def lt_on_apis(tables: list[str] | None = None) -> dict[str, list[tuple[int, TwoSampleTestResult]]]:
-    prompt = "x"
-    data = get_db_data(tables=tables, prompt=prompt, sort_by_date=True)
-    all_results = {}
-    for table_name, table_data in data.items():
-        if "ft:gpt" in table_name:
-            continue
-        all_results[table_name] = logprob_time_series(table_data, n_per_test, pvalue_b=pvalue_b)
-    return all_results
+def _get_filename(tables: list[str] | None, n_per_test: int, pvalue_b: int) -> str:
+    tables_str = orjson.dumps(sorted(tables)).decode() if tables else "all tables"
+    tables_hash = fast_hash(tables_str)
+    return f"lt_on_apis_{tables_hash}_n_per_test={n_per_test}_b={pvalue_b}.json"
+
+
+def lt_on_apis(
+    tables: list[str] | None = None, overwrite: bool = False
+) -> dict[str, list[TwoSampleTestResultWithDate]]:
+    """Compute pvalues on all supplied tables (or all tables if `tables` is None).
+    Store them in a filename derived from the hash of the supplied table names, n_per_test and pvalue_b. If `overwrite` is False is the file exists, load data from the file instead."""
+    cache_dir = config.plots_dir / "paper" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    filepath = cache_dir / _get_filename(tables, n_per_test, pvalue_b)
+    if filepath.exists() and not overwrite:
+        logger.info(f"Loading hypothesis test results from cache file {filepath}...")
+        all_results = LTOnAPIData.model_validate(orjson.loads(filepath.read_bytes()))
+    else:
+        prompt = "x"
+        data = get_db_data(tables=tables, prompt=prompt, sort_by_date=True)
+        all_results = LTOnAPIData(n_per_test=n_per_test, pvalue_b=pvalue_b, data={})
+        for i, (table_name, table_data) in enumerate(data.items()):
+            if "ft:gpt" in table_name:
+                continue
+            print(f"{i + 1}/{len(data)} {table_name} ({len(table_data)} samples)")
+            all_results.data[table_name] = logprob_time_series(
+                table_data, n_per_test, pvalue_b=pvalue_b
+            )
+
+        logger.info(f"Saving hypothesis test results to cache file {filepath}...")
+        with open(filepath, "wb") as f:
+            f.write(orjson.dumps(all_results.model_dump(mode="json")))
+
+    return all_results.data
 
 
 def plot_threshold_analysis(tables: list[str] | None = None):
     """Create a plot showing the total number of detections and days with detections depending on the p-value threshold."""
-    prompt = "x"
-    data = get_db_data(tables=tables, prompt=prompt, sort_by_date=True)
-
     all_results = lt_on_apis(tables=tables)
 
     total_endpoints = len(all_results)
@@ -61,13 +76,12 @@ def plot_threshold_analysis(tables: list[str] | None = None):
     for threshold in thresholds:
         total_detections = 0
         total_unique_days = 0
-        for table_name, results in all_results.items():
-            table_data = data[table_name]
+        for table_results in all_results.values():
             dates_with_detections = set()
-            for i, result in results:
+            for result in table_results:
                 if result.pvalue is not None and result.pvalue < threshold:
                     total_detections += 1
-                    dates_with_detections.add(table_data[i].date.date())
+                    dates_with_detections.add(result.date.date())
             total_unique_days += len(dates_with_detections)
         n_detections.append(total_detections)
         n_unique_days.append(total_unique_days)
@@ -101,8 +115,57 @@ def plot_threshold_analysis(tables: list[str] | None = None):
     )
 
 
+def plot_pvalue_histogram(tables: list[str] | None = None):
+    """Create a histogram of p-values across all endpoints."""
+    all_results = lt_on_apis(tables=tables)
+    total_endpoints = len(all_results)
+    total_tests = sum(len(r) for r in all_results.values())
+
+    all_pvalues = []
+    for table_results in all_results.values():
+        for result in table_results:
+            if result.pvalue is not None:
+                if result.pvalue == 0.0:
+                    all_pvalues.append(10)
+                else:
+                    all_pvalues.append(-np.log10(result.pvalue))
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(
+            x=all_pvalues,
+            xbins=dict(start=0, end=11, size=0.1),
+            name="P-value Histogram",
+        )
+    )
+    # label each bar
+    bin_edges = np.arange(0, 11.1, 0.1)
+    bin_mids = (bin_edges[:-1] + bin_edges[1:]) / 2
+    counts, _ = np.histogram([p for p in all_pvalues], bins=bin_edges)
+
+    for mid, count in zip(bin_mids, counts):
+        if count > 0:
+            fig.add_annotation(
+                x=mid,
+                y=count,
+                text=f"{10 ** (-mid):.1g}",
+                showarrow=False,
+                yshift=20,
+                textangle=-90,
+            )
+    fig.update_xaxes(title="-log10(p-value)", dtick=1)
+    fig.update_yaxes(title="Count")
+    fig.update_layout(
+        template=config.plotting.template,
+        font_family=config.plotting.font_family,
+        title=f"p-value histogram ({total_endpoints} endpoints analyzed, {total_tests} tests)",
+    )
+    fig.write_image(
+        config.plots_dir / "paper" / "lt_on_apis_pvalue_histogram.pdf", width=1200, height=800
+    )
+
+
 if __name__ == "__main__":
-    # mp.set_start_method("spawn")
     tables = [
         # tables with known changes
         "openrouter#meta-llama/llama-3.1-70b-instruct#lambda/fp8",
@@ -125,5 +188,6 @@ if __name__ == "__main__":
         "openrouter#mistralai/devstral-small-2505#chutes",
         "openrouter#mistralai/mistral-small-24b-instruct-2501#chutes",
     ]
-    # lt_on_apis(tables=tables)
+    lt_on_apis(tables=tables, overwrite=False)
     plot_threshold_analysis(tables=tables)
+    plot_pvalue_histogram(tables=tables)
