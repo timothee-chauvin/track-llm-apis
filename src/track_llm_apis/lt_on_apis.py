@@ -8,6 +8,7 @@ import numpy as np
 import orjson
 import plotly.graph_objects as go
 from pydantic import BaseModel
+from scipy.signal import find_peaks
 from tqdm import tqdm
 
 from track_llm_apis.analyze import get_db_data, get_token_logprobs
@@ -19,8 +20,13 @@ from track_llm_apis.sampling.common import TwoSampleTestResultWithDate
 from track_llm_apis.util import fast_hash, slugify, trim_to_length
 
 n_per_test = 10
-pvalue_threshold = 1e-3
-pvalue_b = 2000
+peak_threshold = 5e-4
+# minimum distance between detected changes
+peak_distance = n_per_test
+# peaks must have at least this width
+peak_width = 3
+peak_rel_height = 1.0
+pvalue_b = 100000
 prompt = "x"
 
 
@@ -44,6 +50,7 @@ def lt_on_apis(
     Store them in a filename derived from the hash of the supplied table names, n_per_test and pvalue_b. If `overwrite` is False is the file exists, load data from the file instead."""
     cache_dir = config.plots_dir / "paper" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # TODO improve caching: no need for all the tables to be the same, should pick already cached tables and compute the others
     filepath = cache_dir / _get_filename(tables, n_per_test, pvalue_b)
     if filepath.exists() and not overwrite:
         logger.info(f"Loading hypothesis test results from cache file {filepath}...")
@@ -182,7 +189,7 @@ def plot_top_token_logprobs_over_time(
     prompt: str | None = None,
     tables: list[str] | None = None,
     with_lt_results: bool = False,
-    pvalue_threshold: float = pvalue_threshold,
+    peak_threshold: float = peak_threshold,
 ):
     """Plot logprobs of top tokens over time for each prompt in each table.
 
@@ -248,16 +255,49 @@ def plot_top_token_logprobs_over_time(
                     )
                 )
 
-            # Add vertical lines for significant p-values
+            # Add p-values on secondary y-axis
             if with_lt_results and table_name in lt_results:
-                for test_result in lt_results[table_name]:
-                    if test_result.pvalue and test_result.pvalue < pvalue_threshold:
-                        fig.add_vline(
-                            x=test_result.date,
-                            line_color="red",
-                            line_width=1,
-                            line_dash="solid",
-                        )
+                pvalue_dates = [test_result.date for test_result in lt_results[table_name]]
+                pvalues = np.array([test_result.pvalue for test_result in lt_results[table_name]])
+                log_pvalues = -np.log10(pvalues + 1e-100)
+                threshold_score = -np.log10(peak_threshold)
+                scores_clipped = np.clip(log_pvalues - threshold_score, 0, None)
+
+                # Calculate rolling average
+                window_size = 1
+                rolling_avg = []
+                for i in range(len(pvalues)):
+                    start_idx = max(0, i - window_size + 1)
+                    rolling_avg.append(sum(pvalues[start_idx : i + 1]) / (i - start_idx + 1))
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=pvalue_dates,
+                        y=rolling_avg,
+                        mode="lines",
+                        name="p-value",
+                        line=dict(width=2, color="rgba(255, 0, 0, 0.5)"),
+                        yaxis="y2",
+                    )
+                )
+
+                pvalue_peaks = find_peaks(
+                    scores_clipped,
+                    height=1e-20,  # anything above 0
+                    distance=peak_distance,
+                    width=peak_width,
+                    rel_height=peak_rel_height,
+                )
+
+                # Add vertical lines for detected changes
+                for peak_idx in pvalue_peaks[0]:
+                    peak_date = pvalue_dates[peak_idx]
+                    fig.add_vline(
+                        x=peak_date,
+                        line_color="black",
+                        line_width=1,
+                        line_dash="dash",
+                    )
 
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
@@ -269,8 +309,11 @@ def plot_top_token_logprobs_over_time(
                 font_size=14,
                 xaxis_title="Time",
                 yaxis_title="Log Probability",
+                yaxis2=dict(
+                    type="log", exponentformat="e", title="p-value", overlaying="y", side="right"
+                ),
                 template=config.plotting.template,
-                legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01),
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.07),
             )
 
             # Save the plot
@@ -280,6 +323,7 @@ def plot_top_token_logprobs_over_time(
             os.makedirs(fig_dir, exist_ok=True)
             fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.pdf"
             fig.write_image(fig_path, width=1200, height=800)
+            fig.write_html(fig_path.with_suffix(".html"))
             logger.info(
                 f"Saved logprobs over time for {table_name} (prompt start: {repr(p[:40])}) to {fig_path}"
             )
@@ -317,5 +361,5 @@ if __name__ == "__main__":
         tables=tables,
         prompt=prompt,
         with_lt_results=True,
-        pvalue_threshold=pvalue_threshold,
+        peak_threshold=peak_threshold,
     )
