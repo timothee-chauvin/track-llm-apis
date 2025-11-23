@@ -75,6 +75,22 @@ class TokenLogprobs:
     logprobs: list[float | int | None]
 
 
+def get_db_table_names() -> list[str]:
+    """Get the list of all table names from the database."""
+    conn = sqlite3.connect(config.db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        raw_table_names = [row[0] for row in cursor.fetchall()]
+        # Filter out sqlite_sequence and other internal sqlite tables
+        table_names = [name for name in raw_table_names if not name.startswith("sqlite_")]
+        return table_names
+    except sqlite3.Error as e:
+        raise e
+    finally:
+        conn.close()
+
+
 def get_db_data(
     tables: list[str] | None = None,
     after: datetime | None = None,
@@ -97,22 +113,17 @@ def get_db_data(
         A dict of table names to lists of ResponseData.
     """
     logger.info(f"Getting db data from {config.db_path}...")
+    if tables is None:
+        tables = get_db_table_names()
+
     conn = sqlite3.connect(config.db_path)
     cursor = conn.cursor()
     try:
-        if tables is None:
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            raw_table_names = [row[0] for row in cursor.fetchall()]
-            # Filter out sqlite_sequence and other internal sqlite tables
-            table_names = [name for name in raw_table_names if not name.startswith("sqlite_")]
-        else:
-            table_names = tables
-
-        if not table_names:
+        if not tables:
             return {}
 
         select_parts = []
-        for table_name in table_names:
+        for table_name in tables:
             # Escape single quotes in table name for the string literal.
             escaped_table_name = table_name.replace("'", "''")
             select_part = f"SELECT '{escaped_table_name}' as table_name, date, prompt, top_tokens, logprobs FROM \"{table_name}\""
@@ -133,7 +144,7 @@ def get_db_data(
         query = " UNION ALL ".join(select_parts)
 
         params = []
-        for _ in table_names:
+        for _ in tables:
             if after:
                 params.append(after.isoformat())
             if before:

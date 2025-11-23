@@ -11,13 +11,13 @@ from pydantic import BaseModel
 from scipy.signal import find_peaks
 from tqdm import tqdm
 
-from track_llm_apis.analyze import get_db_data, get_token_logprobs
+from track_llm_apis.analyze import get_db_data, get_db_table_names, get_token_logprobs
 from track_llm_apis.config import config, logger
 from track_llm_apis.sampling.analyze_logprobs import (
     logprob_time_series,
 )
 from track_llm_apis.sampling.common import TwoSampleTestResultWithDate
-from track_llm_apis.util import fast_hash, slugify, trim_to_length
+from track_llm_apis.util import slugify, trim_to_length
 
 n_per_test = 10
 peak_threshold = 5e-4
@@ -37,46 +37,55 @@ class LTOnAPIData(BaseModel):
     data: dict[str, list[TwoSampleTestResultWithDate]]
 
 
-def _get_filename(tables: list[str] | None, n_per_test: int, pvalue_b: int) -> str:
-    tables_str = orjson.dumps(sorted(tables)).decode() if tables else "all tables"
-    tables_hash = fast_hash(tables_str)
-    return f"lt_on_apis_{tables_hash}_n_per_test={n_per_test}_b={pvalue_b}.json"
+def _get_filename(n_per_test: int, pvalue_b: int) -> str:
+    return f"lt_on_apis_n_per_test={n_per_test}_b={pvalue_b}.json"
 
 
 def lt_on_apis(
     prompt: str, tables: list[str] | None = None, overwrite: bool = False
 ) -> dict[str, list[TwoSampleTestResultWithDate]]:
     """Compute pvalues on all supplied tables (or all tables if `tables` is None).
-    Store them in a filename derived from the hash of the supplied table names, n_per_test and pvalue_b. If `overwrite` is False is the file exists, load data from the file instead."""
-    cache_dir = config.plots_dir / "paper" / "cache"
+    Store them in a filename derived from n_per_test and pvalue_b. p-values for tables already in the cache file are used, unless `overwrite` is True."""
+    cache_dir = config.plots_dir / "time_series_lt" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     # TODO improve caching: no need for all the tables to be the same, should pick already cached tables and compute the others
-    filepath = cache_dir / _get_filename(tables, n_per_test, pvalue_b)
-    if filepath.exists() and not overwrite:
+    filepath = cache_dir / _get_filename(n_per_test, pvalue_b)
+    if filepath.exists():
         logger.info(f"Loading hypothesis test results from cache file {filepath}...")
-        all_results = LTOnAPIData.model_validate(orjson.loads(filepath.read_bytes()))
+        cache_results = LTOnAPIData.model_validate(orjson.loads(filepath.read_bytes()))
     else:
-        prompt = "x"
-        data = get_db_data(tables=tables, prompt=prompt, sort_by_date=True)
-        all_results = LTOnAPIData(n_per_test=n_per_test, pvalue_b=pvalue_b, data={})
+        cache_results = LTOnAPIData(n_per_test=n_per_test, pvalue_b=pvalue_b, data={})
+    if tables is None:
+        tables = get_db_table_names()
+        tables = [t for t in tables if "ft:gpt" not in t]
+
+    if overwrite:
+        tables_to_process = tables
+        logger.info(f"{overwrite=}, recomputing all {len(tables_to_process)} tables.")
+    else:
+        tables_to_process = [t for t in tables if t not in cache_results.data.keys()]
+        logger.info(
+            f"{len(tables) - len(tables_to_process)}/{len(tables)} tables already in cache, processing {len(tables_to_process)} new tables."
+        )
+
+    if tables_to_process:
+        data = get_db_data(tables=tables_to_process, prompt=prompt, sort_by_date=True)
         for i, (table_name, table_data) in tqdm(enumerate(data.items()), total=len(data)):
-            if "ft:gpt" in table_name:
-                continue
             if len(table_data) < 2 * n_per_test:
                 logger.info(
                     f"Skipping table {table_name} with {len(table_data)} samples (less than 2 * n_per_test={2 * n_per_test})"
                 )
                 continue
             print(f"{i + 1}/{len(data)} {table_name} ({len(table_data)} samples)")
-            all_results.data[table_name] = logprob_time_series(
+            cache_results.data[table_name] = logprob_time_series(
                 table_data, n_per_test, pvalue_b=pvalue_b
             )
 
-        logger.info(f"Saving hypothesis test results to cache file {filepath}...")
-        with open(filepath, "wb") as f:
-            f.write(orjson.dumps(all_results.model_dump(mode="json")))
+    logger.info(f"Saving hypothesis test results to cache file {filepath}...")
+    with open(filepath, "wb") as f:
+        f.write(orjson.dumps(cache_results.model_dump(mode="json")))
 
-    return all_results.data
+    return {k: v for k, v in cache_results.data.items() if k in tables}
 
 
 def plot_threshold_analysis(tables: list[str] | None = None):
