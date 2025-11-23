@@ -100,8 +100,8 @@ def logprob_time_series(
     print(f"Number of unique tokens: {nt}")
     all_time_t = build_logprob_tensor_oneshot(logprobs, seen_tokens, token_short_ids)
 
-    n_windows = len(data) - 2 * n_per_test
-    indices = torch.arange(n_per_test, len(data) - n_per_test)
+    indices = torch.arange(n_per_test, len(data) - n_per_test + 1)
+    n_windows = indices.shape[0]  # len(data) - 2 * n_per_test + 1
 
     # shape (n_windows, n_per_test, nt)
     t1_stack = torch.stack([all_time_t[i - n_per_test : i] for i in indices])
