@@ -52,8 +52,13 @@ def lt_on_apis(
         prompt = "x"
         data = get_db_data(tables=tables, prompt=prompt, sort_by_date=True)
         all_results = LTOnAPIData(n_per_test=n_per_test, pvalue_b=pvalue_b, data={})
-        for i, (table_name, table_data) in enumerate(data.items()):
+        for i, (table_name, table_data) in tqdm(enumerate(data.items()), total=len(data)):
             if "ft:gpt" in table_name:
+                continue
+            if len(table_data) < 2 * n_per_test:
+                logger.info(
+                    f"Skipping table {table_name} with {len(table_data)} samples (less than 2 * n_per_test={2 * n_per_test})"
+                )
                 continue
             print(f"{i + 1}/{len(data)} {table_name} ({len(table_data)} samples)")
             all_results.data[table_name] = logprob_time_series(
