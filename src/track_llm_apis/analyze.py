@@ -75,16 +75,34 @@ class TokenLogprobs:
     logprobs: list[float | int | None]
 
 
-def get_db_table_names() -> list[str]:
-    """Get the list of all table names from the database."""
+def get_db_table_names(prompt: str | None = None) -> list[str]:
+    """
+    Get the list of all table names from the database.
+    If a prompt is provided, only return tables containing that prompt.
+    """
     conn = sqlite3.connect(config.db_path)
     cursor = conn.cursor()
     try:
+        # Get all table names
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         raw_table_names = [row[0] for row in cursor.fetchall()]
         # Filter out sqlite_sequence and other internal sqlite tables
         table_names = [name for name in raw_table_names if not name.startswith("sqlite_")]
-        return table_names
+
+        if prompt is None:
+            return table_names
+
+        # If prompt is provided, filter tables that contain this prompt
+        encoded_prompt = base64.b64encode(prompt.encode("utf-8")).decode("utf-8")
+
+        matching_tables = []
+        for table in table_names:
+            cursor.execute(f'SELECT 1 FROM "{table}" WHERE prompt = ? LIMIT 1', (encoded_prompt,))
+            if cursor.fetchone():
+                matching_tables.append(table)
+
+        return matching_tables
+
     except sqlite3.Error as e:
         raise e
     finally:

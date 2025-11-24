@@ -54,7 +54,7 @@ def lt_on_apis(
     else:
         cache_results = LTOnAPIData(n_per_test=n_per_test, pvalue_b=pvalue_b, data={})
     if tables is None:
-        tables = get_db_table_names()
+        tables = get_db_table_names(prompt=prompt)
         tables = [t for t in tables if "ft:gpt" not in t]
 
     if overwrite:
