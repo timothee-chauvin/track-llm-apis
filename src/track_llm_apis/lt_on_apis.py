@@ -1,3 +1,4 @@
+import json
 import os
 from collections import defaultdict
 from datetime import datetime
@@ -25,6 +26,7 @@ peak_distance = n_per_test
 peak_width = 3
 peak_rel_height = 1.0
 pvalue_b = 100000
+stat_top_percentile = 95
 prompt = "x"
 
 
@@ -338,35 +340,159 @@ def plot_top_token_logprobs_over_time(
     pbar.close()
 
 
+def detect_changes(test_results: list[TwoSampleTestResultWithDate]) -> list[int]:
+    """Return the indices of the detected changes in the test_results."""
+    statistics = np.array([tr.statistic for tr in test_results])
+    pvalues = np.array([tr.pvalue for tr in test_results])
+    log_pvalues = -np.log10(pvalues + 1e-100)
+    threshold_score = -np.log10(peak_threshold)
+    scores_clipped = np.clip(log_pvalues - threshold_score, 0, None)
+
+    pvalue_peaks = find_peaks(
+        scores_clipped,
+        height=1e-20,  # anything above 0
+        distance=peak_distance,
+        width=peak_width,
+        rel_height=peak_rel_height,
+    )
+    detections = []
+    for peak_idx in pvalue_peaks[0]:
+        stat = statistics[peak_idx]
+        stat_percentile = (statistics <= stat).mean() * 100
+        if stat_percentile >= stat_top_percentile:
+            detections.append(int(peak_idx))
+        else:
+            print(
+                f"Rejecting peak at index {peak_idx} because {stat=} percentile is {stat_percentile:.2f}%"
+            )
+    return detections
+
+
+def benchmark(tables: dict[str, list[str]], prompt: str):
+    lt_results = lt_on_apis(prompt=prompt, tables=list(tables.keys()))
+    tp = 0
+    fp = 0
+    fn = 0
+    tp_by_table = {}
+    fp_by_table = {}
+    fn_by_table = {}
+    for table, real_change_dates in tables.items():
+        pvalue_dates = [str(test_result.date.date()) for test_result in lt_results[table]]
+        detection_indices = detect_changes(lt_results[table])
+        detection_dates = [pvalue_dates[idx] for idx in detection_indices]
+
+        table_tp = len([d for d in detection_dates if d in real_change_dates])
+        table_fp = len([d for d in detection_dates if d not in real_change_dates])
+        if table_fp:
+            print(
+                f"Table {table}: False positives on dates {[d for d in detection_dates if d not in real_change_dates]}"
+            )
+        table_fn = len([d for d in real_change_dates if d not in detection_dates])
+        if table_fn:
+            print(
+                f"Table {table}: Missed real changes on dates {[d for d in real_change_dates if d not in detection_dates]}"
+            )
+        tp += table_tp
+        fp += table_fp
+        fn += table_fn
+        tp_by_table[table] = table_tp
+        fp_by_table[table] = table_fp
+        fn_by_table[table] = table_fn
+
+    return {
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tp_by_table": tp_by_table,
+        "fp_by_table": fp_by_table,
+        "fn_by_table": fn_by_table,
+    }
+
+
+def get_model_provider(table_name: str) -> str:
+    parts = table_name.split("#")
+    if parts[0] == "openrouter":
+        if parts[-1].startswith("seed="):
+            last_part = parts[-2]
+        else:
+            last_part = parts[-1]
+        provider = last_part.split("/")[0]
+    elif parts[0] == "openai":
+        provider = "openai"
+    elif parts[0] == "grok":
+        provider = "xai"
+    else:
+        raise ValueError(f"Unknown table name format: {table_name}")
+    return provider
+
+
+def change_distribution_by_provider(prompt: str, tables: list[str] | None = None):
+    lt_results = lt_on_apis(prompt=prompt, tables=tables)
+    # for each provider, total duration of monitoring across endpoints, in days
+    provider_durations = defaultdict(float)
+    # for each provider, total number of changes detected
+    provider_changes = defaultdict(int)
+    provider_num_endpoints = defaultdict(int)
+    for table, results in lt_results.items():
+        provider = get_model_provider(table)
+        changes = detect_changes(results)
+        duration = (results[-1].date - results[0].date).days
+        provider_durations[provider] += duration
+        provider_changes[provider] += len(changes)
+        provider_num_endpoints[provider] += 1
+    for provider in provider_durations:
+        change_rate = provider_changes[provider] / provider_durations[provider] * 30
+        print(
+            f"{provider} ({provider_num_endpoints[provider]} endpoints): {provider_changes[provider]} changes over {provider_durations[provider] / 30:.1f} months = {change_rate:.2f} changes/month"
+        )
+    provider_change_rates = {
+        provider: provider_changes[provider] / provider_durations[provider] * 30
+        for provider in provider_durations
+    }
+    return provider_change_rates
+
+
 if __name__ == "__main__":
-    tables = [
+    tables = {
         # tables with known changes
-        "openrouter#meta-llama/llama-3.1-70b-instruct#lambda/fp8",
-        "openrouter#x-ai/grok-3-mini#xai",
-        "openrouter#deepseek/deepseek-chat-v3-0324#nebius/fp8",
+        "openrouter#meta-llama/llama-3.1-70b-instruct#lambda/fp8": [
+            "2025-07-15",
+            "2025-07-30",
+            "2025-07-31",
+            "2025-08-11",
+        ],
+        # "openrouter#x-ai/grok-3-mini#xai",  # ambiguous
+        "openrouter#deepseek/deepseek-chat-v3-0324#nebius/fp8": [],
         # 15 random tables
-        "openrouter#deepseek/deepseek-chat-v3-0324#crusoe/fp8",
-        "openrouter#openai/gpt-3.5-turbo#openai",
-        "openrouter#deepseek/deepseek-r1-0528#crusoe/fp8",
-        "openrouter#deepseek/deepseek-chat-v3-0324#hyperbolic/fp8",
-        "openrouter#x-ai/grok-4#xai",
-        "openrouter#cognitivecomputations/dolphin3.0-r1-mistral-24b#chutes",
-        "openrouter#google/gemma-2-9b-it#chutes",
-        "openrouter#arliai/qwq-32b-arliai-rpr-v1#chutes",
-        "openrouter#mistralai/mistral-nemo#chutes",
-        "openrouter#agentica-org/deepcoder-14b-preview#chutes",
-        "openrouter#deepseek/deepseek-r1-0528-qwen3-8b#chutes",
-        "openrouter#mistralai/mistral-small-3.1-24b-instruct#chutes",
-        "openrouter#qwen/qwen3-32b#chutes",
-        "openrouter#mistralai/devstral-small-2505#chutes",
-        "openrouter#mistralai/mistral-small-24b-instruct-2501#chutes",
-    ]
+        "openrouter#deepseek/deepseek-chat-v3-0324#crusoe/fp8": [],
+        # "openrouter#openai/gpt-3.5-turbo#openai",  # ambiguous
+        # "openrouter#deepseek/deepseek-r1-0528#crusoe/fp8": ["2025-10-01", "2025-10-07"],  # too ambiguous for now
+        "openrouter#x-ai/grok-4#xai": ["2025-09-02"],
+        "openrouter#cognitivecomputations/dolphin3.0-r1-mistral-24b#chutes": [],
+        # "openrouter#google/gemma-2-9b-it#chutes",  # ambiguous
+        "openrouter#arliai/qwq-32b-arliai-rpr-v1#chutes": [],
+        "openrouter#deepseek/deepseek-chat-v3-0324#hyperbolic/fp8": ["2025-08-01"],
+        "openrouter#mistralai/mistral-nemo#chutes": [],
+        "openrouter#agentica-org/deepcoder-14b-preview#chutes": [],
+        # "openrouter#deepseek/deepseek-r1-0528-qwen3-8b#chutes":,  # nonsensical logprobs for one sample, creates false positives
+        "openrouter#mistralai/mistral-small-3.1-24b-instruct#chutes": ["2025-10-09"],
+        "openrouter#qwen/qwen3-32b#chutes": [],
+        "openrouter#mistralai/devstral-small-2505#chutes": ["2025-09-06"],
+        "openrouter#mistralai/mistral-small-24b-instruct-2501#chutes": [],
+    }
     # lt_on_apis(prompt=prompt, tables=tables, overwrite=False)
     # plot_threshold_analysis(tables=tables)
-    # plot_pvalue_histogram(tables=tables)
-    plot_top_token_logprobs_over_time(
-        tables=tables,
-        prompt=prompt,
-        with_lt_results=True,
-        peak_threshold=peak_threshold,
-    )
+    # plot_pvalue_histogram(tables=None)
+    # plot_top_token_logprobs_over_time(
+    #     tables=list(tables.keys()),
+    #     prompt=prompt,
+    #     with_lt_results=True,
+    #     peak_threshold=peak_threshold,
+    # )
+    # results = benchmark(tables=tables, prompt=prompt)
+    # print(json.dumps(results, indent=2))
+    # print(
+    #     f"{n_per_test=}, {pvalue_b=}, {peak_threshold=} {peak_distance=}, {peak_width=}, {peak_rel_height=}, {stat_top_percentile=}:\nTP={results['tp']}, FP={results['fp']}, FN={results['fn']}"
+    # )
+
+    print(json.dumps(change_distribution_by_provider(prompt=prompt, tables=None), indent=2))
