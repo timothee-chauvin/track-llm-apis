@@ -452,6 +452,17 @@ def change_distribution_by_provider(prompt: str, tables: list[str] | None = None
     return provider_change_rates
 
 
+def endpoints_with_changes(prompt: str, tables: list[str] | None = None) -> dict[str, int]:
+    """Return a dict mapping endpoint names to the number of detected changes, for endpoints with at least one change."""
+    lt_results = lt_on_apis(prompt=prompt, tables=tables)
+    endpoints = {}
+    for table, results in lt_results.items():
+        changes = detect_changes(results)
+        if len(changes) > 0:
+            endpoints[table] = len(changes)
+    return endpoints
+
+
 if __name__ == "__main__":
     tables = {
         # tables with known changes
@@ -496,3 +507,6 @@ if __name__ == "__main__":
     # )
 
     print(json.dumps(change_distribution_by_provider(prompt=prompt, tables=None), indent=2))
+    # results = endpoints_with_changes(prompt=prompt, tables=None)
+    # for i, (endpoint, n_changes) in enumerate(results.items()):
+    #     print(f"{i + 1}/{len(results)}: {endpoint}: {n_changes} changes")
