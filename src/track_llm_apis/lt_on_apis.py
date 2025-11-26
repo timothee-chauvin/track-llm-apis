@@ -19,14 +19,11 @@ from track_llm_apis.sampling.common import TwoSampleTestResultWithDate
 from track_llm_apis.util import slugify, trim_to_length
 
 n_per_test = 10
-peak_threshold = 5e-4
 # minimum distance between detected changes
 peak_distance = n_per_test
-# peaks must have at least this width
-peak_width = 3
-peak_rel_height = 1.0
 pvalue_b = 100000
-stat_top_percentile = 95
+stat_sigma_threshold = 12.0
+stat_running_std_window = 100
 prompt = "x"
 
 
@@ -198,7 +195,6 @@ def plot_top_token_logprobs_over_time(
     prompt: str | None = None,
     tables: list[str] | None = None,
     with_lt_results: bool = False,
-    peak_threshold: float = peak_threshold,
 ):
     """Plot logprobs of top tokens over time for each prompt in each table.
 
@@ -264,49 +260,39 @@ def plot_top_token_logprobs_over_time(
                     )
                 )
 
-            # Add p-values on secondary y-axis
             if with_lt_results and table_name in lt_results:
-                pvalue_dates = [test_result.date for test_result in lt_results[table_name]]
-                pvalues = np.array([test_result.pvalue for test_result in lt_results[table_name]])
-                log_pvalues = -np.log10(pvalues + 1e-100)
-                threshold_score = -np.log10(peak_threshold)
-                scores_clipped = np.clip(log_pvalues - threshold_score, 0, None)
-
-                # Calculate rolling average
-                window_size = 1
-                rolling_avg = []
-                for i in range(len(pvalues)):
-                    start_idx = max(0, i - window_size + 1)
-                    rolling_avg.append(sum(pvalues[start_idx : i + 1]) / (i - start_idx + 1))
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=pvalue_dates,
-                        y=rolling_avg,
-                        mode="lines",
-                        name="p-value",
-                        line=dict(width=2, color="rgba(255, 0, 0, 0.5)"),
-                        yaxis="y2",
-                    )
-                )
-
-                pvalue_peaks = find_peaks(
-                    scores_clipped,
-                    height=1e-20,  # anything above 0
-                    distance=peak_distance,
-                    width=peak_width,
-                    rel_height=peak_rel_height,
-                )
-
-                # Add vertical lines for detected changes
-                for peak_idx in pvalue_peaks[0]:
-                    peak_date = pvalue_dates[peak_idx]
+                # Add vertical lines for detected changes, and p-values on secondary y-axis
+                dates = [test_result.date for test_result in lt_results[table_name]]
+                detected_change_indices = detect_changes(lt_results[table_name])
+                for peak_idx in detected_change_indices:
+                    peak_date = dates[peak_idx]
                     fig.add_vline(
                         x=peak_date,
                         line_color="black",
                         line_width=1,
                         line_dash="dash",
                     )
+
+                # pvalues = np.array([test_result.pvalue for test_result in lt_results[table_name]])
+                stats = np.array([test_result.statistic for test_result in lt_results[table_name]])
+
+                # Calculate rolling average
+                # window_size = 1
+                # rolling_avg = []
+                # for i in range(len(pvalues)):
+                #     start_idx = max(0, i - window_size + 1)
+                #     rolling_avg.append(sum(pvalues[start_idx : i + 1]) / (i - start_idx + 1))
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=dates,
+                        y=stats,
+                        mode="lines",
+                        name="p-value",
+                        line=dict(width=2, color="rgba(255, 0, 0, 0.5)"),
+                        yaxis="y2",
+                    )
+                )
 
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
@@ -319,7 +305,11 @@ def plot_top_token_logprobs_over_time(
                 xaxis_title="Time",
                 yaxis_title="Log Probability",
                 yaxis2=dict(
-                    type="log", exponentformat="e", title="p-value", overlaying="y", side="right"
+                    # type="log",
+                    # exponentformat="e",
+                    # title="p-value",
+                    overlaying="y",
+                    side="right",
                 ),
                 template=config.plotting.template,
                 legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.07),
@@ -341,31 +331,32 @@ def plot_top_token_logprobs_over_time(
 
 
 def detect_changes(test_results: list[TwoSampleTestResultWithDate]) -> list[int]:
-    """Return the indices of the detected changes in the test_results."""
-    statistics = np.array([tr.statistic for tr in test_results])
-    pvalues = np.array([tr.pvalue for tr in test_results])
-    log_pvalues = -np.log10(pvalues + 1e-100)
-    threshold_score = -np.log10(peak_threshold)
-    scores_clipped = np.clip(log_pvalues - threshold_score, 0, None)
+    """Return the indices of the detected changes in the test_results using the statistics only."""
 
-    pvalue_peaks = find_peaks(
-        scores_clipped,
+    if len(test_results) < stat_running_std_window + 2 * n_per_test:
+        return []
+
+    statistics = np.array([tr.statistic for tr in test_results])
+    exceedances = np.zeros(len(statistics))
+
+    for i in range(stat_running_std_window + 2 * n_per_test, len(statistics)):
+        # Calculate mean and std over the window ending just before the current point
+        window_stats = statistics[i - stat_running_std_window - 2 * n_per_test : i - 2 * n_per_test]
+        mean = np.mean(window_stats)
+        std = np.std(window_stats)
+
+        threshold = mean + stat_sigma_threshold * std
+        if statistics[i] > threshold:
+            exceedances[i] = statistics[i] - threshold
+
+    # Use peak detection to return only the maximal statistic within each cluster
+    peaks = find_peaks(
+        exceedances,
         height=1e-20,  # anything above 0
         distance=peak_distance,
-        width=peak_width,
-        rel_height=peak_rel_height,
     )
-    detections = []
-    for peak_idx in pvalue_peaks[0]:
-        stat = statistics[peak_idx]
-        stat_percentile = (statistics <= stat).mean() * 100
-        if stat_percentile >= stat_top_percentile:
-            detections.append(int(peak_idx))
-        else:
-            print(
-                f"Rejecting peak at index {peak_idx} because {stat=} percentile is {stat_percentile:.2f}%"
-            )
-    return detections
+
+    return [int(idx) for idx in peaks[0]]
 
 
 def benchmark(tables: dict[str, list[str]], prompt: str):
@@ -463,6 +454,211 @@ def endpoints_with_changes(prompt: str, tables: list[str] | None = None) -> dict
     return endpoints
 
 
+def change_dates(prompt: str, tables: list[str] | None = None) -> dict[str, dict[str, list[str]]]:
+    lt_results = lt_on_apis(prompt=prompt, tables=tables)
+    providers = set(get_model_provider(t) for t in lt_results.keys())
+    result_dict = {provider: {} for provider in providers}
+    for table, table_results in lt_results.items():
+        provider = get_model_provider(table)
+        pvalue_dates = [str(test_result.date) for test_result in table_results]
+        detection_indices = detect_changes(table_results)
+        detection_dates = [pvalue_dates[idx] for idx in detection_indices]
+        result_dict[provider][table] = [str(date) for date in detection_dates]
+    with open(config.plots_dir / "time_series_lt" / "change_dates_lt_on_apis.json", "w") as f:
+        json.dump(result_dict, f, indent=2)
+    return result_dict
+
+
+def plot_change_dates(prompt: str, tables: list[str] | None = None):
+    """Plot detected change dates for each endpoint, with dots colored by provider."""
+    lt_results = lt_on_apis(prompt=prompt, tables=tables)
+
+    # Collect data for plotting
+    plot_data = []
+    endpoint_ranges = {}  # Store first and last sample dates for each model
+
+    for table, table_results in lt_results.items():
+        provider = get_model_provider(table)
+        pvalue_dates = [test_result.date for test_result in table_results]
+        detection_indices = detect_changes(table_results)
+        if not detection_indices:
+            continue
+        detection_dates = [pvalue_dates[idx] for idx in detection_indices]
+
+        # Extract model name (remove provider prefix and suffix)
+        parts = table.split("#")
+        if parts[0] == "openrouter":
+            model_name = parts[1]
+            if len(parts) > 2 and not parts[-1].startswith("seed="):
+                model_name += ":" + parts[-1]
+        else:
+            model_name = "#".join(parts[1:]) if len(parts) > 1 else parts[0]
+
+        # Store the date range for this endpoint
+        if pvalue_dates:
+            endpoint_ranges[model_name] = {
+                "first": min(pvalue_dates),
+                "last": max(pvalue_dates),
+                "provider": provider,
+            }
+
+        for date in detection_dates:
+            plot_data.append(
+                {
+                    "model": model_name,
+                    "date": date,
+                    "provider": provider,
+                }
+            )
+
+    providers = sorted(set(d["provider"] for d in endpoint_ranges.values()))
+
+    # Sort models: first by provider, then alphabetically by model name
+    models = sorted(
+        endpoint_ranges.keys(), key=lambda m: (providers.index(endpoint_ranges[m]["provider"]), m)
+    )
+
+    # Assign colors to providers
+    provider_colors = {
+        "azure": "#4B0082",  # dark purple
+        "chutes": "#1E90FF",  # dodger blue
+        "crusoe": "#87CEEB",  # light blue
+        "fireworks": "#00CED1",  # dark cyan
+        "hyperbolic": "#7FFF00",  # chartreuse
+        "klusterai": "#9ACD32",  # yellow green
+        "lambda": "#FFD700",  # gold
+        "nebius": "#FFA500",  # orange
+        "openai": "#FF4500",  # orange red
+        "xai": "#8B0000",  # dark red
+    }
+    # Fallback colors for unknown providers
+    default_colors = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
+    for i, provider in enumerate(providers):
+        if provider not in provider_colors:
+            provider_colors[provider] = default_colors[i % len(default_colors)]
+
+    # Create model to y-position mapping
+    model_to_y = {model: i for i, model in enumerate(models)}
+
+    fig = go.Figure()
+
+    # Add black dots for first and last sample dates (single trace for legend)
+    range_x = []
+    range_y = []
+    range_text = []
+    for model, ranges in endpoint_ranges.items():
+        range_x.extend([ranges["first"], ranges["last"]])
+        range_y.extend([model_to_y[model], model_to_y[model]])
+        range_text.extend([f"{model} (first)", f"{model} (last)"])
+
+    fig.add_trace(
+        go.Scatter(
+            x=range_x,
+            y=range_y,
+            mode="markers",
+            name="Observation period",
+            marker=dict(
+                size=6,
+                color="black",
+                symbol="circle-open",
+            ),
+            hovertemplate="%{text}<br>%{x}<extra></extra>",
+            text=range_text,
+        )
+    )
+
+    # Add traces for each provider (for legend)
+    for provider in providers:
+        provider_data = [d for d in plot_data if d["provider"] == provider]
+        if not provider_data:
+            # Add invisible point to ensure provider appears in legend
+            # Find a model belonging to this provider
+            provider_model = next(
+                (m for m, r in endpoint_ranges.items() if r["provider"] == provider), None
+            )
+            if provider_model:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[None],
+                        y=[None],
+                        mode="markers",
+                        name=provider,
+                        marker=dict(
+                            size=10,
+                            color=provider_colors[provider],
+                        ),
+                        showlegend=True,
+                    )
+                )
+            continue
+
+        fig.add_trace(
+            go.Scatter(
+                x=[d["date"] for d in provider_data],
+                y=[model_to_y[d["model"]] for d in provider_data],
+                mode="markers",
+                name=provider,
+                marker=dict(
+                    size=10,
+                    color=provider_colors[provider],
+                ),
+                hovertemplate="%{text}<br>%{x}<extra></extra>",
+                text=[d["model"] for d in provider_data],
+            )
+        )
+
+    # Add horizontal separators between provider groups
+    current_provider = None
+    for i, model in enumerate(models):
+        provider = endpoint_ranges[model]["provider"]
+        if current_provider is not None and provider != current_provider:
+            fig.add_hline(
+                y=i - 0.5,
+                line_color="gray",
+                line_width=1,
+                line_dash="dot",
+            )
+        current_provider = provider
+
+    fig.update_layout(
+        template=config.plotting.template,
+        font_family=config.plotting.font_family,
+        title="Detected Changes by Endpoint",
+        xaxis_title="Date",
+        yaxis=dict(
+            tickmode="array",
+            tickvals=list(range(len(models))),
+            ticktext=models,
+            title="Model",
+        ),
+        legend=dict(
+            title="Provider",
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=1.02,
+        ),
+        height=max(600, len(models) * 20),
+        margin=dict(l=300),  # Space for long model names
+    )
+
+    output_path = config.plots_dir / "time_series_lt" / "change_dates_plot.pdf"
+    fig.write_image(output_path, width=1200, height=max(600, len(models) * 20))
+    fig.write_html(output_path.with_suffix(".html"))
+    logger.info(f"Saved change dates plot to {output_path}")
+
+
 if __name__ == "__main__":
     tables = {
         # tables with known changes
@@ -498,15 +694,17 @@ if __name__ == "__main__":
     #     tables=list(tables.keys()),
     #     prompt=prompt,
     #     with_lt_results=True,
-    #     peak_threshold=peak_threshold,
     # )
     # results = benchmark(tables=tables, prompt=prompt)
     # print(json.dumps(results, indent=2))
     # print(
-    #     f"{n_per_test=}, {pvalue_b=}, {peak_threshold=} {peak_distance=}, {peak_width=}, {peak_rel_height=}, {stat_top_percentile=}:\nTP={results['tp']}, FP={results['fp']}, FN={results['fn']}"
+    #     f"{n_per_test=}, {pvalue_b=}, {stat_sigma_threshold=} {stat_running_std_window=}:\nTP={results['tp']}, FP={results['fp']}, FN={results['fn']}"
     # )
 
-    print(json.dumps(change_distribution_by_provider(prompt=prompt, tables=None), indent=2))
+    # print(json.dumps(change_distribution_by_provider(prompt=prompt, tables=None), indent=2))
     # results = endpoints_with_changes(prompt=prompt, tables=None)
     # for i, (endpoint, n_changes) in enumerate(results.items()):
     #     print(f"{i + 1}/{len(results)}: {endpoint}: {n_changes} changes")
+    # change_dates_dict = change_dates(prompt=prompt, tables=None)
+    # print(json.dumps(change_dates_dict, indent=2))
+    plot_change_dates(prompt=prompt, tables=None)
