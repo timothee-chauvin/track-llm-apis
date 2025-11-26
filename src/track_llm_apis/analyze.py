@@ -114,10 +114,10 @@ def get_db_data(
     tables: list[str] | None = None,
     after: datetime | None = None,
     before: datetime | None = None,
-    grok_fix: bool = True,
     prompt: str | None = None,
     sort_by_date: bool = False,
     default_zone: ZoneInfo = ZoneInfo("Europe/Paris"),
+    sanitize: bool = True,
 ) -> dict[str, list[ResponseData]]:
     """Get data from the database.
 
@@ -125,10 +125,12 @@ def get_db_data(
         tables: List of table names to get data from. If None, all tables are returned.
         after: Only return data after this date.
         before: Only return data before this date.
-        grok_fix: the Grok API sometimes returns non-sensical logprobs below -1e38. If True, we discard values below -1e38.
         prompt: If provided, only return data for this specific prompt.
         sort_by_date: If True, sort the data within each table by date.
         default_zone: The timezone to use for naive datetime objects (without tzinfo).
+        sanitize: if True, remove nonsensical logprobs:
+          1) entries where the logprobs or top-tokens length is different from most samples (seen from providers hyperbolic, xai)
+          2) entries where at least one logprob is the minimum FP32 number (-3.4...e38) (seen from providers chutes, hyperbolic, xai)
 
     Returns:
         A dict of table names to lists of ResponseData.
@@ -176,13 +178,30 @@ def get_db_data(
         cursor.execute(query, params)
         rows = cursor.fetchall()
 
+        # Length of the logprob and top-token lists for the first valid sample of each table, used for sanitization
+        first_sample_lp_length = {}
+        ignored_samples = defaultdict(int)
         results = defaultdict(list)
         for table_name_from_db, date, prompt, top_tokens, logprobs in tqdm(
             rows, desc="Processing DB data"
         ):
             logprobs = list(json.loads(logprobs))
-            if grok_fix:
-                logprobs = [logprob for logprob in logprobs if logprob > -1e38]
+            top_tokens = json.loads(top_tokens)
+            # TODO: don't assume that the first sample is always correct
+            if sanitize:
+                if any(lp < -3e38 for lp in logprobs):
+                    logger.warning(
+                        f"Min FP32 value detected in {table_name_from_db} at {date}, discarding."
+                    )
+                    ignored_samples[table_name_from_db] += 1
+                    continue
+                expected_len = first_sample_lp_length.setdefault(table_name_from_db, len(logprobs))
+                if len(logprobs) != expected_len or len(top_tokens) != expected_len:
+                    logger.warning(
+                        f"Unexpected length detected in {table_name_from_db} at {date}, discarding. {len(logprobs)=} {len(top_tokens)=} {expected_len=}"
+                    )
+                    ignored_samples[table_name_from_db] += 1
+                    continue
             parsed_date = datetime.fromisoformat(date)
             if parsed_date.tzinfo is None:
                 parsed_date = parsed_date.replace(tzinfo=default_zone)
@@ -190,13 +209,20 @@ def get_db_data(
                 ResponseData(
                     date=parsed_date,
                     prompt=base64.b64decode(prompt).decode("utf-8"),
-                    top_tokens=list(json.loads(top_tokens)),
+                    top_tokens=top_tokens,
                     logprobs=logprobs,
                 )
             )
         if sort_by_date:
             for table_name in results:
                 results[table_name].sort(key=lambda x: x.date)
+
+        if ignored_samples:
+            logger.warning("Ignored samples due to sanitization:")
+            for table_name, n_ignored in ignored_samples.items():
+                logger.warning(
+                    f"  {table_name}: {n_ignored}/{len(results[table_name])} samples ignored"
+                )
         return dict(results)
     except sqlite3.Error as e:
         config.logger.error(f"An error occurred during database analysis: {e}")
