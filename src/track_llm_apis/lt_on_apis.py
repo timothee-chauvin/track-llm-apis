@@ -645,30 +645,42 @@ def plot_change_dates(
     # Create model to y-position mapping
     endpoint_to_y = {endpoint: i for i, endpoint in enumerate(endpoints)}
 
+    # Get global date range
+    all_dates = [d["date"] for d in plot_data]
+    for ranges in endpoint_ranges.values():
+        all_dates.extend([ranges["first"], ranges["last"]])
+    global_min = min(all_dates)
+    global_max = max(all_dates)
+
     fig = go.Figure()
 
-    # Add black dots for first and last sample dates where changes can be detected (single trace for legend)
-    range_x = []
-    range_y = []
+    # Add grey rectangles for regions outside each endpoint's observation window
     for endpoint, ranges in endpoint_ranges.items():
-        range_x.extend([ranges["first"], ranges["last"]])
-        range_y.extend([endpoint_to_y[endpoint], endpoint_to_y[endpoint]])
-
-    fig.add_trace(
-        go.Scatter(
-            x=range_x,
-            y=range_y,
-            mode="markers",
-            name="Observation period",
-            marker=dict(
-                size=6,
-                color="black",
-                symbol="circle",
-            ),
+        y = endpoint_to_y[endpoint]
+        # Left grey zone
+        fig.add_shape(
+            type="rect",
+            x0=global_min,
+            x1=ranges["first"],
+            y0=y - 0.55,
+            y1=y + 0.55,
+            fillcolor="lightgrey",
+            line_width=0,
+            layer="above",
         )
-    )
+        # Right grey zone
+        fig.add_shape(
+            type="rect",
+            x0=ranges["last"],
+            x1=global_max,
+            y0=y - 0.55,
+            y1=y + 0.55,
+            fillcolor="lightgrey",
+            line_width=0,
+            layer="above",
+        )
 
-    # Add traces for each provider (for legend)
+    # Add traces for each provider
     for provider in providers:
         provider_data = [d for d in plot_data if d["provider"] == provider]
         fig.add_trace(
