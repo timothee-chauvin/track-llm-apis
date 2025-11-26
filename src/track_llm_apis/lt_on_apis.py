@@ -436,6 +436,15 @@ def change_distribution_by_provider(prompt: str, tables: list[str] | None = None
         print(
             f"{provider} ({provider_num_endpoints[provider]} endpoints): {provider_changes[provider]} changes over {provider_durations[provider] / 30:.1f} months = {change_rate:.2f} changes/month"
         )
+
+    total_endpoints = sum(provider_num_endpoints.values())
+    total_changes = sum(provider_changes.values())
+    total_duration = sum(provider_durations.values())
+    total_change_rate = total_changes / total_duration * 30
+    print(
+        f"TOTAL ({total_endpoints} endpoints): {total_changes} changes over {total_duration / 30:.1f} months = {total_change_rate:.2f} changes/month"
+    )
+
     provider_change_rates = {
         provider: provider_changes[provider] / provider_durations[provider] * 30
         for provider in provider_durations
