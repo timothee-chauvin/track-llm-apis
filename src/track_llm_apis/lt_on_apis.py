@@ -577,12 +577,10 @@ def plot_change_dates(
     # Collect data for plotting
     plot_data = []
     endpoint_ranges = {}  # Store first and last sample dates for each endpoint
-    endpoint_model_names = {}
 
     for table, table_results in lt_results.items():
         provider = get_model_provider(table)
         model_name = get_model_name(table)
-        endpoint_model_names[table] = model_name
         pvalue_dates = [test_result.date for test_result in table_results]
         detection_indices = detect_changes(table_results)
         if not detection_indices:
@@ -652,9 +650,9 @@ def plot_change_dates(
     # Add black dots for first and last sample dates where changes can be detected (single trace for legend)
     range_x = []
     range_y = []
-    for model, ranges in endpoint_ranges.items():
+    for endpoint, ranges in endpoint_ranges.items():
         range_x.extend([ranges["first"], ranges["last"]])
-        range_y.extend([endpoint_to_y[model], endpoint_to_y[model]])
+        range_y.extend([endpoint_to_y[endpoint], endpoint_to_y[endpoint]])
 
     fig.add_trace(
         go.Scatter(
@@ -683,7 +681,6 @@ def plot_change_dates(
                     size=10,
                     color=provider_colors[provider],
                 ),
-                text=[d["model"] for d in provider_data],
             )
         )
 
@@ -695,7 +692,7 @@ def plot_change_dates(
         yaxis=dict(
             tickmode="array",
             tickvals=list(range(len(endpoints))),
-            ticktext=endpoints,
+            ticktext=[get_model_name(e) for e in endpoints],
             title="Model",
         ),
         legend=dict(
