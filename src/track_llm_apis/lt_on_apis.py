@@ -87,6 +87,7 @@ def lt_on_apis(
                 logger.info(
                     f"Skipping table {table_name} with {len(table_data)} samples (less than 2 * n_per_test={2 * n_per_test})"
                 )
+                cache.data[table_name] = []
                 continue
             print(f"{i + 1}/{len(data)} {table_name} ({len(table_data)} samples)")
             cache.data[table_name] = logprob_time_series(table_data, n_per_test, pvalue_b=pvalue_b)
