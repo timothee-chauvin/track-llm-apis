@@ -2,6 +2,7 @@ import json
 import os
 from collections import defaultdict
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import orjson
@@ -62,7 +63,11 @@ class LTOnAPICache:
 
 
 def lt_on_apis(
-    prompt: str, tables: list[str] | None = None, overwrite: bool = False
+    prompt: str,
+    tables: list[str] | None = None,
+    overwrite: bool = False,
+    after: datetime | None = None,
+    before: datetime | None = None,
 ) -> dict[str, list[TwoSampleTestResultWithDate]]:
     """Compute pvalues on all supplied tables (or all tables if `tables` is None).
     Store them in a filename derived from n_per_test and pvalue_b. p-values for tables already in the cache file are used, unless `overwrite` is True."""
@@ -94,8 +99,19 @@ def lt_on_apis(
             if (i + 1) % 10 == 0:
                 cache.save()
         cache.save()
-
-    return {k: v for k, v in cache.data.items() if k in tables}
+    result = {k: v for k, v in cache.data.items() if k in tables}
+    # filter by date
+    if after is not None or before is not None:
+        filtered_result = {}
+        for k, v in result.items():
+            filtered_tests = [
+                test
+                for test in v
+                if (after is None or test.date >= after) and (before is None or test.date <= before)
+            ]
+            filtered_result[k] = filtered_tests
+        return filtered_result
+    return result
 
 
 def plot_threshold_analysis(tables: list[str] | None = None):
@@ -430,14 +446,21 @@ def get_model_provider(table_name: str) -> str:
     return provider
 
 
-def change_distribution_by_provider(prompt: str, tables: list[str] | None = None):
-    lt_results = lt_on_apis(prompt=prompt, tables=tables)
+def change_distribution_by_provider(
+    prompt: str,
+    tables: list[str] | None = None,
+    after: datetime | None = None,
+    before: datetime | None = None,
+) -> dict[str, float]:
+    lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
     # for each provider, total duration of monitoring across endpoints, in days
     provider_durations = defaultdict(float)
     # for each provider, total number of changes detected
     provider_changes = defaultdict(int)
     provider_num_endpoints = defaultdict(int)
     for table, results in lt_results.items():
+        if len(results) == 0:
+            continue
         provider = get_model_provider(table)
         changes = detect_changes(results)
         duration = (results[-1].date - results[0].date).days
@@ -465,9 +488,14 @@ def change_distribution_by_provider(prompt: str, tables: list[str] | None = None
     return provider_change_rates
 
 
-def endpoints_with_changes(prompt: str, tables: list[str] | None = None) -> dict[str, int]:
+def endpoints_with_changes(
+    prompt: str,
+    tables: list[str] | None = None,
+    after: datetime | None = None,
+    before: datetime | None = None,
+) -> dict[str, int]:
     """Return a dict mapping endpoint names to the number of detected changes, for endpoints with at least one change."""
-    lt_results = lt_on_apis(prompt=prompt, tables=tables)
+    lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
     endpoints = {}
     for table, results in lt_results.items():
         changes = detect_changes(results)
@@ -501,9 +529,14 @@ def get_model_name(table: str) -> str:
     return model_name
 
 
-def plot_change_dates(prompt: str, tables: list[str] | None = None):
+def plot_change_dates(
+    prompt: str,
+    tables: list[str] | None = None,
+    after: datetime | None = None,
+    before: datetime | None = None,
+):
     """Plot detected change dates for each endpoint, with dots colored by provider."""
-    lt_results = lt_on_apis(prompt=prompt, tables=tables)
+    lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
 
     # Collect data for plotting
     plot_data = []
@@ -674,6 +707,8 @@ if __name__ == "__main__":
         "openrouter#mistralai/devstral-small-2505#chutes": ["2025-09-06"],
         "openrouter#mistralai/mistral-small-24b-instruct-2501#chutes": [],
     }
+    after = datetime(2025, 8, 1, tzinfo=ZoneInfo("Europe/Paris"))
+    before = datetime(2025, 11, 1, tzinfo=ZoneInfo("Europe/Paris"))
     # lt_on_apis(prompt=prompt, tables=tables, overwrite=False)
     # plot_threshold_analysis(tables=tables)
     # plot_pvalue_histogram(tables=None)
@@ -688,10 +723,23 @@ if __name__ == "__main__":
     #     f"{n_per_test=}, {pvalue_b=}, {stat_sigma_threshold=} {stat_running_std_window=}:\nTP={results['tp']}, FP={results['fp']}, FN={results['fn']}"
     # )
 
-    # print(json.dumps(change_distribution_by_provider(prompt=prompt, tables=None), indent=2))
-    # results = endpoints_with_changes(prompt=prompt, tables=None)
+    print(
+        json.dumps(
+            change_distribution_by_provider(prompt=prompt, tables=None, after=after, before=before),
+            indent=2,
+        )
+    )
+    # print(
+    #     json.dumps(
+    #         change_distribution_by_provider(
+    #             prompt=prompt, tables=list(tables.keys()), after=after, before=before
+    #         ),
+    #         indent=2,
+    #     )
+    # )
+    # results = endpoints_with_changes(prompt=prompt, tables=None, after=after, before=before)
     # for i, (endpoint, n_changes) in enumerate(results.items()):
     #     print(f"{i + 1}/{len(results)}: {endpoint}: {n_changes} changes")
     # change_dates_dict = change_dates(prompt=prompt, tables=None)
     # print(json.dumps(change_dates_dict, indent=2))
-    plot_change_dates(prompt=prompt, tables=None)
+    # plot_change_dates(prompt=prompt, tables=None, after=after, before=before)
