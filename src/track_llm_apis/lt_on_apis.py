@@ -77,10 +77,9 @@ def lt_on_apis(
             cache_results.data[table_name] = logprob_time_series(
                 table_data, n_per_test, pvalue_b=pvalue_b
             )
-
-    logger.info(f"Saving hypothesis test results to cache file {filepath}...")
-    with open(filepath, "wb") as f:
-        f.write(orjson.dumps(cache_results.model_dump(mode="json")))
+        logger.info(f"Saving hypothesis test results to cache file {filepath}...")
+        with open(filepath, "wb") as f:
+            f.write(orjson.dumps(cache_results.model_dump(mode="json")))
 
     return {k: v for k, v in cache_results.data.items() if k in tables}
 
