@@ -312,38 +312,38 @@ def plot_top_token_logprobs_over_time(
                 )
 
             if with_lt_results and table_name in lt_results:
-                # Add vertical lines for detected changes, and p-values on secondary y-axis
+                # Add vertical lines for detected changes
                 dates = [test_result.date for test_result in lt_results[table_name]]
-                detected_change_indices = detect_changes(lt_results[table_name])
-                for peak_idx in detected_change_indices:
+                detected_change_indices, deviations = detect_changes(lt_results[table_name])
+                print(detected_change_indices, deviations)
+                for peak_idx, peak_deviation in zip(detected_change_indices, deviations):
                     peak_date = dates[peak_idx]
-                    fig.add_vline(
+                    y_min = min(
+                        lp
+                        for tl in all_token_logprobs.values()
+                        for lp in tl.logprobs
+                        if lp is not None
+                    )
+                    fig.add_shape(
+                        type="line",
+                        x0=peak_date,
+                        x1=peak_date,
+                        y0=y_min,
+                        y1=0,
+                        line=dict(color="black", width=2, dash="dash"),
+                    )
+                    # print e.g. "12.3σ" to the right of the line
+                    deviation_str = (
+                        f"+{peak_deviation:.1f}σ" if peak_deviation != float("inf") else "+∞ σ"
+                    )
+                    fig.add_annotation(
                         x=peak_date,
-                        line_color="black",
-                        line_width=1,
-                        line_dash="dash",
+                        y=0,
+                        text=deviation_str,
+                        showarrow=False,
+                        yshift=10,
+                        textangle=-45,
                     )
-
-                # pvalues = np.array([test_result.pvalue for test_result in lt_results[table_name]])
-                stats = np.array([test_result.statistic for test_result in lt_results[table_name]])
-
-                # Calculate rolling average
-                # window_size = 1
-                # rolling_avg = []
-                # for i in range(len(pvalues)):
-                #     start_idx = max(0, i - window_size + 1)
-                #     rolling_avg.append(sum(pvalues[start_idx : i + 1]) / (i - start_idx + 1))
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=dates,
-                        y=stats,
-                        mode="lines",
-                        name="p-value",
-                        line=dict(width=2, color="rgba(255, 0, 0, 0.5)"),
-                        yaxis="y2",
-                    )
-                )
 
             # Update layout
             title_suffix = f" (after {after.isoformat()})" if after else ""
@@ -355,13 +355,6 @@ def plot_top_token_logprobs_over_time(
                 font_size=14,
                 xaxis_title="Time",
                 yaxis_title="Log Probability",
-                yaxis2=dict(
-                    # type="log",
-                    # exponentformat="e",
-                    # title="p-value",
-                    overlaying="y",
-                    side="right",
-                ),
                 template=config.plotting.template,
                 legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.07),
             )
@@ -381,18 +374,23 @@ def plot_top_token_logprobs_over_time(
     pbar.close()
 
 
-def detect_changes(test_results: list[TwoSampleTestResultWithDate]) -> list[int]:
-    """Return the indices of the detected changes in the test_results using the statistics only."""
+def detect_changes(
+    test_results: list[TwoSampleTestResultWithDate],
+) -> tuple[list[int], list[float]]:
+    """Return the indices of the detected changes in the test_results using the statistics only, and the corresponding number of sigmas above the running mean."""
 
     extended_window_size = stat_running_std_window + stat_exclusion_zone
     if len(test_results) <= extended_window_size:
         logger.warning(
             f"Not enough test results ({len(test_results)}) to detect changes with running std window {stat_running_std_window} and exclusion zone {stat_exclusion_zone}."
         )
-        return []
+        return ([], [])
 
     statistics = np.array([tr.statistic for tr in test_results])
+    # threshold exceedances, in absolute units of statistic
     exceedances = np.zeros(len(statistics))
+    # deviations from the running mean, in multiple of standard deviations
+    deviations = np.zeros(len(statistics))
 
     for i in range(extended_window_size, len(statistics)):
         # Calculate mean and std over the window ending just before the current point
@@ -400,9 +398,11 @@ def detect_changes(test_results: list[TwoSampleTestResultWithDate]) -> list[int]
         mean = np.mean(window_stats)
         std = np.std(window_stats)
 
-        threshold = mean + stat_sigma_threshold * std
-        if statistics[i] > threshold:
-            exceedances[i] = statistics[i] - threshold
+        absolute_threshold = mean + stat_sigma_threshold * std
+        deviation = (statistics[i] - mean) / std if std > 0 else float("inf")
+        deviations[i] = deviation
+        if deviation > stat_sigma_threshold:
+            exceedances[i] = statistics[i] - absolute_threshold
 
     # Use peak detection to return only the maximal statistic within each cluster
     peaks = find_peaks(
@@ -411,7 +411,7 @@ def detect_changes(test_results: list[TwoSampleTestResultWithDate]) -> list[int]
         distance=peak_distance,
     )
 
-    return [int(idx) for idx in peaks[0]]
+    return ([int(idx) for idx in peaks[0]], [float(deviations[idx]) for idx in peaks[0]])
 
 
 def benchmark(tables: dict[str, list[str]], prompt: str):
@@ -424,7 +424,7 @@ def benchmark(tables: dict[str, list[str]], prompt: str):
     fn_by_table = {}
     for table, real_change_dates in tables.items():
         pvalue_dates = [str(test_result.date.date()) for test_result in lt_results[table]]
-        detection_indices = detect_changes(lt_results[table])
+        detection_indices, _ = detect_changes(lt_results[table])
         detection_dates = [pvalue_dates[idx] for idx in detection_indices]
 
         table_tp = len([d for d in detection_dates if d in real_change_dates])
@@ -488,7 +488,7 @@ def change_distribution_by_provider(
         if len(results) == 0:
             continue
         provider = get_model_provider(table)
-        changes = detect_changes(results)
+        changes, _ = detect_changes(results)
         # only count duration where changes can be detected, not initialization of the running windows
         duration = (
             results[-1].date - results[stat_running_std_window + stat_exclusion_zone].date
@@ -527,7 +527,7 @@ def endpoints_with_changes(
     lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
     changes_per_endpoint = {}
     for table, results in lt_results.items():
-        changes = detect_changes(results)
+        changes, _ = detect_changes(results)
         changes_per_endpoint[table] = len(changes)
     n_with_changes = sum(1 for n in changes_per_endpoint.values() if n > 0)
     percent_with_changes = n_with_changes / len(changes_per_endpoint) * 100
@@ -548,7 +548,7 @@ def change_dates(prompt: str, tables: list[str] | None = None) -> dict[str, dict
     for table, table_results in lt_results.items():
         provider = get_model_provider(table)
         pvalue_dates = [str(test_result.date) for test_result in table_results]
-        detection_indices = detect_changes(table_results)
+        detection_indices, _ = detect_changes(table_results)
         detection_dates = [pvalue_dates[idx] for idx in detection_indices]
         result_dict[provider][table] = [date for date in detection_dates]
     with open(config.plots_dir / "time_series_lt" / "change_dates_lt_on_apis.json", "w") as f:
@@ -582,7 +582,7 @@ def plot_change_dates(
         provider = get_model_provider(table)
         model_name = get_model_name(table)
         pvalue_dates = [test_result.date for test_result in table_results]
-        detection_indices = detect_changes(table_results)
+        detection_indices, _ = detect_changes(table_results)
         if not detection_indices:
             continue
         detection_dates = [pvalue_dates[idx] for idx in detection_indices]
@@ -711,12 +711,12 @@ def plot_change_dates(
             xanchor="left",
             x=1.02,
         ),
-        height=max(600, len(endpoints) * 20),
+        height=max(600, len(endpoints) * 10),
         margin=dict(l=300),  # Space for long model names
     )
 
     output_path = config.plots_dir / "time_series_lt" / "change_dates_plot.pdf"
-    fig.write_image(output_path, width=1200, height=max(600, len(endpoints) * 20))
+    fig.write_image(output_path, width=1200, height=max(600, len(endpoints) * 10))
     fig.write_html(output_path.with_suffix(".html"))
     logger.info(f"Saved change dates plot to {output_path}")
 
