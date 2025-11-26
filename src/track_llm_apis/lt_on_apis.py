@@ -18,7 +18,7 @@ from track_llm_apis.sampling.analyze_logprobs import (
 from track_llm_apis.sampling.common import TwoSampleTestResultWithDate
 from track_llm_apis.util import slugify, trim_to_length
 
-n_per_test = 10
+n_per_test = 24
 # minimum distance between detected changes
 peak_distance = n_per_test
 pvalue_b = 100000
