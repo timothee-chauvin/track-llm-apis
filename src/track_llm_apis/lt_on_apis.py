@@ -479,12 +479,13 @@ def change_dates(prompt: str, tables: list[str] | None = None) -> dict[str, dict
     lt_results = lt_on_apis(prompt=prompt, tables=tables)
     providers = set(get_model_provider(t) for t in lt_results.keys())
     result_dict = {provider: {} for provider in providers}
+    assert all(d.tzinfo is not None for d in [tr.date for trs in lt_results.values() for tr in trs])
     for table, table_results in lt_results.items():
         provider = get_model_provider(table)
         pvalue_dates = [str(test_result.date) for test_result in table_results]
         detection_indices = detect_changes(table_results)
         detection_dates = [pvalue_dates[idx] for idx in detection_indices]
-        result_dict[provider][table] = [str(date) for date in detection_dates]
+        result_dict[provider][table] = [date for date in detection_dates]
     with open(config.plots_dir / "time_series_lt" / "change_dates_lt_on_apis.json", "w") as f:
         json.dump(result_dict, f, indent=2)
     return result_dict
