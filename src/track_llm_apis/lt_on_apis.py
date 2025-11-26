@@ -26,6 +26,7 @@ pvalue_b = 100000
 stat_sigma_threshold = 12.0
 stat_running_std_window = 100
 stat_exclusion_zone = 2 * n_per_test
+stat_absolute_threshold = 1.0
 minimum_detectable_length_days = 14
 prompt = "x"
 
@@ -409,9 +410,11 @@ def detect_changes(
         exceedances,
         height=1e-20,  # anything above 0
         distance=peak_distance,
-    )
+    )[0]
 
-    return ([int(idx) for idx in peaks[0]], [float(deviations[idx]) for idx in peaks[0]])
+    peaks = [p for p in peaks if statistics[p] > stat_absolute_threshold]
+
+    return ([int(idx) for idx in peaks], [float(deviations[idx]) for idx in peaks])
 
 
 def benchmark(tables: dict[str, list[str]], prompt: str):
