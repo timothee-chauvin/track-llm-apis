@@ -1,7 +1,7 @@
 import json
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -25,6 +25,8 @@ peak_distance = n_per_test
 pvalue_b = 100000
 stat_sigma_threshold = 12.0
 stat_running_std_window = 100
+stat_exclusion_zone = 2 * n_per_test
+minimum_detectable_length_days = 14
 prompt = "x"
 
 
@@ -74,7 +76,10 @@ def lt_on_apis(
     cache = LTOnAPICache(n_per_test=n_per_test, pvalue_b=pvalue_b)
     if tables is None:
         tables = get_db_table_names(prompt=prompt)
+        # Drop GPT-4* finetunes
         tables = [t for t in tables if "ft:gpt" not in t]
+        # Drop endpoints with seed specified
+        tables = [t for t in tables if "seed=" not in t]
 
     if overwrite:
         tables_to_process = tables
@@ -103,15 +108,32 @@ def lt_on_apis(
     # filter by date
     if after is not None or before is not None:
         filtered_result = {}
-        for k, v in result.items():
+        for k, trs in result.items():
             filtered_tests = [
-                test
-                for test in v
-                if (after is None or test.date >= after) and (before is None or test.date <= before)
+                tr
+                for tr in trs
+                if (after is None or tr.date >= after) and (before is None or tr.date <= before)
             ]
             filtered_result[k] = filtered_tests
-        return filtered_result
-    return result
+        result = filtered_result
+    # filter out endpoints where there is less than a month between the first time
+    # detection is possible (after stat_running_std_window + stat_exclusion_zone) and the last
+    filtered_result = {}
+    for k, trs in result.items():
+        if len(trs) <= stat_running_std_window + stat_exclusion_zone:
+            logger.info(
+                f"Filtering out {k}: not enough statistics for even one change detection test."
+            )
+            continue
+        first_usable_stat = trs[stat_running_std_window + stat_exclusion_zone].date
+        last_usable_stat = trs[-1].date
+        if last_usable_stat - first_usable_stat < timedelta(days=minimum_detectable_length_days):
+            logger.info(
+                f"Filtering out {k}: less than {minimum_detectable_length_days} days between {first_usable_stat} and {last_usable_stat}."
+            )
+            continue
+        filtered_result[k] = trs
+    return filtered_result
 
 
 def plot_threshold_analysis(tables: list[str] | None = None):
@@ -362,15 +384,19 @@ def plot_top_token_logprobs_over_time(
 def detect_changes(test_results: list[TwoSampleTestResultWithDate]) -> list[int]:
     """Return the indices of the detected changes in the test_results using the statistics only."""
 
-    if len(test_results) < stat_running_std_window + 2 * n_per_test:
+    extended_window_size = stat_running_std_window + stat_exclusion_zone
+    if len(test_results) <= extended_window_size:
+        logger.warning(
+            f"Not enough test results ({len(test_results)}) to detect changes with running std window {stat_running_std_window} and exclusion zone {stat_exclusion_zone}."
+        )
         return []
 
     statistics = np.array([tr.statistic for tr in test_results])
     exceedances = np.zeros(len(statistics))
 
-    for i in range(stat_running_std_window + 2 * n_per_test, len(statistics)):
+    for i in range(extended_window_size, len(statistics)):
         # Calculate mean and std over the window ending just before the current point
-        window_stats = statistics[i - stat_running_std_window - 2 * n_per_test : i - 2 * n_per_test]
+        window_stats = statistics[i - extended_window_size : i - stat_exclusion_zone]
         mean = np.mean(window_stats)
         std = np.std(window_stats)
 
@@ -463,7 +489,10 @@ def change_distribution_by_provider(
             continue
         provider = get_model_provider(table)
         changes = detect_changes(results)
-        duration = (results[-1].date - results[0].date).days
+        # only count duration where changes can be detected, not initialization of the running windows
+        duration = (
+            results[-1].date - results[stat_running_std_window + stat_exclusion_zone].date
+        ).days
         provider_durations[provider] += duration
         provider_changes[provider] += len(changes)
         provider_num_endpoints[provider] += 1
@@ -563,7 +592,7 @@ def plot_change_dates(
         # Store the date range for this endpoint
         if pvalue_dates:
             endpoint_ranges[table] = {
-                "first": min(pvalue_dates),
+                "first": pvalue_dates[stat_running_std_window + stat_exclusion_zone],
                 "last": max(pvalue_dates),
                 "provider": provider,
             }
@@ -620,7 +649,7 @@ def plot_change_dates(
 
     fig = go.Figure()
 
-    # Add black dots for first and last sample dates (single trace for legend)
+    # Add black dots for first and last sample dates where changes can be detected (single trace for legend)
     range_x = []
     range_y = []
     for model, ranges in endpoint_ranges.items():
@@ -714,7 +743,8 @@ if __name__ == "__main__":
         "openrouter#mistralai/devstral-small-2505#chutes": ["2025-09-06"],
         "openrouter#mistralai/mistral-small-24b-instruct-2501#chutes": [],
     }
-    after = datetime(2025, 8, 1, tzinfo=ZoneInfo("Europe/Paris"))
+    after = datetime(2025, 6, 27, tzinfo=ZoneInfo("Europe/Paris"))
+    # after = datetime(2025, 8, 1, tzinfo=ZoneInfo("Europe/Paris"))
     before = datetime(2025, 11, 1, tzinfo=ZoneInfo("Europe/Paris"))
     # lt_on_apis(prompt=prompt, tables=tables, overwrite=False)
     # plot_threshold_analysis(tables=tables)
@@ -732,8 +762,7 @@ if __name__ == "__main__":
 
     print(
         json.dumps(
-            change_distribution_by_provider(prompt=prompt, tables=None, after=after, before=before),
-            indent=2,
+            change_distribution_by_provider(prompt=prompt, tables=None, after=after), indent=2
         )
     )
     # print(
@@ -744,8 +773,9 @@ if __name__ == "__main__":
     #         indent=2,
     #     )
     # )
-    # results = endpoints_with_changes(prompt=prompt, tables=None, after=after, before=before)
-    endpoints_with_changes(prompt=prompt, tables=None)
+    # endpoints_with_changes(prompt=prompt, tables=None, after=after, before=before)
+    endpoints_with_changes(prompt=prompt, tables=None, after=after)
     # change_dates_dict = change_dates(prompt=prompt, tables=None)
     # print(json.dumps(change_dates_dict, indent=2))
     # plot_change_dates(prompt=prompt, tables=None, after=after, before=before)
+    plot_change_dates(prompt=prompt, tables=None, after=after)
