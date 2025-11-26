@@ -12,6 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -116,6 +117,7 @@ def get_db_data(
     grok_fix: bool = True,
     prompt: str | None = None,
     sort_by_date: bool = False,
+    default_zone: ZoneInfo = ZoneInfo("Europe/Paris"),
 ) -> dict[str, list[ResponseData]]:
     """Get data from the database.
 
@@ -126,6 +128,7 @@ def get_db_data(
         grok_fix: the Grok API sometimes returns non-sensical logprobs below -1e38. If True, we discard values below -1e38.
         prompt: If provided, only return data for this specific prompt.
         sort_by_date: If True, sort the data within each table by date.
+        default_zone: The timezone to use for naive datetime objects (without tzinfo).
 
     Returns:
         A dict of table names to lists of ResponseData.
@@ -180,9 +183,12 @@ def get_db_data(
             logprobs = list(json.loads(logprobs))
             if grok_fix:
                 logprobs = [logprob for logprob in logprobs if logprob > -1e38]
+            parsed_date = datetime.fromisoformat(date)
+            if parsed_date.tzinfo is None:
+                parsed_date = parsed_date.replace(tzinfo=default_zone)
             results[table_name_from_db].append(
                 ResponseData(
-                    date=datetime.fromisoformat(date),
+                    date=parsed_date,
                     prompt=base64.b64decode(prompt).decode("utf-8"),
                     top_tokens=list(json.loads(top_tokens)),
                     logprobs=logprobs,
