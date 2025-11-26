@@ -478,34 +478,37 @@ def change_dates(prompt: str, tables: list[str] | None = None) -> dict[str, dict
     return result_dict
 
 
+def get_model_name(table: str) -> str:
+    parts = table.split("#")
+    if parts[0] == "openrouter":
+        model_name = parts[1]
+    else:
+        model_name = parts[0]
+    return model_name
+
+
 def plot_change_dates(prompt: str, tables: list[str] | None = None):
     """Plot detected change dates for each endpoint, with dots colored by provider."""
     lt_results = lt_on_apis(prompt=prompt, tables=tables)
 
     # Collect data for plotting
     plot_data = []
-    endpoint_ranges = {}  # Store first and last sample dates for each model
+    endpoint_ranges = {}  # Store first and last sample dates for each endpoint
+    endpoint_model_names = {}
 
     for table, table_results in lt_results.items():
         provider = get_model_provider(table)
+        model_name = get_model_name(table)
+        endpoint_model_names[table] = model_name
         pvalue_dates = [test_result.date for test_result in table_results]
         detection_indices = detect_changes(table_results)
         if not detection_indices:
             continue
         detection_dates = [pvalue_dates[idx] for idx in detection_indices]
 
-        # Extract model name (remove provider prefix and suffix)
-        parts = table.split("#")
-        if parts[0] == "openrouter":
-            model_name = parts[1]
-            if len(parts) > 2 and not parts[-1].startswith("seed="):
-                model_name += ":" + parts[-1]
-        else:
-            model_name = "#".join(parts[1:]) if len(parts) > 1 else parts[0]
-
         # Store the date range for this endpoint
         if pvalue_dates:
-            endpoint_ranges[model_name] = {
+            endpoint_ranges[table] = {
                 "first": min(pvalue_dates),
                 "last": max(pvalue_dates),
                 "provider": provider,
@@ -514,6 +517,7 @@ def plot_change_dates(prompt: str, tables: list[str] | None = None):
         for date in detection_dates:
             plot_data.append(
                 {
+                    "endpoint": table,
                     "model": model_name,
                     "date": date,
                     "provider": provider,
@@ -522,8 +526,8 @@ def plot_change_dates(prompt: str, tables: list[str] | None = None):
 
     providers = sorted(set(d["provider"] for d in endpoint_ranges.values()))
 
-    # Sort models: first by provider, then alphabetically by model name
-    models = sorted(
+    # Sort endpoints: first by provider, then alphabetically by model name
+    endpoints = sorted(
         endpoint_ranges.keys(), key=lambda m: (providers.index(endpoint_ranges[m]["provider"]), m)
     )
 
@@ -558,18 +562,16 @@ def plot_change_dates(prompt: str, tables: list[str] | None = None):
             provider_colors[provider] = default_colors[i % len(default_colors)]
 
     # Create model to y-position mapping
-    model_to_y = {model: i for i, model in enumerate(models)}
+    endpoint_to_y = {endpoint: i for i, endpoint in enumerate(endpoints)}
 
     fig = go.Figure()
 
     # Add black dots for first and last sample dates (single trace for legend)
     range_x = []
     range_y = []
-    range_text = []
     for model, ranges in endpoint_ranges.items():
         range_x.extend([ranges["first"], ranges["last"]])
-        range_y.extend([model_to_y[model], model_to_y[model]])
-        range_text.extend([f"{model} (first)", f"{model} (last)"])
+        range_y.extend([endpoint_to_y[model], endpoint_to_y[model]])
 
     fig.add_trace(
         go.Scatter(
@@ -580,65 +582,27 @@ def plot_change_dates(prompt: str, tables: list[str] | None = None):
             marker=dict(
                 size=6,
                 color="black",
-                symbol="circle-open",
+                symbol="circle",
             ),
-            hovertemplate="%{text}<br>%{x}<extra></extra>",
-            text=range_text,
         )
     )
 
     # Add traces for each provider (for legend)
     for provider in providers:
         provider_data = [d for d in plot_data if d["provider"] == provider]
-        if not provider_data:
-            # Add invisible point to ensure provider appears in legend
-            # Find a model belonging to this provider
-            provider_model = next(
-                (m for m, r in endpoint_ranges.items() if r["provider"] == provider), None
-            )
-            if provider_model:
-                fig.add_trace(
-                    go.Scatter(
-                        x=[None],
-                        y=[None],
-                        mode="markers",
-                        name=provider,
-                        marker=dict(
-                            size=10,
-                            color=provider_colors[provider],
-                        ),
-                        showlegend=True,
-                    )
-                )
-            continue
-
         fig.add_trace(
             go.Scatter(
                 x=[d["date"] for d in provider_data],
-                y=[model_to_y[d["model"]] for d in provider_data],
+                y=[endpoint_to_y[d["endpoint"]] for d in provider_data],
                 mode="markers",
                 name=provider,
                 marker=dict(
                     size=10,
                     color=provider_colors[provider],
                 ),
-                hovertemplate="%{text}<br>%{x}<extra></extra>",
                 text=[d["model"] for d in provider_data],
             )
         )
-
-    # Add horizontal separators between provider groups
-    current_provider = None
-    for i, model in enumerate(models):
-        provider = endpoint_ranges[model]["provider"]
-        if current_provider is not None and provider != current_provider:
-            fig.add_hline(
-                y=i - 0.5,
-                line_color="gray",
-                line_width=1,
-                line_dash="dot",
-            )
-        current_provider = provider
 
     fig.update_layout(
         template=config.plotting.template,
@@ -647,8 +611,8 @@ def plot_change_dates(prompt: str, tables: list[str] | None = None):
         xaxis_title="Date",
         yaxis=dict(
             tickmode="array",
-            tickvals=list(range(len(models))),
-            ticktext=models,
+            tickvals=list(range(len(endpoints))),
+            ticktext=endpoints,
             title="Model",
         ),
         legend=dict(
@@ -658,12 +622,12 @@ def plot_change_dates(prompt: str, tables: list[str] | None = None):
             xanchor="left",
             x=1.02,
         ),
-        height=max(600, len(models) * 20),
+        height=max(600, len(endpoints) * 20),
         margin=dict(l=300),  # Space for long model names
     )
 
     output_path = config.plots_dir / "time_series_lt" / "change_dates_plot.pdf"
-    fig.write_image(output_path, width=1200, height=max(600, len(models) * 20))
+    fig.write_image(output_path, width=1200, height=max(600, len(endpoints) * 20))
     fig.write_html(output_path.with_suffix(".html"))
     logger.info(f"Saved change dates plot to {output_path}")
 
