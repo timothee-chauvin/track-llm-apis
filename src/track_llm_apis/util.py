@@ -382,3 +382,44 @@ def dataset_info(dataset: Dataset | None) -> dict[str, str | int]:
 def ci(values: list[float], alpha: float) -> tuple[float, float]:
     values = sorted(values)
     return values[int(alpha / 2 * len(values))], values[int((1 - alpha / 2) * len(values))]
+
+
+def model_distances(model1, model2):
+    """Compute a number of distance-like metrics between two models:
+    - L1
+    - L2
+    - MAE
+    - MSE
+    - cosine similarity
+    """
+    l1_sum = 0.0
+    l2_squared_sum = 0.0
+    mae_sum = 0.0
+    mse_sum = 0.0
+    cs_dot = 0.0
+    cs_norm1 = 0.0
+    cs_norm2 = 0.0
+    total_params = 0
+    for (name1, param1), (name2, param2) in zip(
+        sorted(model1.named_parameters()), sorted(model2.named_parameters())
+    ):
+        assert name1 == name2, "Model parameters do not match"
+        l1_sum += torch.sum(torch.abs(param1 - param2)).item()
+        l2_squared_sum += torch.sum((param1 - param2) ** 2).item()
+        mae_sum += torch.sum(torch.abs(param1 - param2)).item()
+        mse_sum += torch.sum((param1 - param2) ** 2).item()
+        cs_dot += torch.sum(param1 * param2).item()
+        cs_norm1 += torch.sum(param1**2).item()
+        cs_norm2 += torch.sum(param2**2).item()
+        total_params += param1.numel()
+    assert total_params > 0, "Models have no parameters"
+
+    cosine_similarity = cs_dot / ((cs_norm1**0.5) * (cs_norm2**0.5) + 1e-12)
+    return {
+        "L1": l1_sum,
+        "L2": l2_squared_sum**0.5,
+        "MAE": mae_sum / total_params,
+        "MSE": mse_sum / total_params,
+        "Cosine Similarity": cosine_similarity,
+        "1-Cosine Similarity": 1 - cosine_similarity,
+    }
