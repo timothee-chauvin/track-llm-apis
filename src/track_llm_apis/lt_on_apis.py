@@ -28,14 +28,37 @@ prompt = "x"
 
 
 class LTOnAPIData(BaseModel):
+    """Data as stored to the cache file."""
+
     n_per_test: int
     pvalue_b: int
     # mapping from table name to list of hypothesis test results
     data: dict[str, list[TwoSampleTestResultWithDate]]
 
 
-def _get_filename(n_per_test: int, pvalue_b: int) -> str:
-    return f"lt_on_apis_n_per_test={n_per_test}_b={pvalue_b}.json"
+class LTOnAPICache:
+    _cache_dir = config.plots_dir / "time_series_lt" / "cache"
+    data: dict[str, list[TwoSampleTestResultWithDate]]
+
+    def __init__(self, n_per_test: int, pvalue_b: int):
+        self.n_per_test = n_per_test
+        self.pvalue_b = pvalue_b
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._filepath = self._cache_dir / self._get_filename()
+        if self._filepath.exists():
+            logger.info(f"Loading hypothesis test results from cache file {self._filepath}...")
+            self.data = LTOnAPIData.model_validate(orjson.loads(self._filepath.read_bytes())).data
+        else:
+            self.data = LTOnAPIData(n_per_test=n_per_test, pvalue_b=pvalue_b, data={}).data
+
+    def save(self):
+        logger.info(f"Saving hypothesis test results to cache file {self._filepath}...")
+        to_save = LTOnAPIData(n_per_test=self.n_per_test, pvalue_b=self.pvalue_b, data=self.data)
+        with open(self._filepath, "wb") as f:
+            f.write(orjson.dumps(to_save.model_dump(mode="json")))
+
+    def _get_filename(self) -> str:
+        return f"lt_on_apis_n_per_test={self.n_per_test}_b={self.pvalue_b}.json"
 
 
 def lt_on_apis(
@@ -43,15 +66,7 @@ def lt_on_apis(
 ) -> dict[str, list[TwoSampleTestResultWithDate]]:
     """Compute pvalues on all supplied tables (or all tables if `tables` is None).
     Store them in a filename derived from n_per_test and pvalue_b. p-values for tables already in the cache file are used, unless `overwrite` is True."""
-    cache_dir = config.plots_dir / "time_series_lt" / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    # TODO improve caching: no need for all the tables to be the same, should pick already cached tables and compute the others
-    filepath = cache_dir / _get_filename(n_per_test, pvalue_b)
-    if filepath.exists():
-        logger.info(f"Loading hypothesis test results from cache file {filepath}...")
-        cache_results = LTOnAPIData.model_validate(orjson.loads(filepath.read_bytes()))
-    else:
-        cache_results = LTOnAPIData(n_per_test=n_per_test, pvalue_b=pvalue_b, data={})
+    cache = LTOnAPICache(n_per_test=n_per_test, pvalue_b=pvalue_b)
     if tables is None:
         tables = get_db_table_names(prompt=prompt)
         tables = [t for t in tables if "ft:gpt" not in t]
@@ -60,7 +75,7 @@ def lt_on_apis(
         tables_to_process = tables
         logger.info(f"{overwrite=}, recomputing all {len(tables_to_process)} tables.")
     else:
-        tables_to_process = [t for t in tables if t not in cache_results.data.keys()]
+        tables_to_process = [t for t in tables if t not in cache.data.keys()]
         logger.info(
             f"{len(tables) - len(tables_to_process)}/{len(tables)} tables already in cache, processing {len(tables_to_process)} new tables."
         )
@@ -74,14 +89,12 @@ def lt_on_apis(
                 )
                 continue
             print(f"{i + 1}/{len(data)} {table_name} ({len(table_data)} samples)")
-            cache_results.data[table_name] = logprob_time_series(
-                table_data, n_per_test, pvalue_b=pvalue_b
-            )
-        logger.info(f"Saving hypothesis test results to cache file {filepath}...")
-        with open(filepath, "wb") as f:
-            f.write(orjson.dumps(cache_results.model_dump(mode="json")))
+            cache.data[table_name] = logprob_time_series(table_data, n_per_test, pvalue_b=pvalue_b)
+            if (i + 1) % 10 == 0:
+                cache.save()
+        cache.save()
 
-    return {k: v for k, v in cache_results.data.items() if k in tables}
+    return {k: v for k, v in cache.data.items() if k in tables}
 
 
 def plot_threshold_analysis(tables: list[str] | None = None):
