@@ -607,9 +607,14 @@ def plot_change_dates(
 
     providers = sorted(set(d["provider"] for d in endpoint_ranges.values()))
 
-    # Sort endpoints: first by provider, then alphabetically by model name
+    # Sort endpoints: first by provider, then by first date, then by last date
     endpoints = sorted(
-        endpoint_ranges.keys(), key=lambda m: (providers.index(endpoint_ranges[m]["provider"]), m)
+        endpoint_ranges.keys(),
+        key=lambda m: (
+            providers.index(endpoint_ranges[m]["provider"]),
+            endpoint_ranges[m]["first"],
+            endpoint_ranges[m]["last"],
+        ),
     )
 
     # Assign colors to providers
@@ -650,6 +655,7 @@ def plot_change_dates(
             y1=y + 0.55,
             fillcolor="lightgrey",
             line_width=0,
+            layer="below",
         )
         # Right grey zone
         fig.add_shape(
@@ -660,6 +666,7 @@ def plot_change_dates(
             y1=y + 0.55,
             fillcolor="lightgrey",
             line_width=0,
+            layer="below",
         )
 
     # Add traces for each provider
@@ -686,13 +693,16 @@ def plot_change_dates(
         xaxis=dict(
             title="Date",
             range=[global_min, global_max],
+            gridcolor="lightgrey",
         ),
         yaxis=dict(
             tickmode="array",
+            range=[len(endpoints) - 0.5, -0.5],
             tickvals=list(range(len(endpoints))),
             ticktext=[get_model_name(e) for e in endpoints],
             title="Model",
             ticklabelstandoff=10,
+            gridcolor="lightgrey",
         ),
         legend=dict(
             title="Provider",
