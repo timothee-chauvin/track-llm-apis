@@ -493,15 +493,22 @@ def endpoints_with_changes(
     tables: list[str] | None = None,
     after: datetime | None = None,
     before: datetime | None = None,
-) -> dict[str, int]:
-    """Return a dict mapping endpoint names to the number of detected changes, for endpoints with at least one change."""
+) -> None:
+    """Print info on which endpoints have or don't have detected changes."""
     lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
-    endpoints = {}
+    changes_per_endpoint = {}
     for table, results in lt_results.items():
         changes = detect_changes(results)
-        if len(changes) > 0:
-            endpoints[table] = len(changes)
-    return endpoints
+        changes_per_endpoint[table] = len(changes)
+    n_with_changes = sum(1 for n in changes_per_endpoint.values() if n > 0)
+    percent_with_changes = n_with_changes / len(changes_per_endpoint) * 100
+    n_changes = sum(n for n in changes_per_endpoint.values())
+    total = len(changes_per_endpoint)
+    for endpoint, endpoint_changes in sorted(changes_per_endpoint.items(), key=lambda x: x[1]):
+        print(f"{endpoint}: {endpoint_changes} changes")
+    print(
+        f"{n_with_changes}/{total} endpoints with changes ({percent_with_changes:.1f}%), total {n_changes} changes"
+    )
 
 
 def change_dates(prompt: str, tables: list[str] | None = None) -> dict[str, dict[str, list[str]]]:
@@ -738,8 +745,7 @@ if __name__ == "__main__":
     #     )
     # )
     # results = endpoints_with_changes(prompt=prompt, tables=None, after=after, before=before)
-    # for i, (endpoint, n_changes) in enumerate(results.items()):
-    #     print(f"{i + 1}/{len(results)}: {endpoint}: {n_changes} changes")
+    endpoints_with_changes(prompt=prompt, tables=None)
     # change_dates_dict = change_dates(prompt=prompt, tables=None)
     # print(json.dumps(change_dates_dict, indent=2))
     # plot_change_dates(prompt=prompt, tables=None, after=after, before=before)
