@@ -666,7 +666,6 @@ def plot_change_dates(
             y1=y + 0.55,
             fillcolor="lightgrey",
             line_width=0,
-            layer="above",
         )
         # Right grey zone
         fig.add_shape(
@@ -677,7 +676,6 @@ def plot_change_dates(
             y1=y + 0.55,
             fillcolor="lightgrey",
             line_width=0,
-            layer="above",
         )
 
     # Add traces for each provider
@@ -692,6 +690,7 @@ def plot_change_dates(
                 marker=dict(
                     size=10,
                     color=provider_colors[provider],
+                    line=dict(width=1, color="black"),
                 ),
             )
         )
@@ -700,12 +699,16 @@ def plot_change_dates(
         template=config.plotting.template,
         font_family=config.plotting.font_family,
         title="Detected Changes by Endpoint",
-        xaxis_title="Date",
+        xaxis=dict(
+            title="Date",
+            range=[global_min, global_max],
+        ),
         yaxis=dict(
             tickmode="array",
             tickvals=list(range(len(endpoints))),
             ticktext=[get_model_name(e) for e in endpoints],
             title="Model",
+            ticklabelstandoff=10,
         ),
         legend=dict(
             title="Provider",
