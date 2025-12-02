@@ -31,6 +31,7 @@ stat_exclusion_zone = 2 * n_per_test
 stat_absolute_threshold = 1.0
 minimum_detectable_length_days = 14
 prompt = "x"
+max_points_per_token = 400
 
 random.seed(0)
 
@@ -251,6 +252,7 @@ def plot_top_token_logprobs_over_time(
     prompt: str | None = None,
     tables: list[str] | None = None,
     with_lt_results: bool = False,
+    downsample: bool = True,
 ):
     """Plot logprobs of top tokens over time for each prompt in each table.
 
@@ -261,6 +263,7 @@ def plot_top_token_logprobs_over_time(
         tables: Only plot data for these tables.
         with_lt_results: If True, include results of hypothesis tests.
         pvalue_threshold: Threshold below which pvalues are considered to indicate a change in the LLM API.
+        downsample: If True, downsample the logprob time series to at most `max_points_per_token` points per top token.
     """
     if with_lt_results:
         assert prompt is not None, "Prompt must be specified when with_lt_results is True"
@@ -307,6 +310,11 @@ def plot_top_token_logprobs_over_time(
             # Add a line for each top token
             for token in sorted_tokens:
                 token_logprobs = all_token_logprobs[token]
+                if downsample:
+                    # Keep every n points so that there are at most max_points_per_token points
+                    keep_every = max(1, len(token_logprobs.dates) // max_points_per_token)
+                    token_logprobs.dates = token_logprobs.dates[::keep_every]
+                    token_logprobs.logprobs = token_logprobs.logprobs[::keep_every]
                 fig.add_trace(
                     go.Scatter(
                         x=token_logprobs.dates,
@@ -354,10 +362,14 @@ def plot_top_token_logprobs_over_time(
                         font=dict(size=16),
                     )
 
-            # Truncate prompt for title if it's too long
-            prompt_preview = repr(trim_to_length(p, 50))
+            title = f"Endpoint: {get_model_name(table_name)}, Provider: {get_model_provider(table_name, capitalize=True)}"
+            title += f"<br>Prompt: {repr(trim_to_length(p, 50))}"
+            title += f"<br>{time_series_start.strftime('%B %d')} to {time_series_end.strftime('%B %d, %Y')}"
+            if downsample and keep_every > 1:
+                title += f" (downsampled to every {keep_every} points)"
+
             fig.update_layout(
-                title=f"Endpoint: {get_model_name(table_name)}, Provider: {get_model_provider(table_name, capitalize=True)}<br>Prompt: {prompt_preview}<br>{time_series_start.strftime('%B %d')} to {time_series_end.strftime('%B %d, %Y')}",
+                title=title,
                 font_family=config.plotting.font_family,
                 font_size=14,
                 xaxis_title="Time",
@@ -508,33 +520,38 @@ def change_distribution_by_provider(
     for table, results in lt_results.items():
         if len(results) == 0:
             continue
-        provider = get_model_provider(table)
+        prov = get_model_provider(table)
         changes, _ = detect_changes(results)
         # only count duration where changes can be detected, not initialization of the running windows
         duration = (
             results[-1].date - results[stat_running_std_window + stat_exclusion_zone].date
         ).days
-        provider_durations[provider] += duration
-        provider_changes[provider] += len(changes)
-        provider_num_endpoints[provider] += 1
-    for provider in provider_durations:
-        change_rate = provider_changes[provider] / provider_durations[provider] * 30
-        print(
-            f"{provider} ({provider_num_endpoints[provider]} endpoints): {provider_changes[provider]} changes over {provider_durations[provider] / 30:.1f} months = {change_rate:.2f} changes/month"
-        )
+        provider_durations[prov] += duration
+        provider_changes[prov] += len(changes)
+        provider_num_endpoints[prov] += 1
 
     total_endpoints = sum(provider_num_endpoints.values())
     total_changes = sum(provider_changes.values())
     total_duration = sum(provider_durations.values())
-    total_change_rate = total_changes / total_duration * 30
+    total_change_rate = total_changes / total_duration * 365
     print(
-        f"TOTAL ({total_endpoints} endpoints): {total_changes} changes over {total_duration / 30:.1f} months = {total_change_rate:.2f} changes/month"
+        f"TOTAL ({total_endpoints} endpoints): {total_changes} changes over {total_duration / 365:.1f} years = {total_change_rate:.2f} changes/year"
     )
 
     provider_change_rates = {
-        provider: provider_changes[provider] / provider_durations[provider] * 30
-        for provider in provider_durations
+        prov: provider_changes[prov] / provider_durations[prov] * 365 for prov in provider_durations
     }
+
+    for prov in sorted(
+        provider_change_rates.keys(), key=lambda p: provider_change_rates[p], reverse=True
+    ):
+        # print(
+        #     f"{provider} ({provider_num_endpoints[provider]} endpoints): {provider_changes[provider]} changes over {provider_durations[provider] / 365:.1f} years = {change_rate:.2f} changes/year"
+        # )
+
+        print(
+            f"{prov} & {provider_num_endpoints[prov]} & {provider_durations[prov] / 365:.1f} & {provider_changes[prov]} & {provider_change_rates[prov]:.1f} \\\\"
+        )
     return provider_change_rates
 
 
