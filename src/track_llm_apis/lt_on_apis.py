@@ -31,7 +31,6 @@ stat_exclusion_zone = 2 * n_per_test
 stat_absolute_threshold = 1.0
 minimum_detectable_length_days = 14
 prompt = "x"
-max_points_per_token = 400
 
 random.seed(0)
 
@@ -252,7 +251,6 @@ def plot_top_token_logprobs_over_time(
     prompt: str | None = None,
     tables: list[str] | None = None,
     with_lt_results: bool = False,
-    downsample: bool = True,
 ):
     """Plot logprobs of top tokens over time for each prompt in each table.
 
@@ -263,7 +261,6 @@ def plot_top_token_logprobs_over_time(
         tables: Only plot data for these tables.
         with_lt_results: If True, include results of hypothesis tests.
         pvalue_threshold: Threshold below which pvalues are considered to indicate a change in the LLM API.
-        downsample: If True, downsample the logprob time series to at most `max_points_per_token` points per top token.
     """
     if with_lt_results:
         assert prompt is not None, "Prompt must be specified when with_lt_results is True"
@@ -310,11 +307,6 @@ def plot_top_token_logprobs_over_time(
             # Add a line for each top token
             for token in sorted_tokens:
                 token_logprobs = all_token_logprobs[token]
-                if downsample:
-                    # Keep every n points so that there are at most max_points_per_token points
-                    keep_every = max(1, len(token_logprobs.dates) // max_points_per_token)
-                    token_logprobs.dates = token_logprobs.dates[::keep_every]
-                    token_logprobs.logprobs = token_logprobs.logprobs[::keep_every]
                 fig.add_trace(
                     go.Scattergl(
                         x=token_logprobs.dates,
@@ -365,9 +357,6 @@ def plot_top_token_logprobs_over_time(
             title = f"Endpoint: {get_model_name(table_name)}, Provider: {get_model_provider(table_name, capitalize=True)}"
             title += f"<br>Prompt: {repr(trim_to_length(p, 50))}"
             title += f"<br>{time_series_start.strftime('%B %d')} to {time_series_end.strftime('%B %d, %Y')}"
-            if downsample and keep_every > 1:
-                title += f" (downsampled to every {keep_every} points)"
-
             fig.update_layout(
                 title=title,
                 font_family=config.plotting.font_family,
