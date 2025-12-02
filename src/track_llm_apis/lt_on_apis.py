@@ -748,6 +748,28 @@ def plot_change_dates(
     logger.info(f"Saved change dates plot to {output_path}")
 
 
+def get_random_endpoint_per_provider(
+    prompt: str,
+    tables: list[str] | None = None,
+    after: datetime | None = None,
+    before: datetime | None = None,
+    with_changes_only: bool = False,
+) -> list[str]:
+    """Return a random endpoint for each provider."""
+    lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
+
+    provider_endpoints: dict[str, list[str]] = defaultdict(list)
+
+    for table in lt_results.keys():
+        if not with_changes_only or detect_changes(lt_results[table])[0]:
+            provider = get_model_provider(table)
+            provider_endpoints[provider].append(table)
+
+    random_endpoints = [random.choice(endpoints) for endpoints in provider_endpoints.values()]
+
+    return random_endpoints
+
+
 if __name__ == "__main__":
     tables = {
         # tables with known changes
