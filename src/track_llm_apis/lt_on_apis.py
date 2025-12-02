@@ -754,7 +754,7 @@ def get_random_endpoint_per_provider(
     tables: list[str] | None = None,
     after: datetime | None = None,
     before: datetime | None = None,
-    with_changes_only: bool = False,
+    prioritize_with_changes: bool = False,
 ) -> list[str]:
     """Return a random endpoint for each provider."""
     lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
@@ -762,9 +762,15 @@ def get_random_endpoint_per_provider(
     provider_endpoints: dict[str, list[str]] = defaultdict(list)
 
     for table in lt_results.keys():
-        if not with_changes_only or detect_changes(lt_results[table])[0]:
-            provider = get_model_provider(table)
-            provider_endpoints[provider].append(table)
+        provider = get_model_provider(table)
+        provider_endpoints[provider].append(table)
+
+    if prioritize_with_changes:
+        # For each provider, if there is an endpoint with changes, remove all endpoints without changes
+        for provider, endpoints in provider_endpoints.items():
+            endpoints_with_changes = [ep for ep in endpoints if detect_changes(lt_results[ep])[0]]
+            if endpoints_with_changes:
+                provider_endpoints[provider] = endpoints_with_changes
 
     random_endpoints = [random.choice(endpoints) for endpoints in provider_endpoints.values()]
 
@@ -832,16 +838,16 @@ if __name__ == "__main__":
     #     )
     # )
     # endpoints_with_changes = get_endpoints_with_changes(prompt=prompt, tables=None, after=after)
-    endpoints_with_changes = get_endpoints_with_changes(prompt=prompt, tables=None, after=after)
+    # endpoints_with_changes = get_endpoints_with_changes(prompt=prompt, tables=None, after=after)
     # change_dates_dict = change_dates(prompt=prompt, tables=None)
     # print(json.dumps(change_dates_dict, indent=2))
     # plot_change_dates(prompt=prompt, tables=None, after=after, before=before)
     # plot_change_dates(prompt=prompt, tables=None, after=after)
 
     # random_tables = get_random_endpoint_per_provider(prompt=prompt, tables=None, after=after)
-    # endpoints_with_changes = get_random_endpoint_per_provider(
-    #     prompt=prompt, tables=None, after=after, with_changes_only=True
-    # )
+    endpoints_with_changes = get_random_endpoint_per_provider(
+        prompt=prompt, tables=None, after=after, prioritize_with_changes=True
+    )
     plot_top_token_logprobs_over_time(
         tables=endpoints_with_changes,
         prompt=prompt,
