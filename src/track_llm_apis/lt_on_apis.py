@@ -555,13 +555,13 @@ def change_distribution_by_provider(
     return provider_change_rates
 
 
-def endpoints_with_changes(
+def get_endpoints_with_changes(
     prompt: str,
     tables: list[str] | None = None,
     after: datetime | None = None,
     before: datetime | None = None,
-) -> None:
-    """Print info on which endpoints have or don't have detected changes."""
+) -> list[str]:
+    """Print info on which endpoints have or don't have detected changes Return the list of endpoints with at least one change."""
     lt_results = lt_on_apis(prompt=prompt, tables=tables, after=after, before=before)
     changes_per_endpoint = {}
     for table, results in lt_results.items():
@@ -576,6 +576,7 @@ def endpoints_with_changes(
     print(
         f"{n_with_changes}/{total} endpoints with changes ({percent_with_changes:.1f}%), total {n_changes} changes"
     )
+    return [endpoint for endpoint, changes in changes_per_endpoint.items() if changes > 0]
 
 
 def change_dates(prompt: str, tables: list[str] | None = None) -> dict[str, dict[str, list[str]]]:
@@ -773,6 +774,7 @@ def get_random_endpoint_per_provider(
 if __name__ == "__main__":
     tables = {
         # tables with known changes
+        "openrouter#qwen/qwen3-32b#nebius/base": [],
         "openrouter#meta-llama/llama-3.1-70b-instruct#lambda/fp8": [
             "2025-07-15",
             "2025-07-30",
@@ -808,6 +810,7 @@ if __name__ == "__main__":
     #     tables=list(tables.keys()),
     #     prompt=prompt,
     #     with_lt_results=True,
+    #     after=after,
     # )
     # results = benchmark(tables=tables, prompt=prompt)
     # print(json.dumps(results, indent=2))
@@ -815,11 +818,11 @@ if __name__ == "__main__":
     #     f"{n_per_test=}, {pvalue_b=}, {stat_sigma_threshold=} {stat_running_std_window=}:\nTP={results['tp']}, FP={results['fp']}, FN={results['fn']}"
     # )
 
-    print(
-        json.dumps(
-            change_distribution_by_provider(prompt=prompt, tables=None, after=after), indent=2
-        )
-    )
+    # print(
+    #     json.dumps(
+    #         change_distribution_by_provider(prompt=prompt, tables=None, after=after), indent=2
+    #     )
+    # )
     # print(
     #     json.dumps(
     #         change_distribution_by_provider(
@@ -828,9 +831,20 @@ if __name__ == "__main__":
     #         indent=2,
     #     )
     # )
-    # endpoints_with_changes(prompt=prompt, tables=None, after=after, before=before)
-    endpoints_with_changes(prompt=prompt, tables=None, after=after)
+    # endpoints_with_changes = get_endpoints_with_changes(prompt=prompt, tables=None, after=after)
+    endpoints_with_changes = get_endpoints_with_changes(prompt=prompt, tables=None, after=after)
     # change_dates_dict = change_dates(prompt=prompt, tables=None)
     # print(json.dumps(change_dates_dict, indent=2))
     # plot_change_dates(prompt=prompt, tables=None, after=after, before=before)
-    plot_change_dates(prompt=prompt, tables=None, after=after)
+    # plot_change_dates(prompt=prompt, tables=None, after=after)
+
+    # random_tables = get_random_endpoint_per_provider(prompt=prompt, tables=None, after=after)
+    # endpoints_with_changes = get_random_endpoint_per_provider(
+    #     prompt=prompt, tables=None, after=after, with_changes_only=True
+    # )
+    plot_top_token_logprobs_over_time(
+        tables=endpoints_with_changes,
+        prompt=prompt,
+        with_lt_results=True,
+        after=after,
+    )
