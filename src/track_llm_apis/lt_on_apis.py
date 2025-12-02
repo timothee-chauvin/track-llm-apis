@@ -316,7 +316,7 @@ def plot_top_token_logprobs_over_time(
                     token_logprobs.dates = token_logprobs.dates[::keep_every]
                     token_logprobs.logprobs = token_logprobs.logprobs[::keep_every]
                 fig.add_trace(
-                    go.Scatter(
+                    go.Scattergl(
                         x=token_logprobs.dates,
                         y=token_logprobs.logprobs,
                         mode="lines+markers",
