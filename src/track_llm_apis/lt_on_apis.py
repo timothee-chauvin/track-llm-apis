@@ -635,14 +635,10 @@ def plot_change_dates(
 
     providers = sorted(set(d["provider"] for d in endpoint_ranges.values()))
 
-    # Sort endpoints: first by provider, then by first date, then by last date
+    # Sort endpoints: first by provider, then alphabetically
     endpoints = sorted(
         endpoint_ranges.keys(),
-        key=lambda m: (
-            providers.index(endpoint_ranges[m]["provider"]),
-            endpoint_ranges[m]["first"],
-            endpoint_ranges[m]["last"],
-        ),
+        key=lambda m: (providers.index(endpoint_ranges[m]["provider"]), m),
     )
 
     # Create model to y-position mapping
