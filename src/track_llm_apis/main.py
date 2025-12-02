@@ -889,6 +889,7 @@ class DatabaseManager:
     def store_result(self, response: Response):
         table_name = self._get_table_name(response.endpoint)
         cursor = self.conn.cursor()
+        # TODO: datetime.now(tz=timezone.utc).isoformat()
         date_str = datetime.now().isoformat()
         cursor.execute(
             f'INSERT INTO "{table_name}" (date, prompt, top_tokens, logprobs, system_fingerprint, seed) VALUES (?, ?, ?, ?, ?, ?)',
