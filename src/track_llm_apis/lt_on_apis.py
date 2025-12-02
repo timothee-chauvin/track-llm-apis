@@ -1,11 +1,13 @@
 import json
 import os
+import random
 from collections import defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import orjson
+import plotly.express as px
 import plotly.graph_objects as go
 from pydantic import BaseModel
 from scipy.signal import find_peaks
@@ -29,6 +31,8 @@ stat_exclusion_zone = 2 * n_per_test
 stat_absolute_threshold = 1.0
 minimum_detectable_length_days = 14
 prompt = "x"
+
+random.seed(0)
 
 
 class LTOnAPIData(BaseModel):
@@ -291,6 +295,8 @@ def plot_top_token_logprobs_over_time(
             os.makedirs(prompt_dir, exist_ok=True)
 
             all_token_logprobs = get_token_logprobs(prompt_rows, p, missing_policy="none")
+            time_series_start = min(lp_data.dates[0] for lp_data in all_token_logprobs.values())
+            time_series_end = max(lp_data.dates[-1] for lp_data in all_token_logprobs.values())
 
             # Create the plot
             fig = go.Figure()
@@ -342,16 +348,16 @@ def plot_top_token_logprobs_over_time(
                         y=0,
                         text=deviation_str,
                         showarrow=False,
-                        yshift=10,
+                        yshift=20,
+                        xshift=10,
                         textangle=-45,
+                        font=dict(size=16),
                     )
 
-            # Update layout
-            title_suffix = f" (after {after.isoformat()})" if after else ""
             # Truncate prompt for title if it's too long
             prompt_preview = repr(trim_to_length(p, 50))
             fig.update_layout(
-                title=f"Top Token Logprobs Over Time - {table_name}{title_suffix}<br>Prompt: {prompt_preview}",
+                title=f"Endpoint: {get_model_name(table_name)}, Provider: {get_model_provider(table_name, capitalize=True)}<br>Prompt: {prompt_preview}<br>{time_series_start.strftime('%B %d')} to {time_series_end.strftime('%B %d, %Y')}",
                 font_family=config.plotting.font_family,
                 font_size=14,
                 xaxis_title="Time",
@@ -367,7 +373,6 @@ def plot_top_token_logprobs_over_time(
             os.makedirs(fig_dir, exist_ok=True)
             fig_path = fig_dir / f"{stub}_logprobs_over_time{filename_suffix}.pdf"
             fig.write_image(fig_path, width=1200, height=800)
-            fig.write_html(fig_path.with_suffix(".html"))
             logger.info(
                 f"Saved logprobs over time for {table_name} (prompt start: {repr(p[:40])}) to {fig_path}"
             )
@@ -458,7 +463,7 @@ def benchmark(tables: dict[str, list[str]], prompt: str):
     }
 
 
-def get_model_provider(table_name: str) -> str:
+def get_model_provider(table_name: str, capitalize: bool = False) -> str:
     parts = table_name.split("#")
     if parts[0] == "openrouter":
         if parts[-1].startswith("seed="):
@@ -472,6 +477,19 @@ def get_model_provider(table_name: str) -> str:
         provider = "xai"
     else:
         raise ValueError(f"Unknown table name format: {table_name}")
+    if capitalize:
+        provider = {
+            "xai": "xAI",
+            "openai": "OpenAI",
+            "fireworks": "Fireworks",
+            "lambda": "Lambda",
+            "azure": "Azure",
+            "crusoe": "Crusoe",
+            "nebius": "Nebius",
+            "chutes": "Chutes",
+            "hyperbolic": "Hyperbolic",
+            "deepseek": "Deepseek",
+        }[provider]
     return provider
 
 
@@ -620,20 +638,6 @@ def plot_change_dates(
         ),
     )
 
-    # Assign colors to providers
-    provider_colors = {
-        "azure": "#4B0082",  # dark purple
-        "chutes": "#1E90FF",  # dodger blue
-        "crusoe": "#87CEEB",  # light blue
-        "fireworks": "#00CED1",  # dark cyan
-        "hyperbolic": "#7FFF00",  # chartreuse
-        "klusterai": "#9ACD32",  # yellow green
-        "lambda": "#FFD700",  # gold
-        "nebius": "#FFA500",  # orange
-        "openai": "#FF4500",  # orange red
-        "xai": "#8B0000",  # dark red
-    }
-
     # Create model to y-position mapping
     endpoint_to_y = {endpoint: i for i, endpoint in enumerate(endpoints)}
 
@@ -673,7 +677,9 @@ def plot_change_dates(
         )
 
     # Add traces for each provider
-    for provider in providers:
+    plotly_colors = px.colors.qualitative.Plotly
+    for i, provider in enumerate(providers):
+        color = plotly_colors[i % len(plotly_colors)]
         provider_data = [d for d in plot_data if d["provider"] == provider]
         fig.add_trace(
             go.Scatter(
@@ -682,9 +688,9 @@ def plot_change_dates(
                 mode="markers",
                 name=provider,
                 marker=dict(
-                    size=10,
-                    color=provider_colors[provider],
-                    line=dict(width=1, color="black"),
+                    size=14,
+                    color=color,
+                    line=dict(width=1, color="dimgrey"),
                 ),
             )
         )
@@ -692,19 +698,19 @@ def plot_change_dates(
     fig.update_layout(
         template=config.plotting.template,
         font_family=config.plotting.font_family,
-        title="Detected Changes by Endpoint",
+        font_size=18,
         xaxis=dict(
-            title="Date",
             range=[global_min, global_max],
             gridcolor="lightgrey",
+            tickfont=dict(size=20),
         ),
         yaxis=dict(
             tickmode="array",
             range=[len(endpoints) - 0.5, -0.5],
             tickvals=list(range(len(endpoints))),
             ticktext=[get_model_name(e) for e in endpoints],
-            title="Model",
             ticklabelstandoff=10,
+            tickfont=dict(size=16),
             gridcolor="lightgrey",
         ),
         legend=dict(
@@ -713,8 +719,9 @@ def plot_change_dates(
             y=0.99,
             xanchor="left",
             x=1.02,
+            font=dict(size=22),
         ),
-        height=max(600, len(endpoints) * 10),
+        height=max(600, len(endpoints) * 12),
         margin=dict(l=300),  # Space for long model names
     )
 
