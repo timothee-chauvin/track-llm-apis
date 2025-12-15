@@ -1,14 +1,12 @@
-"""
-Benchmark to extract top logprobs for all single-token prompts.
-
-For each possible 1-token input prompt (using the model's vocabulary),
-run a forward pass with HuggingFace transformers and extract the top logprobs
-such that their cumulative probability at T=1 exceeds a threshold (default 0.995).
-"""
+"""Benchmark for finding input tokens with specific logprob characteristics."""
 
 import logging
+import math
+from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
+import fire
 import orjson
 import torch
 from tqdm import tqdm
@@ -19,6 +17,12 @@ from track_llm_apis.util import slugify
 
 logger = logging.getLogger("track-llm-apis")
 
+BENCHMARK_DIR = config.data_dir / "best_tokens_benchmark"
+
+
+def _benchmark_path(model_name: str) -> Path:
+    return BENCHMARK_DIR / f"{slugify(model_name)}.json"
+
 
 def create_benchmark(
     model_name: str = "meta-llama/Llama-3.1-8B-Instruct",
@@ -26,21 +30,9 @@ def create_benchmark(
     batch_size: int = 512,
     max_logprobs: int = 100,
 ) -> Path:
-    """
-    For each possible 1-token input prompt, run a forward pass to extract
-    top logprobs until cumulative probability exceeds the threshold.
-
-    Args:
-        model_name: HuggingFace model name to benchmark
-        cumulative_prob_threshold: Stop adding tokens when cumulative prob exceeds this
-        batch_size: Number of prompts to process per batch
-
-    Returns:
-        Path to the output JSON file
-    """
-    output_dir = config.data_dir / "best_tokens_benchmark"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / f"{slugify(model_name)}.json"
+    """Extract top logprobs for all single-token prompts."""
+    BENCHMARK_DIR.mkdir(parents=True, exist_ok=True)
+    output_file = _benchmark_path(model_name)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
@@ -73,17 +65,14 @@ def create_benchmark(
 
         with torch.no_grad():
             outputs = model(input_ids)
-            # logits shape: (batch_size, seq_len=1, vocab_size)
-            logits = outputs.logits[:, -1, :]  # (batch_size, vocab_size)
+            logits = outputs.logits[:, -1, :]
             logprobs = torch.log_softmax(logits, dim=-1)
             probs = torch.softmax(logits, dim=-1)
 
-            # Get top-k by probability
             k = min(max_logprobs, probs.shape[-1])
             top_probs, top_indices = torch.topk(probs, k=k, dim=-1, sorted=False)
             top_logprobs = torch.gather(logprobs, dim=-1, index=top_indices)
 
-            # Sort the top-k by probability
             sorted_probs, sort_order = torch.sort(top_probs, dim=-1, descending=True)
             sorted_indices = torch.gather(top_indices, dim=-1, index=sort_order)
             sorted_log_probs = torch.gather(top_logprobs, dim=-1, index=sort_order)
@@ -102,11 +91,10 @@ def create_benchmark(
             token_id = batch_token_ids[i]
             n_tokens = int(n_tokens_cpu[i].item())
 
-            top_indices = sorted_indices_cpu[i, :n_tokens].tolist()
-            top_logprobs = sorted_logprobs_cpu[i, :n_tokens].tolist()
+            top_indices_i = sorted_indices_cpu[i, :n_tokens].tolist()
+            top_logprobs_i = sorted_logprobs_cpu[i, :n_tokens].tolist()
 
-            logprobs_dict = {str(ti): lp for ti, lp in zip(top_indices, top_logprobs)}
-
+            logprobs_dict = {str(ti): lp for ti, lp in zip(top_indices_i, top_logprobs_i)}
             results[str(token_id)] = logprobs_dict
 
     logger.info(f"Saving results to {output_file}...")
@@ -127,5 +115,230 @@ def create_benchmark(
     return output_file
 
 
+def load_benchmark(model_name: str = "meta-llama/Llama-3.1-8B-Instruct") -> dict:
+    """Load benchmark data from disk."""
+    path = _benchmark_path(model_name)
+    if not path.exists():
+        raise FileNotFoundError(f"Benchmark not found: {path}")
+    with open(path, "rb") as f:
+        return orjson.loads(f.read())["results"]
+
+
+def _compute_top2_diff(logprobs_dict: dict[str, float]) -> float | None:
+    """Compute difference between top 2 logprobs, or None if < 2 available."""
+    if len(logprobs_dict) < 2:
+        return None
+    sorted_logprobs = sorted(logprobs_dict.values(), reverse=True)
+    return sorted_logprobs[0] - sorted_logprobs[1]
+
+
+def _get_ground_truth_ranking(benchmark: dict, delta: float) -> list[tuple[str, float]]:
+    """Rank tokens by distance of their top-2 logprob difference to delta."""
+    distances = []
+    for token_id, logprobs_dict in benchmark.items():
+        diff = _compute_top2_diff(logprobs_dict)
+        if diff is not None:
+            distances.append((token_id, abs(diff - delta)))
+    distances.sort(key=lambda x: x[1])
+    return distances
+
+
+class InputSampler:
+    """Provides lazy-cached sampling interface for a single input token."""
+
+    def __init__(self, logprobs_dict: dict[str, float], rng: torch.Generator):
+        self._logprobs_dict = logprobs_dict
+        self._rng = rng
+        self._samples_cache: list[str] = []
+        self._token_ids = list(logprobs_dict.keys())
+        self._base_logprobs = torch.tensor([logprobs_dict[t] for t in self._token_ids])
+
+    def sample(self, n: int, temperature: float = 1.0) -> list[str]:
+        """Get n samples, using cache when possible (only for T=1.0)."""
+        if temperature == 1.0 and len(self._samples_cache) >= n:
+            return self._samples_cache[:n]
+
+        logprobs = self._base_logprobs
+        if temperature != 1.0:
+            logprobs = logprobs / temperature
+
+        probs = torch.softmax(logprobs, dim=0)
+        indices = torch.multinomial(probs, n, replacement=True, generator=self._rng)
+        samples = [self._token_ids[i] for i in indices.tolist()]
+
+        if temperature == 1.0:
+            self._samples_cache = samples
+
+        return samples
+
+    def extend_samples(self, additional: int, temperature: float = 1.0) -> list[str]:
+        """Extend the sample cache and return all samples."""
+        if temperature != 1.0:
+            return self.sample(len(self._samples_cache) + additional, temperature)
+
+        logprobs = self._base_logprobs
+        probs = torch.softmax(logprobs, dim=0)
+        indices = torch.multinomial(probs, additional, replacement=True, generator=self._rng)
+        new_samples = [self._token_ids[i] for i in indices.tolist()]
+        self._samples_cache.extend(new_samples)
+        return self._samples_cache
+
+    @property
+    def total_sampled(self) -> int:
+        return len(self._samples_cache)
+
+
+class BenchmarkEvaluator:
+    """Evaluates black-box methods for finding inputs with specific logprob characteristics."""
+
+    def __init__(
+        self,
+        model_name: str = "meta-llama/Llama-3.1-8B-Instruct",
+        delta: float = 0.0,
+    ):
+        self.benchmark = load_benchmark(model_name)
+        self.delta = delta
+
+        # Filter out tokens with < 2 logprobs
+        self._valid_results = {k: v for k, v in self.benchmark.items() if len(v) >= 2}
+        self._available_tokens = list(self._valid_results.keys())
+
+        self.ground_truth = _get_ground_truth_ranking(self._valid_results, delta)
+        self._token_to_distance = {t[0]: t[1] for t in self.ground_truth}
+
+    def get_available_tokens(self) -> list[str]:
+        return self._available_tokens
+
+    def create_sampler(self, token_id: str, rng: torch.Generator) -> InputSampler | None:
+        """Create a sampler for the given input token."""
+        logprobs_dict = self._valid_results.get(token_id)
+        if logprobs_dict is None:
+            return None
+        return InputSampler(logprobs_dict, rng)
+
+    def evaluate(
+        self,
+        method: Callable[["BenchmarkEvaluator", int, int, int], list[str]],
+        query_budget: int,
+        top_n: int = 10,
+        seed: int = 42,
+    ) -> dict:
+        """Evaluate a method. Returns dict with score, overlap, and other metrics."""
+        found_tokens = method(self, query_budget, top_n, seed)
+
+        real_best_tokens = [t[0] for t in self.ground_truth[:top_n]]
+        real_best_distances = [t[1] for t in self.ground_truth[:top_n]]
+        avg_real_distance = sum(real_best_distances) / len(real_best_distances)
+
+        found_distances = [self._token_to_distance.get(t, float("inf")) for t in found_tokens]
+        avg_found_distance = (
+            sum(found_distances) / len(found_distances) if found_distances else float("inf")
+        )
+
+        score = abs(avg_found_distance - avg_real_distance)
+        overlap = len(set(found_tokens) & set(real_best_tokens))
+
+        return {
+            "score": score,
+            "overlap": overlap,
+            "top_n": top_n,
+            "query_budget": query_budget,
+            "avg_real_distance": avg_real_distance,
+            "avg_found_distance": avg_found_distance,
+            "found_tokens": found_tokens,
+            "real_best_tokens": real_best_tokens,
+        }
+
+
+def naive_method(
+    evaluator: BenchmarkEvaluator,
+    query_budget: int,
+    top_n: int,
+    seed: int,
+) -> list[str]:
+    """Sample each token 100 times at T=1, estimate top-2 diff from counts."""
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+
+    available_tokens = evaluator.get_available_tokens()
+    samples_per_token = 100
+
+    n_testable = query_budget // samples_per_token
+    if n_testable == 0:
+        samples_per_token = max(10, query_budget // min(len(available_tokens), top_n * 10))
+        n_testable = query_budget // samples_per_token
+
+    n_testable = min(n_testable, len(available_tokens))
+
+    perm = torch.randperm(len(available_tokens), generator=rng)
+    tokens_to_test = [available_tokens[i] for i in perm[:n_testable].tolist()]
+
+    estimates = []
+    for token_id in tokens_to_test:
+        sampler = evaluator.create_sampler(token_id, rng)
+        if sampler is None:
+            continue
+
+        samples = sampler.sample(samples_per_token)
+        counts = Counter(samples)
+        sorted_counts = sorted(counts.values(), reverse=True)
+
+        if len(sorted_counts) < 2:
+            estimated_diff = float("inf")
+        else:
+            total = sum(sorted_counts) + len(sorted_counts)
+            p1 = (sorted_counts[0] + 1) / total
+            p2 = (sorted_counts[1] + 1) / total
+            estimated_diff = math.log(p1) - math.log(p2)
+
+        distance = abs(estimated_diff - evaluator.delta)
+        estimates.append((token_id, distance))
+
+    estimates.sort(key=lambda x: x[1])
+    return [t[0] for t in estimates[:top_n]]
+
+
+def random_baseline_method(
+    evaluator: BenchmarkEvaluator,
+    query_budget: int,
+    top_n: int,
+    seed: int,
+) -> list[str]:
+    """Random selection baseline."""
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+
+    available_tokens = evaluator.get_available_tokens()
+    perm = torch.randperm(len(available_tokens), generator=rng)
+    return [available_tokens[i] for i in perm[:top_n].tolist()]
+
+
+def evaluate(
+    model_name: str = "meta-llama/Llama-3.1-8B-Instruct",
+    delta: float = 0.0,
+    budgets: list[int] | None = None,
+    top_n: int = 50,
+):
+    """Run evaluation on methods."""
+    logging.basicConfig(level=logging.INFO)
+    evaluator = BenchmarkEvaluator(model_name, delta)
+
+    if budgets is None:
+        budgets = [int(b) for b in [1e5, 1e6, 1e7]]
+
+    for budget in budgets:
+        print(f"\n=== Query Budget: {budget} ===")
+
+        result_random = evaluator.evaluate(random_baseline_method, budget, top_n=top_n)
+        print(
+            f"Random:  score={result_random['score']:.4f}, overlap={result_random['overlap']}/{top_n}"
+        )
+
+        result_naive = evaluator.evaluate(naive_method, budget, top_n=top_n)
+        print(
+            f"Naive:   score={result_naive['score']:.4f}, overlap={result_naive['overlap']}/{top_n}"
+        )
+
+
 if __name__ == "__main__":
-    create_benchmark()
+    fire.Fire({"create": create_benchmark, "evaluate": evaluate})
