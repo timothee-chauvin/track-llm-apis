@@ -418,7 +418,6 @@ def evaluate(
                 zmin=0,
                 zmax=random_score,
                 text=np.round(data["scores"], 3),
-                texttemplate="%{text}",
                 textfont={"size": 8},
                 hovertemplate=f"δ={delta}<br>Temperature: %{{x}}<br>Samples/Token: %{{y}}<br>Score: %{{z:.4f}}<br>Random: {random_score:.4f}<extra></extra>",
                 showscale=False,  # Hide individual colorbars since scales differ
