@@ -149,14 +149,15 @@ class InputSampler:
     def __init__(self, logprobs_dict: dict[str, float], rng: torch.Generator):
         self._logprobs_dict = logprobs_dict
         self._rng = rng
-        self._samples_cache: list[str] = []
+        self._samples_cache: dict[float, list[str]] = {}
         self._token_ids = list(logprobs_dict.keys())
         self._base_logprobs = torch.tensor([logprobs_dict[t] for t in self._token_ids])
 
     def sample(self, n: int, temperature: float = 1.0) -> list[str]:
-        """Get n samples, using cache when possible (only for T=1.0)."""
-        if temperature == 1.0 and len(self._samples_cache) >= n:
-            return self._samples_cache[:n]
+        """Get n samples, using cache when possible."""
+        cache = self._samples_cache.get(temperature, [])
+        if len(cache) >= n:
+            return cache[:n]
 
         logprobs = self._base_logprobs
         if temperature != 1.0:
@@ -166,26 +167,28 @@ class InputSampler:
         indices = torch.multinomial(probs, n, replacement=True, generator=self._rng)
         samples = [self._token_ids[i] for i in indices.tolist()]
 
-        if temperature == 1.0:
-            self._samples_cache = samples
+        self._samples_cache[temperature] = samples
 
         return samples
 
     def extend_samples(self, additional: int, temperature: float = 1.0) -> list[str]:
         """Extend the sample cache and return all samples."""
-        if temperature != 1.0:
-            return self.sample(len(self._samples_cache) + additional, temperature)
+        cache = self._samples_cache.get(temperature, [])
 
         logprobs = self._base_logprobs
+        if temperature != 1.0:
+            logprobs = logprobs / temperature
+
         probs = torch.softmax(logprobs, dim=0)
         indices = torch.multinomial(probs, additional, replacement=True, generator=self._rng)
         new_samples = [self._token_ids[i] for i in indices.tolist()]
-        self._samples_cache.extend(new_samples)
-        return self._samples_cache
+        cache.extend(new_samples)
+        self._samples_cache[temperature] = cache
+        return cache
 
     @property
     def total_sampled(self) -> int:
-        return len(self._samples_cache)
+        return sum(len(cache) for cache in self._samples_cache.values())
 
 
 class BenchmarkEvaluator:
@@ -251,7 +254,7 @@ class BenchmarkEvaluator:
 
 
 NAIVE_TEMPERATURES = [1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1]
-NAIVE_SAMPLES_PER_TOKEN = [10, 30, 60, 100, 150, 250]
+NAIVE_SAMPLES_PER_TOKEN = [5, 10, 20, 30, 60, 100, 200]
 
 
 def make_naive_method(
@@ -336,33 +339,37 @@ def random_baseline_method(
 
 def evaluate(
     model_name: str = "meta-llama/Llama-3.1-8B-Instruct",
-    delta: float = 0.0,
     budgets: list[int] | None = None,
     top_n: int = 50,
 ):
-    """Run evaluation on methods."""
     logging.basicConfig(level=logging.INFO)
-    evaluator = BenchmarkEvaluator(model_name, delta)
+    deltas = [0.0, 0.05, 0.1, 0.2, 0.4]
 
     if budgets is None:
-        budgets = [int(b) for b in [1e5, 1e6, 1e7]]
+        budgets = [int(b) for b in [1e5]]
 
-    for budget in budgets:
-        print(f"\n=== Query Budget: {budget} ===")
+    for delta in deltas:
+        print("\n==============================")
+        print(f"Evaluating for delta = {delta}")
+        print("==============================")
+        evaluator = BenchmarkEvaluator(model_name, delta)
 
-        result_random = evaluator.evaluate(random_baseline_method, budget, top_n=top_n)
-        print(
-            f"Random:  score={result_random['score']:.4f}, overlap={result_random['overlap']}/{top_n}"
-        )
+        for budget in budgets:
+            print(f"\n=== Query Budget: {budget} ===")
 
-        for temp in NAIVE_TEMPERATURES:
-            for spt in NAIVE_SAMPLES_PER_TOKEN:
-                method = make_naive_method(temperature=temp, samples_per_token=spt)
-                result = evaluator.evaluate(method, budget, top_n=top_n)
-                print(
-                    f"Naive(T={temp}, spt={spt}):  "
-                    f"score={result['score']:.4f}, overlap={result['overlap']}/{top_n}"
-                )
+            result_random = evaluator.evaluate(random_baseline_method, budget, top_n=top_n)
+            print(
+                f"Random:  score={result_random['score']:.4f}, overlap={result_random['overlap']}/{top_n}"
+            )
+
+            for temp in NAIVE_TEMPERATURES:
+                for spt in NAIVE_SAMPLES_PER_TOKEN:
+                    method = make_naive_method(temperature=temp, samples_per_token=spt)
+                    result = evaluator.evaluate(method, budget, top_n=top_n)
+                    print(
+                        f"Naive(T={temp}, spt={spt}):  "
+                        f"score={result['score']:.4f}, overlap={result['overlap']}/{top_n}"
+                    )
 
 
 if __name__ == "__main__":
