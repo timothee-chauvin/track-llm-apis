@@ -11,6 +11,7 @@ import numpy as np
 import orjson
 import plotly.graph_objects as go
 import torch
+from plotly.subplots import make_subplots
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -354,6 +355,9 @@ def evaluate(
     heatmap_dir = config.plots_dir / "best_tokens_benchmark"
     heatmap_dir.mkdir(parents=True, exist_ok=True)
 
+    # Collect all data first for combined plot
+    all_data: dict[float, dict] = {}
+
     for delta in deltas:
         print("\n==============================")
         print(f"Evaluating for delta = {delta}")
@@ -380,39 +384,67 @@ def evaluate(
                         f"score={result['score']:.4f}, overlap={result['overlap']}/{top_n}"
                     )
 
-            # Create heatmap with plotly
-            temp_labels = [f"{t:.0e}" if t < 0.1 else str(t) for t in NAIVE_TEMPERATURES]
-            spt_labels = [str(spt) for spt in NAIVE_SAMPLES_PER_TOKEN]
+            all_data[delta] = {"scores": scores, "random_score": random_score}
 
-            fig = go.Figure(
-                data=go.Heatmap(
-                    z=scores,
-                    x=temp_labels,
-                    y=spt_labels,
-                    colorscale=[[0, "blue"], [1, "red"]],
-                    zmin=0,
-                    zmax=random_score,
-                    text=np.round(scores, 3),
-                    texttemplate="%{text}",
-                    textfont={"size": 10},
-                    hovertemplate="Temperature: %{x}<br>Samples/Token: %{y}<br>Score: %{z:.4f}<extra></extra>",
-                    colorbar={"title": "Score"},
-                )
-            )
+    # Create combined figure with subplots
+    n_deltas = len(deltas)
+    n_cols = math.ceil(math.sqrt(n_deltas))
+    n_rows = math.ceil(n_deltas / n_cols)
 
-            fig.update_layout(
-                title=f"Score Heatmap (delta={delta}, budget={budget})<br><sub>Blue=0, Red=random score ({random_score:.4f})</sub>",
-                xaxis_title="Temperature",
-                yaxis_title="Samples per Token",
-                width=900,
-                height=500,
-            )
+    temp_labels = [f"{t:.0e}" if t < 0.1 else str(t) for t in NAIVE_TEMPERATURES]
+    spt_labels = [str(spt) for spt in NAIVE_SAMPLES_PER_TOKEN]
 
-            # Save the heatmap
-            filename = f"delta_{delta}_budget_{budget}.png"
-            filepath = heatmap_dir / filename
-            fig.write_image(str(filepath), scale=2)
-            print(f"Saved heatmap to {filepath}")
+    subplot_titles = [f"δ = {delta}" for delta in deltas]
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        subplot_titles=subplot_titles,
+        horizontal_spacing=0.08,
+        vertical_spacing=0.12,
+    )
+
+    # Find global max for consistent colorscale
+    global_max = max(data["random_score"] for data in all_data.values())
+
+    for idx, delta in enumerate(deltas):
+        row = idx // n_cols + 1
+        col = idx % n_cols + 1
+        data = all_data[delta]
+
+        fig.add_trace(
+            go.Heatmap(
+                z=data["scores"],
+                x=temp_labels,
+                y=spt_labels,
+                colorscale=[[0, "blue"], [1, "red"]],
+                zmin=0,
+                zmax=global_max,
+                text=np.round(data["scores"], 3),
+                texttemplate="%{text}",
+                textfont={"size": 8},
+                hovertemplate=f"δ={delta}<br>Temperature: %{{x}}<br>Samples/Token: %{{y}}<br>Score: %{{z:.4f}}<extra></extra>",
+                showscale=(idx == 0),  # Only show colorbar for first subplot
+                colorbar={"title": "Score"} if idx == 0 else None,
+            ),
+            row=row,
+            col=col,
+        )
+
+        # Update axes labels
+        fig.update_xaxes(title_text="Temperature" if row == n_rows else "", row=row, col=col)
+        fig.update_yaxes(title_text="Samples/Token" if col == 1 else "", row=row, col=col)
+
+    fig.update_layout(
+        title=f"Score Heatmaps by Delta (budget={budgets[0]})<br><sub>Blue=0, Red=random score ({global_max:.4f})</sub>",
+        width=350 * n_cols,
+        height=300 * n_rows + 80,
+    )
+
+    # Save the combined heatmap
+    filename = f"combined_budget_{budgets[0]}.png"
+    filepath = heatmap_dir / filename
+    fig.write_image(str(filepath), scale=2)
+    print(f"\nSaved combined heatmap to {filepath}")
 
 
 if __name__ == "__main__":
