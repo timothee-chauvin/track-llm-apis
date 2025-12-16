@@ -403,13 +403,11 @@ def evaluate(
         vertical_spacing=0.12,
     )
 
-    # Find global max for consistent colorscale
-    global_max = max(data["random_score"] for data in all_data.values())
-
     for idx, delta in enumerate(deltas):
         row = idx // n_cols + 1
         col = idx % n_cols + 1
         data = all_data[delta]
+        random_score = data["random_score"]
 
         fig.add_trace(
             go.Heatmap(
@@ -418,13 +416,12 @@ def evaluate(
                 y=spt_labels,
                 colorscale=[[0, "blue"], [1, "red"]],
                 zmin=0,
-                zmax=global_max,
+                zmax=random_score,
                 text=np.round(data["scores"], 3),
                 texttemplate="%{text}",
                 textfont={"size": 8},
-                hovertemplate=f"δ={delta}<br>Temperature: %{{x}}<br>Samples/Token: %{{y}}<br>Score: %{{z:.4f}}<extra></extra>",
-                showscale=(idx == 0),  # Only show colorbar for first subplot
-                colorbar={"title": "Score"} if idx == 0 else None,
+                hovertemplate=f"δ={delta}<br>Temperature: %{{x}}<br>Samples/Token: %{{y}}<br>Score: %{{z:.4f}}<br>Random: {random_score:.4f}<extra></extra>",
+                showscale=False,  # Hide individual colorbars since scales differ
             ),
             row=row,
             col=col,
@@ -435,7 +432,7 @@ def evaluate(
         fig.update_yaxes(title_text="Samples/Token" if col == 1 else "", row=row, col=col)
 
     fig.update_layout(
-        title=f"Score Heatmaps by Delta (budget={budgets[0]})<br><sub>Blue=0, Red=random score ({global_max:.4f})</sub>",
+        title=f"Score Heatmaps by Delta (budget={budgets[0]})<br><sub>Blue=0, Red=random score (per-delta)</sub>",
         width=350 * n_cols,
         height=300 * n_rows + 80,
     )
