@@ -7,7 +7,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import fire
+import numpy as np
 import orjson
+import plotly.graph_objects as go
 import torch
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -348,6 +350,10 @@ def evaluate(
     if budgets is None:
         budgets = [int(b) for b in [1e5]]
 
+    # Create output directory for heatmaps
+    heatmap_dir = config.plots_dir / "best_tokens_benchmark"
+    heatmap_dir.mkdir(parents=True, exist_ok=True)
+
     for delta in deltas:
         print("\n==============================")
         print(f"Evaluating for delta = {delta}")
@@ -358,18 +364,55 @@ def evaluate(
             print(f"\n=== Query Budget: {budget} ===")
 
             result_random = evaluator.evaluate(random_baseline_method, budget, top_n=top_n)
-            print(
-                f"Random:  score={result_random['score']:.4f}, overlap={result_random['overlap']}/{top_n}"
-            )
+            random_score = result_random["score"]
+            print(f"Random:  score={random_score:.4f}, overlap={result_random['overlap']}/{top_n}")
 
-            for temp in NAIVE_TEMPERATURES:
-                for spt in NAIVE_SAMPLES_PER_TOKEN:
+            # Collect scores for heatmap
+            scores = np.zeros((len(NAIVE_SAMPLES_PER_TOKEN), len(NAIVE_TEMPERATURES)))
+
+            for i, temp in enumerate(NAIVE_TEMPERATURES):
+                for j, spt in enumerate(NAIVE_SAMPLES_PER_TOKEN):
                     method = make_naive_method(temperature=temp, samples_per_token=spt)
                     result = evaluator.evaluate(method, budget, top_n=top_n)
+                    scores[j, i] = result["score"]
                     print(
                         f"Naive(T={temp}, spt={spt}):  "
                         f"score={result['score']:.4f}, overlap={result['overlap']}/{top_n}"
                     )
+
+            # Create heatmap with plotly
+            temp_labels = [f"{t:.0e}" if t < 0.1 else str(t) for t in NAIVE_TEMPERATURES]
+            spt_labels = [str(spt) for spt in NAIVE_SAMPLES_PER_TOKEN]
+
+            fig = go.Figure(
+                data=go.Heatmap(
+                    z=scores,
+                    x=temp_labels,
+                    y=spt_labels,
+                    colorscale=[[0, "blue"], [1, "red"]],
+                    zmin=0,
+                    zmax=random_score,
+                    text=np.round(scores, 3),
+                    texttemplate="%{text}",
+                    textfont={"size": 10},
+                    hovertemplate="Temperature: %{x}<br>Samples/Token: %{y}<br>Score: %{z:.4f}<extra></extra>",
+                    colorbar={"title": "Score"},
+                )
+            )
+
+            fig.update_layout(
+                title=f"Score Heatmap (delta={delta}, budget={budget})<br><sub>Blue=0, Red=random score ({random_score:.4f})</sub>",
+                xaxis_title="Temperature",
+                yaxis_title="Samples per Token",
+                width=900,
+                height=500,
+            )
+
+            # Save the heatmap
+            filename = f"delta_{delta}_budget_{budget}.png"
+            filepath = heatmap_dir / filename
+            fig.write_image(str(filepath), scale=2)
+            print(f"Saved heatmap to {filepath}")
 
 
 if __name__ == "__main__":
