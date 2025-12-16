@@ -250,52 +250,73 @@ class BenchmarkEvaluator:
         }
 
 
-def naive_method(
-    evaluator: BenchmarkEvaluator,
-    query_budget: int,
-    top_n: int,
-    seed: int,
-) -> list[str]:
-    """Sample each token 100 times at T=1, estimate top-2 diff from counts."""
-    rng = torch.Generator()
-    rng.manual_seed(seed)
+NAIVE_TEMPERATURES = [1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1]
+NAIVE_SAMPLES_PER_TOKEN = [10, 30, 60, 100, 150, 250]
 
-    available_tokens = evaluator.get_available_tokens()
-    samples_per_token = 100
 
-    n_testable = query_budget // samples_per_token
-    if n_testable == 0:
-        samples_per_token = max(10, query_budget // min(len(available_tokens), top_n * 10))
-        n_testable = query_budget // samples_per_token
+def make_naive_method(
+    temperature: float = 1.0,
+    samples_per_token: int = 30,
+) -> Callable[["BenchmarkEvaluator", int, int, int], list[str]]:
+    """Create a naive method with specific temperature and samples_per_token."""
 
-    n_testable = min(n_testable, len(available_tokens))
+    def naive_method(
+        evaluator: BenchmarkEvaluator,
+        query_budget: int,
+        top_n: int,
+        seed: int,
+    ) -> list[str]:
+        """Sample each token, estimate top-2 diff from counts."""
+        rng = torch.Generator()
+        rng.manual_seed(seed)
 
-    perm = torch.randperm(len(available_tokens), generator=rng)
-    tokens_to_test = [available_tokens[i] for i in perm[:n_testable].tolist()]
+        available_tokens = evaluator.get_available_tokens()
+        spt = samples_per_token
 
-    estimates = []
-    for token_id in tokens_to_test:
-        sampler = evaluator.create_sampler(token_id, rng)
-        if sampler is None:
-            continue
+        n_testable = query_budget // spt
+        if n_testable == 0:
+            spt = max(10, query_budget // min(len(available_tokens), top_n * 10))
+            n_testable = query_budget // spt
 
-        samples = sampler.sample(samples_per_token)
-        counts = Counter(samples)
-        sorted_counts = sorted(counts.values(), reverse=True)
+        n_testable = min(n_testable, len(available_tokens))
 
-        if len(sorted_counts) < 2:
-            estimated_diff = float("inf")
-        else:
-            total = sum(sorted_counts) + len(sorted_counts)
-            p1 = (sorted_counts[0] + 1) / total
-            p2 = (sorted_counts[1] + 1) / total
-            estimated_diff = math.log(p1) - math.log(p2)
+        perm = torch.randperm(len(available_tokens), generator=rng)
+        tokens_to_test = [available_tokens[i] for i in perm[:n_testable].tolist()]
 
-        distance = abs(estimated_diff - evaluator.delta)
-        estimates.append((token_id, distance))
+        estimates = []
+        for token_id in tokens_to_test:
+            sampler = evaluator.create_sampler(token_id, rng)
+            if sampler is None:
+                continue
 
-    estimates.sort(key=lambda x: x[1])
-    return [t[0] for t in estimates[:top_n]]
+            samples = sampler.sample(spt, temperature=temperature)
+            counts = Counter(samples)
+            sorted_counts = sorted(counts.values(), reverse=True)
+
+            if len(sorted_counts) < 2:
+                estimated_diff = float("inf")
+            else:
+                total = sum(sorted_counts) + len(sorted_counts)
+                p1 = (sorted_counts[0] + 1) / total
+                p2 = (sorted_counts[1] + 1) / total
+                # At temperature T, observed probs are p^(1/T), so multiply by T to recover original
+                estimated_diff = temperature * (math.log(p1) - math.log(p2))
+
+            distance = abs(estimated_diff - evaluator.delta)
+            estimates.append((token_id, distance))
+
+        estimates.sort(key=lambda x: x[1])
+        chosen = [t[0] for t in estimates[:top_n]]
+        if len(chosen) < top_n:
+            chosen_set = set(chosen)
+            # Fill the remainder with random tokens not already chosen
+            remaining = [tok for tok in evaluator.get_available_tokens() if tok not in chosen_set]
+            perm = torch.randperm(len(remaining), generator=rng)
+            fill = [remaining[i] for i in perm[: (top_n - len(chosen))].tolist()]
+            chosen += fill
+        return chosen[:top_n]
+
+    return naive_method
 
 
 def random_baseline_method(
@@ -334,10 +355,14 @@ def evaluate(
             f"Random:  score={result_random['score']:.4f}, overlap={result_random['overlap']}/{top_n}"
         )
 
-        result_naive = evaluator.evaluate(naive_method, budget, top_n=top_n)
-        print(
-            f"Naive:   score={result_naive['score']:.4f}, overlap={result_naive['overlap']}/{top_n}"
-        )
+        for temp in NAIVE_TEMPERATURES:
+            for spt in NAIVE_SAMPLES_PER_TOKEN:
+                method = make_naive_method(temperature=temp, samples_per_token=spt)
+                result = evaluator.evaluate(method, budget, top_n=top_n)
+                print(
+                    f"Naive(T={temp}, spt={spt}):  "
+                    f"score={result['score']:.4f}, overlap={result['overlap']}/{top_n}"
+                )
 
 
 if __name__ == "__main__":
